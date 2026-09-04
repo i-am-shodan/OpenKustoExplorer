@@ -1,0 +1,18 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/OpenKustoExplorer.Application/OpenKustoExplorer.Application.csproj" />
+    <Project Path="src/OpenKustoExplorer.Desktop/OpenKustoExplorer.Desktop.csproj" />
+    <Project Path="src/OpenKustoExplorer.Domain/OpenKustoExplorer.Domain.csproj" />
+    <Project Path="src/OpenKustoExplorer.Graph/OpenKustoExplorer.Graph.csproj" />
+    <Project Path="src/OpenKustoExplorer.Infrastructure/OpenKustoExplorer.Infrastructure.csproj" />
+    <Project Path="src/OpenKustoExplorer.Presentation/OpenKustoExplorer.Presentation.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/OpenKustoExplorer.AotSmoke/OpenKustoExplorer.AotSmoke.csproj" />
+    <Project Path="tests/OpenKustoExplorer.Application.Tests/OpenKustoExplorer.Application.Tests.csproj" />
+    <Project Path="tests/OpenKustoExplorer.Domain.Tests/OpenKustoExplorer.Domain.Tests.csproj" />
+    <Project Path="tests/OpenKustoExplorer.Graph.Tests/OpenKustoExplorer.Graph.Tests.csproj" />
+    <Project Path="tests/OpenKustoExplorer.Infrastructure.Tests/OpenKustoExplorer.Infrastructure.Tests.csproj" />
+    <Project Path="tests/OpenKustoExplorer.Presentation.Tests/OpenKustoExplorer.Presentation.Tests.csproj" />
+  </Folder>
+</Solution>

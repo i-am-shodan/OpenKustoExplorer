@@ -1,0 +1,243 @@
+<Application
+    x:Class="OpenKustoExplorer.Desktop.App"
+    xmlns="https://github.com/avaloniaui"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+  RequestedThemeVariant="Default">
+  <Application.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceInclude Source="avares://OpenKustoExplorer.Desktop/Themes/Colors.Signal.axaml" />
+      </ResourceDictionary.MergedDictionaries>
+      <x:Double x:Key="TypeCaptionSize">12</x:Double>
+      <x:Double x:Key="TypeBodySize">13</x:Double>
+      <x:Double x:Key="TypeEmphasisSize">14</x:Double>
+      <x:Double x:Key="TypeTitleSize">16</x:Double>
+      <x:Double x:Key="TypeDisplaySize">20</x:Double>
+      <x:Double x:Key="QueryEditorTextSize">14</x:Double>
+      <x:Double x:Key="ControlHeightCompact">32</x:Double>
+      <x:Double x:Key="ControlHeightComfortable">40</x:Double>
+      <x:Double x:Key="TreeRowHeightCompact">28</x:Double>
+      <x:Double x:Key="TreeRowHeightComfortable">36</x:Double>
+    </ResourceDictionary>
+  </Application.Resources>
+
+  <Application.Styles>
+    <FluentTheme DensityStyle="Compact" />
+    <StyleInclude Source="avares://Avalonia.Controls.ColorPicker/Themes/Fluent/Fluent.xaml" />
+    <StyleInclude Source="avares://AvaloniaEdit/Themes/Fluent/AvaloniaEdit.xaml" />
+
+    <Style Selector="Window">
+      <Setter Property="Background" Value="{DynamicResource CanvasBrush}" />
+      <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+      <Setter Property="FontFamily" Value="IBM Plex Sans, Noto Sans, Segoe UI, sans-serif" />
+      <Setter Property="FontSize" Value="{DynamicResource TypeBodySize}" />
+    </Style>
+    <Style Selector="Button.toolbar">
+      <Setter Property="Width" Value="32" />
+      <Setter Property="Height" Value="32" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="CornerRadius" Value="5" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.toolbar:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource AccentSubtleBrush}" />
+    </Style>
+    <Style Selector="Button.activity">
+      <Setter Property="Width" Value="40" />
+      <Setter Property="Height" Value="40" />
+      <Setter Property="Margin" Value="4,2" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="CornerRadius" Value="5" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.activity:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource AccentSubtleBrush}" />
+    </Style>
+    <Style Selector="Button.activity.selected">
+      <Setter Property="Background" Value="{DynamicResource AccentSubtleBrush}" />
+      <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+    </Style>
+    <Style Selector="Button.treeAction">
+      <Setter Property="Width" Value="26" />
+      <Setter Property="Height" Value="26" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="CornerRadius" Value="4" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.treeAction:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource AccentSubtleBrush}" />
+    </Style>
+    <Style Selector="Button.command">
+      <Setter Property="Height" Value="32" />
+      <Setter Property="Padding" Value="12,0" />
+      <Setter Property="CornerRadius" Value="5" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.chartLegendItem">
+      <Setter Property="MinHeight" Value="30" />
+      <Setter Property="Padding" Value="7,3" />
+      <Setter Property="CornerRadius" Value="3" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="HorizontalContentAlignment" Value="Left" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.chartLegendItem:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource AccentSubtleBrush}" />
+    </Style>
+    <Style Selector="Button.primaryCommand">
+      <Setter Property="Height" Value="32" />
+      <Setter Property="Padding" Value="12,0" />
+      <Setter Property="CornerRadius" Value="5" />
+      <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+      <Setter Property="Foreground" Value="{DynamicResource OnAccentBrush}" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.primaryCommand:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource AccentHoverBrush}" />
+    </Style>
+    <Style Selector="Button.dangerCommand">
+      <Setter Property="Height" Value="32" />
+      <Setter Property="Padding" Value="12,0" />
+      <Setter Property="CornerRadius" Value="5" />
+      <Setter Property="Background" Value="{DynamicResource ErrorBrush}" />
+      <Setter Property="Foreground" Value="{DynamicResource OnAccentBrush}" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Border.toolPane">
+      <Setter Property="Background" Value="{DynamicResource SurfaceBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource DecorativeDividerBrush}" />
+    </Style>
+    <Style Selector="Border.editorFrame">
+      <Setter Property="BorderBrush" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="2" />
+    </Style>
+    <Style Selector="Border.editorFrame:focus-within">
+      <Setter Property="BorderBrush" Value="{DynamicResource FocusBrush}" />
+    </Style>
+    <Style Selector="TextBox.schemaSearch">
+      <Setter Property="Height" Value="32" />
+      <Setter Property="Padding" Value="30,0,8,0" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+      <Setter Property="CornerRadius" Value="5" />
+      <Setter Property="Background" Value="{DynamicResource SubtleSurfaceBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource ControlBoundaryBrush}" />
+      <Setter Property="BorderThickness" Value="1" />
+    </Style>
+    <Style Selector="TextBlock.sectionLabel">
+      <Setter Property="FontSize" Value="{DynamicResource TypeCaptionSize}" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+    </Style>
+    <Style Selector="TextBlock.muted">
+      <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+    </Style>
+    <Style Selector="TextBlock.tertiary">
+      <Setter Property="Foreground" Value="{DynamicResource TextTertiaryBrush}" />
+    </Style>
+    <Style Selector="TabItem.toolTab">
+      <Setter Property="FontSize" Value="{DynamicResource TypeCaptionSize}" />
+      <Setter Property="Padding" Value="12,7" />
+      <Setter Property="MinHeight" Value="32" />
+      <Setter Property="Margin" Value="0,0,2,0" />
+      <Setter Property="Background" Value="{DynamicResource TabBarSurfaceBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource DecorativeDividerBrush}" />
+      <Setter Property="BorderThickness" Value="1,1,1,0" />
+      <Setter Property="CornerRadius" Value="4,4,0,0" />
+    </Style>
+    <Style Selector="TabItem.toolTab:selected">
+      <Setter Property="Background" Value="{DynamicResource SurfaceBrush}" />
+      <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource ControlBoundaryBrush}" />
+    </Style>
+    <Style Selector="TabItem.toolTab:selected /template/ Border#PART_SelectedPipe">
+      <Setter Property="IsVisible" Value="False" />
+    </Style>
+    <Style Selector="TabStrip.documentTabs">
+      <Setter Property="Background" Value="{DynamicResource TabBarSurfaceBrush}" />
+    </Style>
+    <Style Selector="TabStrip.documentTabs TabStripItem">
+      <Setter Property="MinWidth" Value="118" />
+      <Setter Property="Height" Value="30" />
+      <Setter Property="MinHeight" Value="30" />
+      <Setter Property="MaxHeight" Value="30" />
+      <Setter Property="Margin" Value="0" />
+      <Setter Property="Padding" Value="5,0,1,0" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="FontSize" Value="{DynamicResource TypeCaptionSize}" />
+    </Style>
+    <Style Selector="TabStrip.documentTabs TabStripItem:selected">
+      <Setter Property="Background" Value="{DynamicResource TabBarSurfaceBrush}" />
+      <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+    </Style>
+    <Style Selector="TabStrip.documentTabs TabStripItem.dropBefore">
+      <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+      <Setter Property="BorderThickness" Value="3,0,0,0" />
+    </Style>
+    <Style Selector="TabStrip.documentTabs TabStripItem.dropAfter">
+      <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+      <Setter Property="BorderThickness" Value="0,0,3,0" />
+    </Style>
+    <Style Selector="TabStrip.documentTabs Grid.dragging">
+      <Setter Property="Opacity" Value="0.55" />
+    </Style>
+    <Style Selector="TabStrip.documentTabs Button.treeAction">
+      <Setter Property="Width" Value="22" />
+      <Setter Property="Height" Value="22" />
+    </Style>
+    <Style Selector="TreeView">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+    </Style>
+    <Style Selector="TreeViewItem">
+      <Setter Property="MinHeight" Value="28" />
+    </Style>
+    <Style Selector="Window.comfortable Button.toolbar">
+      <Setter Property="Width" Value="40" />
+      <Setter Property="Height" Value="40" />
+    </Style>
+    <Style Selector="Window.comfortable Button.command, Window.comfortable Button.primaryCommand">
+      <Setter Property="Height" Value="40" />
+    </Style>
+    <Style Selector="Window.comfortable Button.activity">
+      <Setter Property="Width" Value="44" />
+      <Setter Property="Height" Value="44" />
+      <Setter Property="Margin" Value="2" />
+    </Style>
+    <Style Selector="Window.comfortable TextBox.schemaSearch">
+      <Setter Property="Height" Value="40" />
+    </Style>
+    <Style Selector="Window.comfortable TreeViewItem">
+      <Setter Property="MinHeight" Value="36" />
+    </Style>
+    <Style Selector="Window.comfortable TabItem.toolTab">
+      <Setter Property="MinHeight" Value="40" />
+    </Style>
+    <Style Selector="Window.comfortable TabStrip.documentTabs TabStripItem">
+      <Setter Property="Height" Value="34" />
+      <Setter Property="MinHeight" Value="34" />
+      <Setter Property="MaxHeight" Value="34" />
+    </Style>
+    <Style Selector="Button:focus-visible, ComboBox:focus-visible, RadioButton:focus-visible, TabItem:focus-visible, TextBox:focus-visible, ToggleSwitch:focus-visible, TreeViewItem:focus-visible">
+      <Setter Property="FocusAdorner">
+        <Template>
+          <Border
+              BorderBrush="{DynamicResource FocusBrush}"
+              BorderThickness="2"
+              CornerRadius="6" />
+        </Template>
+      </Setter>
+    </Style>
+  </Application.Styles>
+</Application>

@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Quality (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+          - os: ubuntu-latest
+            rid: linux-x64
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.302
+
+      - name: Install Linux Native AOT prerequisites
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes clang zlib1g-dev
+
+      - name: Restore
+        run: dotnet restore OpenKustoExplorer.slnx
+
+      - name: Verify formatting
+        run: dotnet format OpenKustoExplorer.slnx --verify-no-changes --no-restore
+
+      - name: Build without warnings
+        run: dotnet build OpenKustoExplorer.slnx --configuration Release --no-restore -warnaserror
+
+      - name: Run tests
+        run: dotnet test OpenKustoExplorer.slnx --configuration Release --no-build --no-restore --logger "console;verbosity=minimal"
+
+      - name: Publish Native AOT smoke harness
+        run: dotnet publish tests/OpenKustoExplorer.AotSmoke/OpenKustoExplorer.AotSmoke.csproj --configuration Release --runtime ${{ matrix.rid }} --output artifacts/aot-smoke -warnaserror
+
+      - name: Run Windows Native AOT smoke harness
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./artifacts/aot-smoke/OpenKustoExplorer.AotSmoke.exe
+
+      - name: Run Linux Native AOT smoke harness
+        if: runner.os == 'Linux'
+        run: ./artifacts/aot-smoke/OpenKustoExplorer.AotSmoke
+
+      - name: Publish desktop Native AOT bundle
+        run: dotnet publish src/OpenKustoExplorer.Desktop/OpenKustoExplorer.Desktop.csproj --configuration Release --runtime ${{ matrix.rid }} --output artifacts/desktop -warnaserror
+
+      - name: Upload desktop bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenKustoExplorer-${{ matrix.rid }}
+          path: artifacts/desktop
+          if-no-files-found: error

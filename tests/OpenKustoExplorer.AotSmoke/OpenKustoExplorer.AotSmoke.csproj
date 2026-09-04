@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <PublishAot>true</PublishAot>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia.Skia" />
+    <ProjectReference Include="..\..\src\OpenKustoExplorer.Infrastructure\OpenKustoExplorer.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>

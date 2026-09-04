@@ -1,0 +1,93 @@
+<ResourceDictionary
+    xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <ResourceDictionary.ThemeDictionaries>
+    <ResourceDictionary x:Key="Light">
+      <SolidColorBrush x:Key="CanvasBrush" Color="#E8EDF1" />
+      <SolidColorBrush x:Key="SurfaceBrush" Color="#F7F9FA" />
+      <SolidColorBrush x:Key="RaisedSurfaceBrush" Color="#DDE5EA" />
+      <SolidColorBrush x:Key="SubtleSurfaceBrush" Color="#ECF1F4" />
+      <SolidColorBrush x:Key="ChromeSurfaceBrush" Color="#D2DCE2" />
+      <SolidColorBrush x:Key="ToolbarSurfaceBrush" Color="#E1E7EB" />
+      <SolidColorBrush x:Key="TabBarSurfaceBrush" Color="#C7D3DB" />
+      <SolidColorBrush x:Key="DecorativeDividerBrush" Color="#AAB7C0" />
+      <SolidColorBrush x:Key="ControlBoundaryBrush" Color="#6D7B85" />
+      <SolidColorBrush x:Key="TextPrimaryBrush" Color="#18242D" />
+      <SolidColorBrush x:Key="TextSecondaryBrush" Color="#46545F" />
+      <SolidColorBrush x:Key="TextTertiaryBrush" Color="#63717A" />
+      <SolidColorBrush x:Key="AccentBrush" Color="#087A72" />
+      <SolidColorBrush x:Key="AccentHoverBrush" Color="#06645E" />
+      <SolidColorBrush x:Key="AccentSubtleBrush" Color="#CEE8E3" />
+      <SolidColorBrush x:Key="SelectionBrush" Color="#B9DDD6" />
+      <SolidColorBrush x:Key="FocusBrush" Color="#087A72" />
+      <SolidColorBrush x:Key="SuccessBrush" Color="#167A4E" />
+      <SolidColorBrush x:Key="WarningBrush" Color="#8A5A00" />
+      <SolidColorBrush x:Key="ErrorBrush" Color="#B33A2B" />
+      <SolidColorBrush x:Key="QueryErrorHighlightBrush" Color="#33B33A2B" />
+      <SolidColorBrush x:Key="InfoBrush" Color="#1769AA" />
+      <SolidColorBrush x:Key="OnAccentBrush" Color="#FFFFFF" />
+
+      <SolidColorBrush x:Key="SyntaxCommentBrush" Color="#65737C" />
+      <SolidColorBrush x:Key="SyntaxKeywordBrush" Color="#205FA2" />
+      <SolidColorBrush x:Key="SyntaxEntityBrush" Color="#8A5A00" />
+      <SolidColorBrush x:Key="SyntaxNameBrush" Color="#087A72" />
+      <SolidColorBrush x:Key="SyntaxFunctionBrush" Color="#B33A2B" />
+      <SolidColorBrush x:Key="SyntaxLiteralBrush" Color="#167A4E" />
+      <SolidColorBrush x:Key="SyntaxVariableBrush" Color="#6F4DA0" />
+
+      <SolidColorBrush x:Key="WorkbenchBackgroundBrush" Color="#E8EDF1" />
+      <SolidColorBrush x:Key="WorkbenchSurfaceBrush" Color="#F7F9FA" />
+      <SolidColorBrush x:Key="WorkbenchSurfaceMutedBrush" Color="#ECF1F4" />
+      <SolidColorBrush x:Key="WorkbenchBorderBrush" Color="#AAB7C0" />
+      <SolidColorBrush x:Key="WorkbenchTextBrush" Color="#18242D" />
+      <SolidColorBrush x:Key="WorkbenchMutedTextBrush" Color="#46545F" />
+      <SolidColorBrush x:Key="WorkbenchAccentBrush" Color="#087A72" />
+      <SolidColorBrush x:Key="WorkbenchAccentMutedBrush" Color="#CEE8E3" />
+      <SolidColorBrush x:Key="WorkbenchWarningBrush" Color="#8A5A00" />
+    </ResourceDictionary>
+
+    <ResourceDictionary x:Key="Dark">
+      <SolidColorBrush x:Key="CanvasBrush" Color="#111619" />
+      <SolidColorBrush x:Key="SurfaceBrush" Color="#182025" />
+      <SolidColorBrush x:Key="RaisedSurfaceBrush" Color="#222C32" />
+      <SolidColorBrush x:Key="SubtleSurfaceBrush" Color="#2B363D" />
+      <SolidColorBrush x:Key="ChromeSurfaceBrush" Color="#1D262B" />
+      <SolidColorBrush x:Key="ToolbarSurfaceBrush" Color="#242F35" />
+      <SolidColorBrush x:Key="TabBarSurfaceBrush" Color="#2A363D" />
+      <SolidColorBrush x:Key="DecorativeDividerBrush" Color="#485862" />
+      <SolidColorBrush x:Key="ControlBoundaryBrush" Color="#8998A1" />
+      <SolidColorBrush x:Key="TextPrimaryBrush" Color="#F5F7F8" />
+      <SolidColorBrush x:Key="TextSecondaryBrush" Color="#C5C9CD" />
+      <SolidColorBrush x:Key="TextTertiaryBrush" Color="#A7ADB3" />
+      <SolidColorBrush x:Key="AccentBrush" Color="#64D1C0" />
+      <SolidColorBrush x:Key="AccentHoverBrush" Color="#8BDFD1" />
+      <SolidColorBrush x:Key="AccentSubtleBrush" Color="#173D3B" />
+      <SolidColorBrush x:Key="SelectionBrush" Color="#1E5550" />
+      <SolidColorBrush x:Key="FocusBrush" Color="#64D1C0" />
+      <SolidColorBrush x:Key="SuccessBrush" Color="#67D6A1" />
+      <SolidColorBrush x:Key="WarningBrush" Color="#FFD166" />
+      <SolidColorBrush x:Key="ErrorBrush" Color="#FF8580" />
+      <SolidColorBrush x:Key="QueryErrorHighlightBrush" Color="#45FF8580" />
+      <SolidColorBrush x:Key="InfoBrush" Color="#69B9F0" />
+      <SolidColorBrush x:Key="OnAccentBrush" Color="#111213" />
+
+      <SolidColorBrush x:Key="SyntaxCommentBrush" Color="#A7ADB3" />
+      <SolidColorBrush x:Key="SyntaxKeywordBrush" Color="#78B9F2" />
+      <SolidColorBrush x:Key="SyntaxEntityBrush" Color="#FFD166" />
+      <SolidColorBrush x:Key="SyntaxNameBrush" Color="#64D1C0" />
+      <SolidColorBrush x:Key="SyntaxFunctionBrush" Color="#FF8580" />
+      <SolidColorBrush x:Key="SyntaxLiteralBrush" Color="#67D6A1" />
+      <SolidColorBrush x:Key="SyntaxVariableBrush" Color="#C8A4F4" />
+
+      <SolidColorBrush x:Key="WorkbenchBackgroundBrush" Color="#111619" />
+      <SolidColorBrush x:Key="WorkbenchSurfaceBrush" Color="#182025" />
+      <SolidColorBrush x:Key="WorkbenchSurfaceMutedBrush" Color="#2B363D" />
+      <SolidColorBrush x:Key="WorkbenchBorderBrush" Color="#485862" />
+      <SolidColorBrush x:Key="WorkbenchTextBrush" Color="#F5F7F8" />
+      <SolidColorBrush x:Key="WorkbenchMutedTextBrush" Color="#C5C9CD" />
+      <SolidColorBrush x:Key="WorkbenchAccentBrush" Color="#64D1C0" />
+      <SolidColorBrush x:Key="WorkbenchAccentMutedBrush" Color="#173D3B" />
+      <SolidColorBrush x:Key="WorkbenchWarningBrush" Color="#FFD166" />
+    </ResourceDictionary>
+  </ResourceDictionary.ThemeDictionaries>
+</ResourceDictionary>
