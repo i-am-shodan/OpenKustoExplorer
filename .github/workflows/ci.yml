@@ -66,5 +66,21 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: OpenKustoExplorer-${{ matrix.rid }}
-          path: artifacts/desktop
+          path: |
+            artifacts/desktop
+            !artifacts/desktop/**/*.pdb
+            !artifacts/desktop/**/*.dbg
+            !artifacts/desktop/**/*.xml
           if-no-files-found: error
+          compression-level: 9
+
+      - name: Upload desktop symbols and documentation
+        uses: actions/upload-artifact@v7
+        with:
+          name: OpenKustoExplorer-${{ matrix.rid }}-symbols
+          path: |
+            artifacts/desktop/**/*.pdb
+            artifacts/desktop/**/*.dbg
+            artifacts/desktop/**/*.xml
+          if-no-files-found: error
+          compression-level: 9
