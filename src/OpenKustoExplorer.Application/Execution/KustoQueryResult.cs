@@ -11,17 +11,25 @@ public sealed class KustoQueryResult
     /// <param name="tables">The result tables in server order.</param>
     /// <param name="duration">The elapsed authentication and execution duration.</param>
     /// <param name="visualization">The optional server-provided render instructions.</param>
+    /// <param name="completeness">Whether the materialized result reached its record budget.</param>
     public KustoQueryResult(
         IEnumerable<KustoResultTable> tables,
         TimeSpan duration,
-        KustoVisualization? visualization = null)
+        KustoVisualization? visualization = null,
+        KustoQueryResultCompleteness completeness = KustoQueryResultCompleteness.Complete)
     {
         ArgumentNullException.ThrowIfNull(tables);
         ArgumentOutOfRangeException.ThrowIfLessThan(duration, TimeSpan.Zero);
 
+        if (!Enum.IsDefined(completeness))
+        {
+            throw new ArgumentOutOfRangeException(nameof(completeness));
+        }
+
         Tables = Array.AsReadOnly(tables.ToArray());
         Duration = duration;
         Visualization = visualization;
+        Completeness = completeness;
     }
 
     /// <summary>
@@ -38,4 +46,9 @@ public sealed class KustoQueryResult
     /// Gets the optional server-provided render instructions.
     /// </summary>
     public KustoVisualization? Visualization { get; }
+
+    /// <summary>
+    /// Gets whether the materialized result reached its record budget.
+    /// </summary>
+    public KustoQueryResultCompleteness Completeness { get; }
 }

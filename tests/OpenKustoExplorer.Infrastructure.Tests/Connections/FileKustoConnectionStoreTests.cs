@@ -97,6 +97,42 @@ public sealed class FileKustoConnectionStoreTests
     }
 
     /// <summary>
+    /// Verifies that a malformed persisted cluster URI is preserved without blocking startup.
+    /// </summary>
+    [Fact]
+    public void LoadReturnsEmptyCatalogForMalformedClusterUri()
+    {
+        string directoryPath = CreateTemporaryDirectory();
+        string filePath = Path.Combine(directoryPath, "connections.json");
+        const string Catalog = """
+            {
+              "version": 1,
+              "clusters": [{
+                "uri": "not-an-absolute-uri",
+                "displayName": "Invalid",
+                "databases": []
+              }]
+            }
+            """;
+
+        try
+        {
+            File.WriteAllText(filePath, Catalog);
+            FileKustoConnectionStore store = new(filePath);
+
+            KustoConnectionCatalog catalog = store.Load();
+
+            Assert.Empty(catalog.Clusters);
+            Assert.False(File.Exists(filePath));
+            Assert.Single(Directory.GetFiles(directoryPath, "connections.json.corrupt-*.bak"));
+        }
+        finally
+        {
+            Directory.Delete(directoryPath, true);
+        }
+    }
+
+    /// <summary>
     /// Verifies that pre-function schema caches retain their connection while requesting one lazy refresh.
     /// </summary>
     [Fact]

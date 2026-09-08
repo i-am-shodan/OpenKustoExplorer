@@ -2,6 +2,7 @@ using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using OpenKustoExplorer.Application.Dashboards;
+using OpenKustoExplorer.Application.Diagnostics;
 using OpenKustoExplorer.Application.Execution;
 
 namespace OpenKustoExplorer.Presentation.Workbench;
@@ -20,6 +21,8 @@ public sealed class KustoDashboardWidgetViewModel : ObservableObject, IDisposabl
     private readonly IKustoQueryService queryService;
     private string accentColor;
     private string backgroundColor;
+    private DateTimeOffset? cachedAtUtc;
+    private KustoQueryResult? cachedResult;
     private int column;
     private int columnSpan;
     private string databaseName;
@@ -73,6 +76,16 @@ public sealed class KustoDashboardWidgetViewModel : ObservableObject, IDisposabl
         foregroundColor = definition.ForegroundColor;
         accentColor = definition.AccentColor;
         RefreshCommand = new AsyncRelayCommand(RefreshFromCommandAsync);
+        if (definition.CachedResult is not null
+            && definition.CachedAtUtc is DateTimeOffset cachedAt
+            && cachedAt.Add(RefreshInterval) > DateTimeOffset.UtcNow)
+        {
+            cachedResult = definition.CachedResult;
+            cachedAtUtc = cachedAt;
+            ApplyResult(cachedResult);
+            LastRefreshedAtUtc = cachedAt;
+            NextRefreshAtUtc = cachedAt.Add(RefreshInterval);
+        }
     }
 
     /// <summary>
@@ -141,6 +154,11 @@ public sealed class KustoDashboardWidgetViewModel : ObservableObject, IDisposabl
     /// Gets the height in grid units.
     /// </summary>
     public int RowSpan => rowSpan;
+
+    /// <summary>
+    /// Gets the title and snapped-grid geometry exposed to assistive technology.
+    /// </summary>
+    public string LayoutAutomationText => $"{Title}, column {Column + 1}, row {Row + 1}, width {ColumnSpan}, height {RowSpan}";
 
     /// <summary>
     /// Gets the pixel x-coordinate used by the dashboard canvas.
@@ -362,6 +380,9 @@ public sealed class KustoDashboardWidgetViewModel : ObservableObject, IDisposabl
             ApplyResult(result);
             LastRefreshedAtUtc = utcNow;
             NextRefreshAtUtc = utcNow.Add(RefreshInterval);
+            cachedResult = CreateCachedResult(result);
+            cachedAtUtc = utcNow;
+            definitionChanged?.Invoke(this);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -431,6 +452,8 @@ public sealed class KustoDashboardWidgetViewModel : ObservableObject, IDisposabl
         backgroundColor = definition.BackgroundColor;
         foregroundColor = definition.ForegroundColor;
         accentColor = definition.AccentColor;
+        cachedResult = null;
+        cachedAtUtc = null;
         NextRefreshAtUtc = null;
         OnPropertyChanged(string.Empty);
         definitionChanged?.Invoke(this);
@@ -454,7 +477,9 @@ public sealed class KustoDashboardWidgetViewModel : ObservableObject, IDisposabl
             new KustoDashboardWidgetLayout(Column, Row, ColumnSpan, RowSpan),
             BackgroundColor,
             ForegroundColor,
-            AccentColor);
+            AccentColor,
+            cachedResult,
+            cachedAtUtc);
     }
 
     /// <inheritdoc />
@@ -467,6 +492,18 @@ public sealed class KustoDashboardWidgetViewModel : ObservableObject, IDisposabl
         }
     }
 
+    private static KustoQueryResult CreateCachedResult(KustoQueryResult result)
+    {
+        IReadOnlyList<KustoResultTable> tables = result.Tables.Count == 0
+            ? []
+            : [result.Tables[0]];
+        return new KustoQueryResult(
+            tables,
+            result.Duration,
+            result.Visualization,
+            result.Completeness);
+    }
+
     private async Task RefreshFromCommandAsync(CancellationToken cancellationToken)
     {
         await RefreshAsync(DateTimeOffset.UtcNow, cancellationToken);
@@ -475,6 +512,9 @@ public sealed class KustoDashboardWidgetViewModel : ObservableObject, IDisposabl
     private void ApplyResult(KustoQueryResult result)
     {
         KustoResultTable? table = result.Tables.Count > 0 ? result.Tables[0] : null;
+        using KustoPerformanceTrace.OperationScope measurement = KustoPerformanceTrace.Measure(
+            "dashboard.result.apply",
+            table?.Rows.Count ?? 0);
         Visualization = null;
 
         if (table is null)
@@ -518,5 +558,6 @@ public sealed class KustoDashboardWidgetViewModel : ObservableObject, IDisposabl
         OnPropertyChanged(nameof(CanvasTop));
         OnPropertyChanged(nameof(CanvasWidth));
         OnPropertyChanged(nameof(CanvasHeight));
+        OnPropertyChanged(nameof(LayoutAutomationText));
     }
 }

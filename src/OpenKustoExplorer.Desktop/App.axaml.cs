@@ -4,6 +4,7 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
 using Microsoft.Extensions.DependencyInjection;
+using OpenKustoExplorer.Application.Diagnostics;
 using OpenKustoExplorer.Desktop.Appearance;
 
 namespace OpenKustoExplorer.Desktop;
@@ -41,9 +42,12 @@ public sealed class App : Avalonia.Application
         {
             try
             {
-                AppearanceSettings appearanceSettings = serviceProvider.GetRequiredService<AppearanceSettings>();
-                appearanceSettings.Initialize(this);
-                desktopLifetime.MainWindow = serviceProvider.GetRequiredService<MainWindow>();
+                using (KustoPerformanceTrace.Measure("startup.main_window.resolve"))
+                {
+                    AppearanceSettings appearanceSettings = serviceProvider.GetRequiredService<AppearanceSettings>();
+                    appearanceSettings.Initialize(this);
+                    desktopLifetime.MainWindow = serviceProvider.GetRequiredService<MainWindow>();
+                }
             }
             catch (Exception exception)
             {

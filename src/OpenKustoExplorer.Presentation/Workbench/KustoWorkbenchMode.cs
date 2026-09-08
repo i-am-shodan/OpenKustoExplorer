@@ -21,6 +21,11 @@ public enum KustoWorkbenchMode
     Automations,
 
     /// <summary>
+    /// Recorded manual query sessions and inferred pivot chains.
+    /// </summary>
+    Sessions,
+
+    /// <summary>
     /// The app-wide investigation graph.
     /// </summary>
     Graph,

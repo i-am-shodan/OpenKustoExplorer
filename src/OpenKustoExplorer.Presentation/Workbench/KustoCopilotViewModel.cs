@@ -6,7 +6,7 @@ using OpenKustoExplorer.Application.Assistance;
 namespace OpenKustoExplorer.Presentation.Workbench;
 
 /// <summary>
-/// Coordinates the collapsible current-tab GitHub Copilot conversation.
+/// Coordinates the collapsible current-tab AI conversation.
 /// </summary>
 public sealed class KustoCopilotViewModel : ObservableObject
 {
@@ -19,6 +19,7 @@ public sealed class KustoCopilotViewModel : ObservableObject
     private readonly Action<string> replaceDocumentAction;
     private readonly Func<string, CancellationToken, Task>? runCypherAction;
     private readonly IKustoCopilotService service;
+    private readonly bool supportsApplyToCurrentTab;
     private readonly bool supportsResultDataSharing;
     private readonly Func<KustoCopilotContext, string, CancellationToken, Task<string?>>? validateQueryAsync;
     private KustoCopilotModel defaultModel;
@@ -43,7 +44,7 @@ public sealed class KustoCopilotViewModel : ObservableObject
     /// <summary>
     /// Initializes a new instance of the <see cref="KustoCopilotViewModel"/> class.
     /// </summary>
-    /// <param name="service">The application-owned GitHub Copilot adapter.</param>
+    /// <param name="service">The application-owned AI provider adapter.</param>
     /// <param name="contextProvider">Captures the active tab for each turn.</param>
     /// <param name="replaceDocumentAction">Replaces the active tab after user confirmation.</param>
     /// <param name="createDocumentAction">Creates a new tab after user confirmation.</param>
@@ -53,6 +54,7 @@ public sealed class KustoCopilotViewModel : ObservableObject
     /// <param name="validateQueryAsync">Validates proposed KQL locally without executing it.</param>
     /// <param name="supportsResultDataSharing">Whether this scope supports result sharing and Azure MCP.</param>
     /// <param name="appendDocumentAction">Adds proposed KQL to the end of the active query tab.</param>
+    /// <param name="supportsApplyToCurrentTab">Whether proposals may replace the active scope.</param>
     public KustoCopilotViewModel(
         IKustoCopilotService service,
         Func<KustoCopilotContext?> contextProvider,
@@ -63,7 +65,8 @@ public sealed class KustoCopilotViewModel : ObservableObject
         Action<string>? createAutomationAction = null,
         Func<KustoCopilotContext, string, CancellationToken, Task<string?>>? validateQueryAsync = null,
         bool supportsResultDataSharing = true,
-        Action<string>? appendDocumentAction = null)
+        Action<string>? appendDocumentAction = null,
+        bool supportsApplyToCurrentTab = true)
     {
         ArgumentNullException.ThrowIfNull(service);
         ArgumentNullException.ThrowIfNull(contextProvider);
@@ -80,6 +83,7 @@ public sealed class KustoCopilotViewModel : ObservableObject
         this.validateQueryAsync = validateQueryAsync;
         this.supportsResultDataSharing = supportsResultDataSharing;
         this.appendDocumentAction = appendDocumentAction;
+        this.supportsApplyToCurrentTab = supportsApplyToCurrentTab;
         Messages = new ObservableCollection<KustoCopilotMessageViewModel>();
         KustoCopilotModel automaticModel = new("auto", "Automatic");
         Models = new ObservableCollection<KustoCopilotModel> { automaticModel };
@@ -88,10 +92,10 @@ public sealed class KustoCopilotViewModel : ObservableObject
         ToggleCommand = new RelayCommand(Toggle);
         CloseCommand = new RelayCommand(() => IsOpen = false);
         SendCommand = new AsyncRelayCommand(SendAsync, () => CanSend);
-        SignInCommand = new AsyncRelayCommand(SignInAsync, () => !IsBusy);
+        SignInCommand = new AsyncRelayCommand(SignInAsync, () => service.SupportsInteractiveSignIn && !IsBusy && !IsLoadingModels);
         RefreshModelsCommand = new AsyncRelayCommand(LoadModelsAsync, () => !IsBusy && !IsLoadingModels);
-        CancelCommand = new RelayCommand(Cancel, () => IsBusy);
-        ApplyToCurrentTabCommand = new RelayCommand(ApplyToCurrentTab, () => HasProposal);
+        CancelCommand = new RelayCommand(Cancel, () => CanCancel);
+        ApplyToCurrentTabCommand = new RelayCommand(ApplyToCurrentTab, () => HasApplyProposal);
         AppendToCurrentTabCommand = new RelayCommand(AppendToCurrentTab, () => HasAppendProposal);
         CreateNewTabCommand = new RelayCommand(CreateNewTab, () => HasProposal);
         CreateAutomationCommand = new RelayCommand(
@@ -110,9 +114,21 @@ public sealed class KustoCopilotViewModel : ObservableObject
     public ObservableCollection<KustoCopilotMessageViewModel> Messages { get; }
 
     /// <summary>
-    /// Gets models available to the signed-in GitHub Copilot account.
+    /// Gets models available from the active AI provider.
     /// </summary>
     public ObservableCollection<KustoCopilotModel> Models { get; }
+
+    /// <summary>Gets the active provider display name.</summary>
+    public string ProviderDisplayName => service.ProviderDisplayName;
+
+    /// <summary>Gets a value indicating whether the active provider supports MCP servers.</summary>
+    public bool SupportsMcp => service.SupportsMcp;
+
+    /// <summary>Gets a value indicating whether interactive provider sign-in should be offered.</summary>
+    public bool CanSignIn => service.SupportsInteractiveSignIn
+        && !IsSignedIn
+        && !IsBusy
+        && !IsLoadingModels;
 
     /// <summary>
     /// Gets the command that opens or closes the sidebar.
@@ -130,7 +146,7 @@ public sealed class KustoCopilotViewModel : ObservableObject
     public IAsyncRelayCommand SendCommand { get; }
 
     /// <summary>
-    /// Gets the command that opens the official GitHub Copilot CLI sign-in flow.
+    /// Gets the command that opens the active provider's interactive sign-in flow.
     /// </summary>
     public IAsyncRelayCommand SignInCommand { get; }
 
@@ -315,6 +331,8 @@ public sealed class KustoCopilotViewModel : ObservableObject
             if (SetProperty(ref prompt, value))
             {
                 OnPropertyChanged(nameof(CanSend));
+                OnPropertyChanged(nameof(CanSignIn));
+                OnPropertyChanged(nameof(CanCancel));
                 SendCommand.NotifyCanExecuteChanged();
             }
         }
@@ -358,7 +376,13 @@ public sealed class KustoCopilotViewModel : ObservableObject
         {
             if (SetProperty(ref isLoadingModels, value))
             {
+                OnPropertyChanged(nameof(CanSend));
+                OnPropertyChanged(nameof(CanSignIn));
+                OnPropertyChanged(nameof(CanCancel));
+                SendCommand.NotifyCanExecuteChanged();
+                SignInCommand.NotifyCanExecuteChanged();
                 RefreshModelsCommand.NotifyCanExecuteChanged();
+                CancelCommand.NotifyCanExecuteChanged();
             }
         }
     }
@@ -369,7 +393,13 @@ public sealed class KustoCopilotViewModel : ObservableObject
     public bool IsSignedIn
     {
         get => isSignedIn;
-        private set => SetProperty(ref isSignedIn, value);
+        private set
+        {
+            if (SetProperty(ref isSignedIn, value))
+            {
+                OnPropertyChanged(nameof(CanSignIn));
+            }
+        }
     }
 
     /// <summary>
@@ -388,6 +418,7 @@ public sealed class KustoCopilotViewModel : ObservableObject
             if (SetProperty(ref proposedQuery, value))
             {
                 OnPropertyChanged(nameof(HasProposal));
+                OnPropertyChanged(nameof(HasApplyProposal));
                 OnPropertyChanged(nameof(HasAppendProposal));
                 OnPropertyChanged(nameof(HasAutomationProposal));
                 OnPropertyChanged(nameof(HasAnyProposal));
@@ -406,6 +437,11 @@ public sealed class KustoCopilotViewModel : ObservableObject
     /// Gets a value indicating whether a complete KQL proposal is available.
     /// </summary>
     public bool HasProposal => !string.IsNullOrWhiteSpace(ProposedQuery);
+
+    /// <summary>
+    /// Gets a value indicating whether a KQL proposal can replace the active scope.
+    /// </summary>
+    public bool HasApplyProposal => HasProposal && supportsApplyToCurrentTab;
 
     /// <summary>
     /// Gets a value indicating whether the KQL proposal can be added to the active query tab.
@@ -470,7 +506,12 @@ public sealed class KustoCopilotViewModel : ObservableObject
     /// <summary>
     /// Gets a value indicating whether the current prompt can be sent.
     /// </summary>
-    public bool CanSend => !IsBusy && !string.IsNullOrWhiteSpace(Prompt);
+    public bool CanSend => !IsBusy && !IsLoadingModels && !string.IsNullOrWhiteSpace(Prompt);
+
+    /// <summary>
+    /// Gets a value indicating whether an active assistant operation can be canceled.
+    /// </summary>
+    public bool CanCancel => IsBusy || IsLoadingModels;
 
     /// <summary>
     /// Updates sidebar visibility while preserving this tab's conversation.
@@ -509,6 +550,36 @@ public sealed class KustoCopilotViewModel : ObservableObject
         }
 
         StatusText = previousStatus;
+    }
+
+    /// <summary>
+    /// Clears provider-specific state after application provider settings change.
+    /// </summary>
+    internal void RefreshProvider()
+    {
+        modelsLoaded = false;
+        isModelOverridden = false;
+        IsSignedIn = false;
+        Models.Clear();
+        KustoCopilotModel automaticModel = new("auto", "Automatic");
+        Models.Add(automaticModel);
+        SetSelectedModelInternally(automaticModel);
+        Messages.Clear();
+        ProposedQuery = string.Empty;
+        ProposedCypher = string.Empty;
+        StatusText = $"Using {service.ProviderDisplayName}";
+        OnPropertyChanged(nameof(ProviderDisplayName));
+        OnPropertyChanged(nameof(SupportsMcp));
+        OnPropertyChanged(nameof(CanSignIn));
+        OnPropertyChanged(nameof(HasMessages));
+        SignInCommand.NotifyCanExecuteChanged();
+        ClearCommand.NotifyCanExecuteChanged();
+        _ = ResetForProviderChangeAsync();
+
+        if (IsOpen && !IsLoadingModels)
+        {
+            _ = LoadModelsAsync(CancellationToken.None);
+        }
     }
 
     private static string CreateAssistantMessage(KustoCopilotReply reply)
@@ -571,6 +642,7 @@ public sealed class KustoCopilotViewModel : ObservableObject
     {
         SendCommand.Cancel();
         SignInCommand.Cancel();
+        RefreshModelsCommand.Cancel();
     }
 
     private async Task ClearAsync(CancellationToken cancellationToken)
@@ -627,7 +699,7 @@ public sealed class KustoCopilotViewModel : ObservableObject
     private async Task SendAsync(CancellationToken cancellationToken)
     {
         KustoCopilotContext context = contextProvider()
-            ?? throw new InvalidOperationException("Select a query tab before using GitHub Copilot.");
+            ?? throw new InvalidOperationException("Select a query tab before using the AI assistant.");
         string request = Prompt.Trim();
         Messages.Add(new KustoCopilotMessageViewModel("You", request, isUser: true));
         Prompt = string.Empty;
@@ -642,16 +714,20 @@ public sealed class KustoCopilotViewModel : ObservableObject
         {
             KustoCopilotOptions options = new(
                 SelectedModel.Id,
-                EnableMicrosoftLearnMcp,
-                EnableAzureMcp,
-                ShareGraphData);
+                service.SupportsMcp && EnableMicrosoftLearnMcp,
+                service.SupportsMcp && EnableAzureMcp,
+                ShareGraphData,
+                context.ScopeKind == KustoCopilotScopeKind.RecordedSession && ShareResultData);
             KustoCopilotReply reply = await SendValidatedAsync(
                 context,
                 request,
                 options,
                 cancellationToken);
             string assistantMessage = CreateAssistantMessage(reply);
-            Messages.Add(new KustoCopilotMessageViewModel("Copilot", assistantMessage, isUser: false));
+            Messages.Add(new KustoCopilotMessageViewModel(
+                service.ProviderDisplayName,
+                assistantMessage,
+                isUser: false));
             ProposedQuery = reply.ProposedQuery ?? string.Empty;
             ProposedCypher = reply.ProposedCypher ?? string.Empty;
             StatusText = HasAnyProposal ? "Query proposal ready" : "Ready";
@@ -663,7 +739,7 @@ public sealed class KustoCopilotViewModel : ObservableObject
         catch (Exception exception)
         {
             Messages.Add(new KustoCopilotMessageViewModel(
-                "Copilot",
+                service.ProviderDisplayName,
                 $"Could not complete the request: {exception.Message}",
                 isUser: false));
             StatusText = "Unavailable";
@@ -710,7 +786,7 @@ public sealed class KustoCopilotViewModel : ObservableObject
 
             repairStarted = true;
             repairAttempt++;
-            StatusText = "Asking Copilot to repair KQL";
+            StatusText = $"Asking {service.ProviderDisplayName} to repair KQL";
             reply = await service.SendAsync(
                 context,
                 CreateRepairRequest(validationErrors),
@@ -734,10 +810,26 @@ public sealed class KustoCopilotViewModel : ObservableObject
         }
     }
 
+    private async Task ResetForProviderChangeAsync()
+    {
+        try
+        {
+            KustoCopilotContext? context = contextProvider();
+            if (context is not null)
+            {
+                await service.ResetConversationAsync(context.DocumentId, CancellationToken.None);
+            }
+        }
+        catch (Exception)
+        {
+            // Provider reconfiguration remains isolated from the rest of the application.
+        }
+    }
+
     private async Task SignInAsync(CancellationToken cancellationToken)
     {
         IsBusy = true;
-        StatusText = "Waiting for GitHub sign in";
+        StatusText = $"Waiting for {service.ProviderDisplayName} sign in";
 
         try
         {
@@ -780,9 +872,17 @@ public sealed class KustoCopilotViewModel : ObservableObject
             }
 
             PreserveModel(previousSelection);
-            PreserveModel(defaultModel);
-            KustoCopilotModel selected = FindModel(previousSelection.Id)
-                ?? FindModel(defaultModel.Id)
+            if (service.ProviderKind == KustoAIProviderKind.GitHubCopilot)
+            {
+                PreserveModel(defaultModel);
+            }
+
+            KustoCopilotModel? configuredDefault = !isModelOverridden
+                && service.ProviderKind == KustoAIProviderKind.GitHubCopilot
+                    ? FindModel(defaultModel.Id)
+                    : null;
+            KustoCopilotModel selected = configuredDefault
+                ?? FindModel(previousSelection.Id)
                 ?? Models[0];
             SetSelectedModelInternally(selected);
             modelsLoaded = true;

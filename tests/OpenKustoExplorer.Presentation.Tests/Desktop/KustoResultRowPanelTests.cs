@@ -41,6 +41,27 @@ public sealed class KustoResultRowPanelTests
         Assert.Equal(200, panel.Children[1].Bounds.Width, 3);
     }
 
+    /// <summary>
+    /// Verifies result cells expose their row and column relationship without an oversized value.
+    /// </summary>
+    [Fact]
+    public void CellAutomationTextIncludesBoundedRowAndColumnContext()
+    {
+        string oversizedValue = new('x', 300);
+        KustoResultRow row = new(["Alice", oversizedValue]);
+        KustoResultColumn[] columns =
+        [
+            new KustoResultColumn("Name", "string"),
+            new KustoResultColumn("Value", "string"),
+        ];
+        KustoResultRowViewModel viewModel = new(row, 4, columns);
+
+        Assert.Equal("Row 5, Name: Alice", viewModel.Cells[0].AutomationText);
+        Assert.StartsWith("Row 5, Value: ", viewModel.Cells[1].AutomationText, StringComparison.Ordinal);
+        Assert.EndsWith("...", viewModel.Cells[1].AutomationText, StringComparison.Ordinal);
+        Assert.True(viewModel.Cells[1].AutomationText.Length < oversizedValue.Length);
+    }
+
     private static KustoResultRowPanel CreatePanel()
     {
         KustoResultColumn[] columns =

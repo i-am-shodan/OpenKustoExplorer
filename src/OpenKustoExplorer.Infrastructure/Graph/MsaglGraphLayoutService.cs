@@ -5,6 +5,7 @@ using Microsoft.Msagl.Core.Layout.ProximityOverlapRemoval.MinimumSpanningTree;
 using Microsoft.Msagl.Layout.MDS;
 using Microsoft.Msagl.Miscellaneous;
 using Microsoft.Msagl.Routing;
+using OpenKustoExplorer.Application.Diagnostics;
 using OpenKustoExplorer.Application.Graphs;
 using OpenKustoExplorer.Graph;
 using MsaglPoint = Microsoft.Msagl.Core.Geometry.Point;
@@ -38,6 +39,9 @@ public sealed class MsaglGraphLayoutService : IGraphLayoutService
         GraphViewport viewport,
         CancellationToken cancellationToken)
     {
+        using KustoPerformanceTrace.OperationScope measurement = KustoPerformanceTrace.Measure(
+            "graph.layout.create",
+            viewport.Entities.Count);
         if (viewport.IsEmpty)
         {
             return new GraphLayout(0, 0, [], [], viewport.IsTruncated);

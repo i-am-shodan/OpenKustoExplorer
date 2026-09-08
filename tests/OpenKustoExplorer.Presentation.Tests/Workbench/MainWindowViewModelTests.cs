@@ -8,10 +8,13 @@ using OpenKustoExplorer.Application.Documents;
 using OpenKustoExplorer.Application.Execution;
 using OpenKustoExplorer.Application.Graphs;
 using OpenKustoExplorer.Application.Language;
+using OpenKustoExplorer.Application.Sessions;
 using OpenKustoExplorer.Desktop.Editor;
 using OpenKustoExplorer.Domain.Schema;
 using OpenKustoExplorer.Graph;
 using OpenKustoExplorer.Graph.Query;
+using OpenKustoExplorer.Infrastructure.Language;
+using OpenKustoExplorer.Infrastructure.Sessions;
 using OpenKustoExplorer.Presentation.Workbench;
 
 namespace OpenKustoExplorer.Presentation.Tests.Workbench;
@@ -378,6 +381,119 @@ public sealed class MainWindowViewModelTests
     }
 
     /// <summary>
+    /// Verifies model discovery participates in global assistant activity tracking.
+    /// </summary>
+    /// <returns>A task that completes after model discovery finishes.</returns>
+    [Fact]
+    public async Task CopilotModelDiscoverySetsGlobalWorkingState()
+    {
+        TaskCompletionSource<IReadOnlyList<KustoCopilotModel>> pendingModels = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        StubKustoCopilotService copilotService = new()
+        {
+            PendingModels = pendingModels,
+        };
+        MainWindowViewModel viewModel = CreateViewModel(copilotService: copilotService);
+        viewModel.Copilot.Prompt = "Explain this query";
+        Assert.True(viewModel.Copilot.CanSend);
+
+        Task refreshTask = viewModel.Copilot.RefreshModelsCommand.ExecuteAsync(null);
+
+        Assert.True(viewModel.Copilot.IsLoadingModels);
+        Assert.True(viewModel.IsCopilotWorking);
+        Assert.False(viewModel.Copilot.CanSend);
+        Assert.True(viewModel.Copilot.CanCancel);
+        pendingModels.SetResult(copilotService.AvailableModels);
+        await refreshTask;
+
+        Assert.False(viewModel.Copilot.IsLoadingModels);
+        Assert.False(viewModel.IsCopilotWorking);
+        Assert.True(viewModel.Copilot.CanSend);
+        Assert.False(viewModel.Copilot.CanCancel);
+    }
+
+    /// <summary>
+    /// Verifies unavailable AI providers do not impair the query workbench.
+    /// </summary>
+    /// <returns>A task that completes after provider failures and query execution are exercised.</returns>
+    [Fact]
+    public async Task UnavailableAIProviderDoesNotBlockQueryWorkbench()
+    {
+        StubKustoCopilotService copilotService = new()
+        {
+            SignInException = new InvalidOperationException("No Copilot subscription is available"),
+            ModelsException = new InvalidOperationException("Provider is offline"),
+            SendException = new InvalidOperationException("No provider account is available"),
+        };
+        StubKustoQueryService queryService = new()
+        {
+            Result = new KustoQueryResult(
+                [
+                    new KustoResultTable(
+                        "PrimaryResult",
+                        [new KustoResultColumn("Status", "string")],
+                        [new KustoResultRow(["query-still-works"])]),
+                ],
+                TimeSpan.FromMilliseconds(5)),
+        };
+        MainWindowViewModel viewModel = CreateViewModel(
+            queryService: queryService,
+            copilotService: copilotService);
+
+        await viewModel.Copilot.SignInCommand.ExecuteAsync(null);
+        Assert.Contains("Sign in failed", viewModel.Copilot.StatusText, StringComparison.Ordinal);
+        await viewModel.Copilot.RefreshModelsCommand.ExecuteAsync(null);
+        Assert.Contains("Models unavailable", viewModel.Copilot.StatusText, StringComparison.Ordinal);
+        viewModel.Copilot.Prompt = "Explain this query";
+        await viewModel.Copilot.SendCommand.ExecuteAsync(null);
+
+        Assert.Equal("Unavailable", viewModel.Copilot.StatusText);
+        Assert.Contains(
+            viewModel.Copilot.Messages,
+            message => message.Content.Contains("No provider account", StringComparison.Ordinal));
+
+        await viewModel.RunQueryCommand.ExecuteAsync(null);
+
+        Assert.True(viewModel.HasResultTable);
+        Assert.Equal("query-still-works", Assert.Single(viewModel.ResultRows).Cells[0].Text);
+    }
+
+    /// <summary>
+    /// Verifies switching providers updates capabilities and removes incompatible saved models.
+    /// </summary>
+    /// <returns>A task that completes after provider model discovery.</returns>
+    [Fact]
+    public async Task CopilotProviderSwitchIsolatesModelsAndCapabilities()
+    {
+        StubKustoCopilotService copilotService = new();
+        MainWindowViewModel viewModel = CreateViewModel(copilotService: copilotService);
+        viewModel.ApplyCopilotDefaults(new KustoCopilotDefaults(
+            true,
+            true,
+            false,
+            false,
+            false,
+            new KustoCopilotModel("github-default", "GitHub default")));
+        await viewModel.Copilot.RefreshModelsCommand.ExecuteAsync(null);
+        Assert.Contains(viewModel.Copilot.Models, model => model.Id == "github-default");
+
+        copilotService.ProviderKind = KustoAIProviderKind.OpenAI;
+        copilotService.ProviderDisplayName = "OpenAI";
+        copilotService.AvailableModels =
+        [
+            new KustoCopilotModel("openai-model", "OpenAI model"),
+        ];
+        viewModel.RefreshCopilotProvider();
+        await viewModel.Copilot.RefreshModelsCommand.ExecuteAsync(null);
+
+        Assert.Equal("OpenAI for KQL", viewModel.CopilotTitle);
+        Assert.False(viewModel.Copilot.CanSignIn);
+        Assert.False(viewModel.Copilot.SupportsMcp);
+        Assert.Contains(viewModel.Copilot.Models, model => model.Id == "openai-model");
+        Assert.DoesNotContain(viewModel.Copilot.Models, model => model.Id == "github-default");
+    }
+
+    /// <summary>
     /// Verifies current results and Azure MCP are unavailable until explicit per-tab data consent.
     /// </summary>
     /// <returns>A task that completes after consent and model options are verified.</returns>
@@ -417,6 +533,7 @@ public sealed class MainWindowViewModelTests
         Assert.Equal("gpt-test", copilotService.Options!.ModelId);
         Assert.True(copilotService.Options.EnableAzureMcp);
         Assert.True(copilotService.Options.EnableMicrosoftLearnMcp);
+        Assert.False(copilotService.Options.ShareRecordedSessionData);
 
         viewModel.Copilot.ShareResultData = false;
         Assert.False(viewModel.Copilot.EnableAzureMcp);
@@ -692,6 +809,65 @@ public sealed class MainWindowViewModelTests
     }
 
     /// <summary>
+    /// Verifies keyboard-style adjacent movement reorders a complete named tab group.
+    /// </summary>
+    [Fact]
+    public void MoveDocumentBlockByOffsetReordersWholeGroup()
+    {
+        Guid firstId = Guid.NewGuid();
+        Guid groupedFirstId = Guid.NewGuid();
+        Guid groupedSecondId = Guid.NewGuid();
+        StubKustoDocumentStore documentStore = new()
+        {
+            Workspace = new KustoDocumentWorkspace(
+                [
+                    new KustoDocument(firstId, "First", string.Empty, 0, null, null),
+                    new KustoDocument(groupedFirstId, "Group A", string.Empty, 0, null, null, groupName: "Group"),
+                    new KustoDocument(groupedSecondId, "Group B", string.Empty, 0, null, null, groupName: "Group"),
+                ],
+                groupedFirstId),
+        };
+        MainWindowViewModel viewModel = CreateViewModel(documentStore: documentStore);
+
+        bool moved = viewModel.MoveDocumentBlock(viewModel.Documents[1], -1);
+        bool movedPastEdge = viewModel.MoveDocumentBlock(viewModel.Documents[0], -1);
+        viewModel.Dispose();
+
+        Assert.True(moved);
+        Assert.False(movedPastEdge);
+        Assert.Equal(
+            [groupedFirstId, groupedSecondId, firstId],
+            viewModel.Documents.Select(document => document.Id));
+    }
+
+    /// <summary>
+    /// Verifies an autosave failure stays visible until the latest snapshot is durably retried.
+    /// </summary>
+    /// <returns>A task that completes after the failed save is retried.</returns>
+    [Fact]
+    public async Task DocumentAutosaveFailureCanBeRetried()
+    {
+        StubKustoDocumentStore documentStore = new()
+        {
+            SaveException = new IOException("Disk is full."),
+        };
+        MainWindowViewModel viewModel = CreateViewModel(documentStore: documentStore);
+
+        viewModel.QueryText = "print 'keep me'";
+        await documentStore.SaveAttempted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.True(viewModel.HasDocumentSaveError);
+        Assert.Contains("Disk is full", viewModel.DocumentSaveErrorText, StringComparison.Ordinal);
+
+        documentStore.SaveException = null;
+        viewModel.RetryDocumentSaveCommand.Execute(null);
+
+        Assert.False(viewModel.HasDocumentSaveError);
+        Assert.Equal("print 'keep me'", Assert.Single(documentStore.SavedWorkspace!.Documents).Text);
+        viewModel.Dispose();
+    }
+
+    /// <summary>
     /// Verifies cross-tab search includes titles and KQL text and navigates to the selected match.
     /// </summary>
     [Fact]
@@ -783,6 +959,112 @@ public sealed class MainWindowViewModelTests
         Assert.False(viewModel.HasQueryError);
         Assert.Equal("Connected", viewModel.ConnectionStatusText);
         Assert.Contains("125 ms", viewModel.ResultSummary, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Verifies the manual Run command records its selected query target and retained result.
+    /// </summary>
+    /// <returns>A task that completes after the recording is reloaded.</returns>
+    [Fact]
+    public async Task RunQueryCommandRecordsActiveSession()
+    {
+        string directoryPath = Path.Combine(
+            Path.GetTempPath(),
+            $"OpenKustoExplorer-MainRecording-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directoryPath);
+        string filePath = Path.Combine(directoryPath, "recorded-sessions.db");
+
+        try
+        {
+            using SqliteKustoRecordedSessionStore store = new(filePath);
+            KustoRecordedChainSearcher searcher = new(store);
+            StubKustoCopilotService copilotService = new();
+            MainWindowViewModel viewModel = CreateViewModel(
+                queryService: new StubKustoQueryService
+                {
+                    Result = new KustoQueryResult(
+                        [new KustoResultTable(
+                            "PrimaryResult",
+                            [new KustoResultColumn("Value", "string")],
+                            [new KustoResultRow(["recorded-value"])])],
+                        TimeSpan.FromMilliseconds(12)),
+                },
+                recordedSessionStore: store,
+                predicateInterestExtractor: new KustoPredicateInterestExtractor(),
+                recordedRelationExtractor: new KustoRecordedRelationExtractor(),
+                recordedChainSearcher: searcher,
+                recordedRelationPlanner: new KustoRecordedRelationPlanner(),
+                recordedChainGenerator: new KustoRecordedChainQueryGenerator(),
+                copilotService: copilotService);
+            KustoCopilotViewModel queryConversation = viewModel.Copilot;
+            await viewModel.Recording.OpenRecordingCommand.ExecuteAsync(null);
+            viewModel.Recording.NewSessionName = "Workbench recording";
+            await viewModel.Recording.StartRecordingCommand.ExecuteAsync(null);
+
+            await viewModel.RunQueryCommand.ExecuteAsync(null);
+            await viewModel.Recording.StopRecordingCommand.ExecuteAsync(null);
+
+            Assert.True(viewModel.IsQueryWorkbenchView);
+
+            await viewModel.ShowSessionsCommand.ExecuteAsync(null);
+
+            Assert.True(viewModel.IsSessionsView);
+            Assert.NotNull(viewModel.Recording.SelectedSession);
+            Assert.NotNull(viewModel.Recording.SelectedExecution);
+            Assert.NotNull(viewModel.Recording.SelectedTable);
+            KustoCopilotViewModel sessionConversation = viewModel.Copilot;
+            Assert.NotSame(queryConversation, sessionConversation);
+            Assert.Equal("Test Copilot for Recorded Sessions", viewModel.CopilotTitle);
+            Assert.True(viewModel.IsRecordedSessionCopilotScope);
+            Assert.False(viewModel.GenerateRecordedChainCommand.CanExecute(null));
+            KustoResultCellViewModel recordedCell = viewModel.Recording.SelectedTable.Rows[0].Cells[0];
+            viewModel.Recording.SetResultContext(recordedCell);
+            await viewModel.Recording.SetChainStartCommand.ExecuteAsync(null);
+            Assert.False(viewModel.GenerateRecordedChainCommand.CanExecute(null));
+            await viewModel.Recording.SetChainEndCommand.ExecuteAsync(null);
+            Assert.True(viewModel.GenerateRecordedChainCommand.CanExecute(null));
+
+            KustoRecordedSessionSummary summary = Assert.Single(await store.GetSessionsAsync());
+            KustoRecordedSession session = Assert.IsType<KustoRecordedSession>(
+                await store.GetSessionAsync(summary.Id));
+            KustoRecordedExecution execution = Assert.Single(session.Executions);
+            Assert.Equal(viewModel.QueryInfo.ExecutedQueryText, execution.QueryText);
+            Assert.Equal("Samples", execution.DatabaseName);
+            Assert.Equal("recorded-value", Assert.Single(Assert.Single(execution.Result!.Tables).Rows).Values[0]);
+
+            sessionConversation.ShareResultData = true;
+            sessionConversation.ShareTabContent = true;
+            copilotService.Reply = new KustoCopilotReply(
+                "Prepared a broader query.",
+                "StormEvents | project State, EventType");
+            sessionConversation.Prompt = "Rewrite this query with another field";
+            await sessionConversation.SendCommand.ExecuteAsync(null);
+
+            Assert.Equal(KustoCopilotScopeKind.RecordedSession, copilotService.Context?.ScopeKind);
+            Assert.Equal(summary.Id, copilotService.Context?.RecordedSessionScope?.SessionId);
+            Assert.Equal(execution.QueryText, copilotService.Context?.QueryText);
+            Assert.DoesNotContain("recorded-value", copilotService.Context?.SchemaText, StringComparison.Ordinal);
+            Assert.Equal(string.Empty, copilotService.Context?.SharedDataText);
+            Assert.True(copilotService.Options?.ShareRecordedSessionData);
+            Assert.True(sessionConversation.HasProposal);
+            Assert.False(sessionConversation.HasApplyProposal);
+            Assert.False(sessionConversation.HasAppendProposal);
+            int documentCount = viewModel.Documents.Count;
+
+            sessionConversation.CreateNewTabCommand.Execute(null);
+
+            Assert.True(viewModel.IsQueryWorkbenchView);
+            Assert.Equal(documentCount + 1, viewModel.Documents.Count);
+            Assert.Equal("StormEvents | project State, EventType", viewModel.QueryText);
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (Directory.Exists(directoryPath))
+            {
+                Directory.Delete(directoryPath, true);
+            }
+        }
     }
 
     /// <summary>
@@ -1154,6 +1436,39 @@ public sealed class MainWindowViewModelTests
         Assert.Equal("Completed", viewModel.QueryInfo.StatusText);
         Assert.Contains("1 tables", viewModel.QueryInfo.ResultShapeText, StringComparison.Ordinal);
         Assert.Contains("StormEvents", viewModel.QueryInfo.ExecutedQueryText, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Verifies multiple selected result values create one OR filter in the active query.
+    /// </summary>
+    /// <returns>A task that completes after result interaction.</returns>
+    [Fact]
+    public async Task ResultContextAddsSelectedValuesAsOrFilter()
+    {
+        KustoResultTable table = new(
+            "Result 1",
+            [new KustoResultColumn("State", "string")],
+            [
+                new KustoResultRow(["Texas"]),
+                new KustoResultRow(["Ohio"]),
+                new KustoResultRow(["Nevada"]),
+            ]);
+        MainWindowViewModel viewModel = CreateViewModel(
+            queryService: new StubKustoQueryService
+            {
+                Result = new KustoQueryResult([table], TimeSpan.FromMilliseconds(10)),
+            });
+        viewModel.QueryText = "StormEvents | summarize by State";
+        viewModel.CaretPosition = viewModel.QueryText.Length;
+        await viewModel.RunQueryCommand.ExecuteAsync(null);
+        viewModel.SetResultContext(viewModel.ResultRows[0].Cells[0]);
+
+        viewModel.AddCellFilterFromResults([viewModel.ResultRows[0], viewModel.ResultRows[2]]);
+
+        Assert.Contains(
+            "| where (['State'] == 'Texas' or ['State'] == 'Nevada')",
+            viewModel.QueryText,
+            StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -2144,6 +2459,49 @@ public sealed class MainWindowViewModelTests
     }
 
     /// <summary>
+    /// Verifies persisted automation visualization parsing is deferred and cached until run details are inspected.
+    /// </summary>
+    [Fact]
+    public void AutomationVisualizationParsingIsDeferredUntilRunIsInspected()
+    {
+        DateTimeOffset startedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-10);
+        KustoAutomation automation = new(
+            Guid.NewGuid(),
+            "Traffic",
+            new Uri("https://adx.contoso.com"),
+            "Telemetry",
+            "Events | summarize count() by bin(Timestamp, 1h) | render timechart",
+            TimeSpan.FromMinutes(5),
+            startedAtUtc.AddHours(-1),
+            startedAtUtc.AddHours(1),
+            null,
+            true,
+            [CreateSuccessfulAutomationRun(startedAtUtc, 1)]);
+        StubKustoLanguageService languageService = new();
+        MainWindowViewModel viewModel = CreateViewModel(
+            languageService: languageService,
+            automationStore: new StubKustoAutomationStore
+            {
+                Catalog = new KustoAutomationCatalog([automation]),
+            });
+        KustoAutomationViewModel scheduled = Assert.Single(viewModel.Automations);
+        KustoAutomationRunViewModel run = Assert.Single(scheduled.Runs);
+
+        Assert.Null(viewModel.SelectedAutomation);
+        Assert.Equal(0, languageService.VisualizationRequestCount);
+
+        viewModel.ShowAutomationsCommand.Execute(null);
+
+        Assert.Same(scheduled, viewModel.SelectedAutomation);
+        Assert.Equal(0, languageService.VisualizationRequestCount);
+
+        _ = run.VisualizationMessage;
+        _ = run.VisualizationMessage;
+
+        Assert.Equal(1, languageService.VisualizationRequestCount);
+    }
+
+    /// <summary>
     /// Verifies an existing automation can be renamed and configured with result actions after creation.
     /// </summary>
     [Fact]
@@ -2329,7 +2687,7 @@ public sealed class MainWindowViewModelTests
         KustoCopilotViewModel automationConversation = viewModel.Copilot;
         Assert.NotSame(queryConversation, automationConversation);
         Assert.True(viewModel.IsCopilotPanelOpen);
-        Assert.Equal("Copilot for Automations", viewModel.CopilotTitle);
+        Assert.Equal("Test Copilot for Automations", viewModel.CopilotTitle);
         copilotService.Reply = new KustoCopilotReply(
             "Prepared a scheduled query.",
             "Events | summarize count()");
@@ -2348,7 +2706,7 @@ public sealed class MainWindowViewModelTests
         KustoCopilotViewModel graphConversation = viewModel.Copilot;
         Assert.NotSame(automationConversation, graphConversation);
         Assert.True(viewModel.IsCopilotPanelOpen);
-        Assert.Equal("Copilot for Graph", viewModel.CopilotTitle);
+        Assert.Equal("Test Copilot for Graph", viewModel.CopilotTitle);
         graphConversation.ShareGraphData = true;
         copilotService.Reply = new KustoCopilotReply(
             "Find users.",
@@ -2368,7 +2726,7 @@ public sealed class MainWindowViewModelTests
         viewModel.ShowQueryWorkbenchCommand.Execute(null);
         Assert.Same(queryConversation, viewModel.Copilot);
         Assert.True(viewModel.IsCopilotPanelOpen);
-        Assert.Equal("Copilot for KQL", viewModel.CopilotTitle);
+        Assert.Equal("Test Copilot for KQL", viewModel.CopilotTitle);
         Assert.Contains("Explain this schedule", automationConversation.Messages[0].Content, StringComparison.Ordinal);
         Assert.Empty(queryConversation.Messages);
     }
@@ -3650,7 +4008,13 @@ public sealed class MainWindowViewModelTests
         StubKustoCopilotService? copilotService = null,
         StubKustoGraphIngestionService? graphIngestionService = null,
         StubGraphStore? graphStore = null,
-        StubGraphLayoutService? graphLayoutService = null)
+        StubGraphLayoutService? graphLayoutService = null,
+        IKustoRecordedSessionStore? recordedSessionStore = null,
+        IKustoPredicateInterestExtractor? predicateInterestExtractor = null,
+        IKustoRecordedRelationExtractor? recordedRelationExtractor = null,
+        IKustoRecordedChainSearcher? recordedChainSearcher = null,
+        IKustoRecordedRelationPlanner? recordedRelationPlanner = null,
+        IKustoRecordedChainQueryGenerator? recordedChainGenerator = null)
     {
         return new MainWindowViewModel(
             languageService ?? new StubKustoLanguageService(),
@@ -3664,7 +4028,13 @@ public sealed class MainWindowViewModelTests
             copilotService ?? new StubKustoCopilotService(),
             graphIngestionService ?? new StubKustoGraphIngestionService(),
             graphStore ?? new StubGraphStore(),
-            graphLayoutService ?? new StubGraphLayoutService());
+            graphLayoutService ?? new StubGraphLayoutService(),
+            recordedSessionStore,
+            predicateInterestExtractor,
+            recordedRelationExtractor,
+            recordedChainSearcher,
+            recordedRelationPlanner,
+            recordedChainGenerator);
     }
 
     private sealed class StubKustoLanguageService : IKustoLanguageService
@@ -3687,6 +4057,8 @@ public sealed class MainWindowViewModelTests
         public KustoQuerySelection? QuerySelection { get; init; }
 
         public KustoGraphQueryPlan? GraphQueryPlan { get; init; }
+
+        public int VisualizationRequestCount { get; private set; }
 
         public string? SelectionText { get; private set; }
 
@@ -3713,6 +4085,7 @@ public sealed class MainWindowViewModelTests
 
         public KustoVisualization? GetVisualizationAtPosition(string text, int caretPosition)
         {
+            VisualizationRequestCount++;
             return text.Contains("render timechart", StringComparison.OrdinalIgnoreCase)
                 ? new KustoVisualization(KustoVisualizationKind.TimeChart)
                 : null;
@@ -4366,11 +4739,33 @@ public sealed class MainWindowViewModelTests
 
         public KustoCopilotContext? Context { get; private set; }
 
+        public KustoAIProviderKind ProviderKind { get; set; } = KustoAIProviderKind.GitHubCopilot;
+
+        public string ProviderDisplayName { get; set; } = "Test Copilot";
+
+        public bool SupportsInteractiveSignIn => ProviderKind == KustoAIProviderKind.GitHubCopilot;
+
+        public bool SupportsMcp => ProviderKind == KustoAIProviderKind.GitHubCopilot;
+
         public KustoCopilotOptions? Options { get; private set; }
 
         public List<string> Requests { get; } = [];
 
         public TaskCompletionSource<KustoCopilotReply>? PendingReply { get; init; }
+
+        public Exception? ModelsException { get; init; }
+
+        public TaskCompletionSource<IReadOnlyList<KustoCopilotModel>>? PendingModels { get; init; }
+
+        public Exception? SendException { get; init; }
+
+        public Exception? SignInException { get; init; }
+
+        public IReadOnlyList<KustoCopilotModel> AvailableModels { get; set; } =
+        [
+            new KustoCopilotModel("gpt-test", "Test model"),
+            new KustoCopilotModel("gpt-other", "Other model"),
+        ];
 
         public Queue<KustoCopilotReply>? Replies { get; init; }
 
@@ -4378,18 +4773,25 @@ public sealed class MainWindowViewModelTests
 
         public Task SignInAsync(CancellationToken cancellationToken = default)
         {
-            return Task.CompletedTask;
+            return SignInException is null
+                ? Task.CompletedTask
+                : Task.FromException(SignInException);
         }
 
         public Task<IReadOnlyList<KustoCopilotModel>> GetModelsAsync(
             CancellationToken cancellationToken = default)
         {
-            IReadOnlyList<KustoCopilotModel> models =
-            [
-                new KustoCopilotModel("gpt-test", "Test model"),
-                new KustoCopilotModel("gpt-other", "Other model"),
-            ];
-            return Task.FromResult(models);
+            if (ModelsException is not null)
+            {
+                return Task.FromException<IReadOnlyList<KustoCopilotModel>>(ModelsException);
+            }
+
+            if (PendingModels is not null)
+            {
+                return PendingModels.Task.WaitAsync(cancellationToken);
+            }
+
+            return Task.FromResult(AvailableModels);
         }
 
         public Task<KustoCopilotReply> SendAsync(
@@ -4403,7 +4805,11 @@ public sealed class MainWindowViewModelTests
             Requests.Add(request);
             Task<KustoCopilotReply> replyTask;
 
-            if (PendingReply is not null)
+            if (SendException is not null)
+            {
+                replyTask = Task.FromException<KustoCopilotReply>(SendException);
+            }
+            else if (PendingReply is not null)
             {
                 replyTask = PendingReply.Task.WaitAsync(cancellationToken);
             }
@@ -4454,6 +4860,11 @@ public sealed class MainWindowViewModelTests
 
         public KustoDocumentWorkspace? SavedWorkspace { get; private set; }
 
+        public Exception? SaveException { get; set; }
+
+        public TaskCompletionSource SaveAttempted { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
         public KustoDocumentWorkspace Load()
         {
             return Workspace;
@@ -4461,6 +4872,12 @@ public sealed class MainWindowViewModelTests
 
         public void Save(KustoDocumentWorkspace workspace)
         {
+            SaveAttempted.TrySetResult();
+            if (SaveException is not null)
+            {
+                throw SaveException;
+            }
+
             SavedWorkspace = workspace;
         }
     }

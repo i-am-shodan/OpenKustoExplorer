@@ -70,7 +70,9 @@ public sealed class KustoGraphRestStreamParserTests
         Assert.Equal(
           ["_SId", "_TId", "relationship", "properties"],
           resultTable.Columns.Select(column => column.Name));
-        Assert.Equal(["1", "2", "AuthenticatedTo", "[1,2]"], Assert.Single(resultTable.Rows).Values);
+        KustoResultRow resultRow = Assert.Single(resultTable.Rows);
+        Assert.Equal(["1", "2", "AuthenticatedTo", "[1,2]"], resultRow.Values);
+        Assert.Equal("[1,2]", resultRow.ResultValues[3].RawJson);
         Assert.Equal(["node_hash", "name", "properties"], sink.NodeColumns.Select(column => column.Name));
         Assert.Equal("{\"roles\":[\"Admin\"],\"enabled\":true}", sink.NodeRows[0][2]);
         Assert.Empty(sink.NodeRows[1][2]);

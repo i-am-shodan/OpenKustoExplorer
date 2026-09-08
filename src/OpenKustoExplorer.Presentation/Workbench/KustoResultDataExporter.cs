@@ -4,6 +4,8 @@ using System.Text;
 using System.Text.Json;
 using System.Xml;
 using OpenKustoExplorer.Application.Execution;
+using OpenKustoExplorer.Application.Language;
+using OpenKustoExplorer.Application.Sessions;
 
 namespace OpenKustoExplorer.Presentation.Workbench;
 
@@ -45,6 +47,28 @@ public static class KustoResultDataExporter
         };
 
         return export;
+    }
+
+    /// <summary>
+    /// Creates a headerless, single-value-per-line CSV export.
+    /// </summary>
+    /// <param name="name">The export base name.</param>
+    /// <param name="values">The values to export.</param>
+    /// <returns>The generated CSV file.</returns>
+    public static KustoResultExportFile CreateValueCsvFile(string name, IEnumerable<string> values)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(values);
+        StringBuilder builder = new();
+        foreach (string value in values)
+        {
+            builder.AppendLine(EscapeDelimited(value, ','));
+        }
+
+        return new KustoResultExportFile(
+            $"{SanitizeFileName(name)}.csv",
+            "text/csv",
+            Utf8WithoutBom.GetBytes(builder.ToString()));
     }
 
     /// <summary>
@@ -124,9 +148,43 @@ public static class KustoResultDataExporter
             " and ",
             columnIndexes.Select(index => CreateColumnPredicate(
                 table.Columns[index],
-                row.Values[index])));
+                row.ResultValues[index])));
 
         return predicate;
+    }
+
+    /// <summary>
+    /// Creates a KQL predicate that matches any distinct selected value in one column.
+    /// </summary>
+    /// <param name="table">The materialized result table.</param>
+    /// <param name="rows">The selected source rows.</param>
+    /// <param name="columnIndex">The source column index.</param>
+    /// <returns>The safe KQL predicate.</returns>
+    public static string CreateFilterPredicate(
+        KustoResultTable table,
+        IReadOnlyList<KustoResultRow> rows,
+        int columnIndex)
+    {
+        ArgumentNullException.ThrowIfNull(table);
+        ArgumentNullException.ThrowIfNull(rows);
+        ArgumentOutOfRangeException.ThrowIfNegative(columnIndex);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(columnIndex, table.Columns.Count);
+        if (rows.Count == 0)
+        {
+            throw new ArgumentException("At least one result row is required.", nameof(rows));
+        }
+
+        KustoResultColumn column = table.Columns[columnIndex];
+        string[] predicates = rows
+            .Select(row => KustoRecordedValueCanonicalizer.Create(
+                column.TypeName,
+                row.ResultValues[columnIndex]))
+            .Distinct()
+            .Select(identity => CreateColumnPredicate(column, identity))
+            .ToArray();
+        return predicates.Length == 1
+            ? predicates[0]
+            : $"({string.Join(" or ", predicates)})";
     }
 
     private static string CreateDelimitedText(
@@ -445,105 +503,41 @@ public static class KustoResultDataExporter
         return name.ToString();
     }
 
-    private static string CreateColumnPredicate(KustoResultColumn column, string value)
+    private static string CreateColumnPredicate(KustoResultColumn column, KustoResultValue value)
+    {
+        return CreateColumnPredicate(
+            column,
+            KustoRecordedValueCanonicalizer.Create(column.TypeName, value));
+    }
+
+    private static string CreateColumnPredicate(
+        KustoResultColumn column,
+        KustoRecordedValueIdentity identity)
     {
         string identifier = EscapeIdentifier(column.Name);
-        return string.IsNullOrEmpty(value)
+        if (identity.IsNull)
+        {
+            return $"isnull({identifier})";
+        }
+
+        return identity.CanonicalValue.Length == 0
             ? $"isempty({identifier})"
-            : $"{identifier} == {FormatKustoLiteral(value, column.TypeName)}";
+            : $"{identifier} == {KustoKqlTextFormatter.FormatLiteral(identity)}";
     }
 
     private static string EscapeIdentifier(string name)
     {
-        return $"['{name.Replace("'", "''", StringComparison.Ordinal)}']";
+        return KustoKqlTextFormatter.EscapeIdentifier(name);
     }
 
     private static string GetKustoType(string typeName)
     {
-        string normalizedType = typeName.ToLowerInvariant();
-        string kustoType = normalizedType switch
-        {
-            _ when normalizedType.Contains("bool", StringComparison.Ordinal) => "bool",
-            _ when normalizedType.Contains("datetime", StringComparison.Ordinal) => "datetime",
-            _ when normalizedType.Contains("decimal", StringComparison.Ordinal) => "decimal",
-            _ when normalizedType.Contains("guid", StringComparison.Ordinal) => "guid",
-            _ when normalizedType.Contains("int32", StringComparison.Ordinal) || normalizedType == "int" => "int",
-            _ when normalizedType.Contains("int64", StringComparison.Ordinal) || normalizedType == "long" => "long",
-            _ when normalizedType.Contains("double", StringComparison.Ordinal) || normalizedType.Contains("real", StringComparison.Ordinal) => "real",
-            _ when normalizedType.Contains("timespan", StringComparison.Ordinal) => "timespan",
-            _ when normalizedType.Contains("dynamic", StringComparison.Ordinal) || normalizedType.Contains("object", StringComparison.Ordinal) => "dynamic",
-            _ => "string",
-        };
-
-        return kustoType;
+        return KustoKqlTextFormatter.NormalizeType(typeName);
     }
 
     private static string FormatKustoLiteral(string value, string typeName)
     {
-        string kustoType = GetKustoType(typeName);
-
-        if (string.IsNullOrEmpty(value))
-        {
-            return kustoType == "string" ? "''" : $"{kustoType}(null)";
-        }
-
-        string escapedValue = value.Replace("'", "''", StringComparison.Ordinal);
-        return kustoType switch
-        {
-            "bool" => FormatBooleanLiteral(value, escapedValue),
-            "int" or "long" => FormatIntegerLiteral(value, kustoType),
-            "real" or "decimal" => FormatNumericLiteral(value, kustoType),
-            "datetime" => $"datetime('{escapedValue}')",
-            "timespan" => $"time('{escapedValue}')",
-            "guid" => $"guid('{escapedValue}')",
-            "dynamic" => FormatDynamicLiteral(value, escapedValue),
-            _ => $"'{escapedValue}'",
-        };
-    }
-
-    private static string FormatBooleanLiteral(string value, string escapedValue)
-    {
-        if (!bool.TryParse(value, out bool parsed))
-        {
-            return $"'{escapedValue}'";
-        }
-
-        return parsed ? "true" : "false";
-    }
-
-    private static string FormatIntegerLiteral(string value, string kustoType)
-    {
-        return long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out _)
-            ? value
-            : $"{kustoType}(null)";
-    }
-
-    private static string FormatNumericLiteral(string value, string kustoType)
-    {
-        return double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed)
-            && double.IsFinite(parsed)
-                ? value
-                : $"{kustoType}(null)";
-    }
-
-    private static string FormatDynamicLiteral(string value, string escapedValue)
-    {
-        return IsWellFormedJson(value) ? $"dynamic({value})" : $"dynamic('{escapedValue}')";
-    }
-
-    private static bool IsWellFormedJson(string value)
-    {
-        try
-        {
-            using (JsonDocument.Parse(value))
-            {
-                return true;
-            }
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
+        return KustoKqlTextFormatter.FormatLiteral(value, typeName);
     }
 
     private static string SanitizeFileName(string value)

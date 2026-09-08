@@ -48,12 +48,79 @@ public sealed class KustoRestResponseParserTests
         Assert.Equal("{\"source\":\"test\"}", table.Rows[0].Values[2]);
         Assert.Empty(table.Rows[1].Values[0]);
         Assert.Equal("[1,2]", table.Rows[1].Values[2]);
+        Assert.Equal("42", table.Rows[0].ResultValues[1].RawJson);
+        Assert.Equal("{\"source\":\"test\"}", table.Rows[0].ResultValues[2].RawJson);
+        Assert.True(table.Rows[1].ResultValues[0].IsNull);
+        Assert.Equal("null", table.Rows[1].ResultValues[0].RawJson);
+        Assert.Equal(KustoQueryResultCompleteness.Complete, result.Completeness);
         Assert.NotNull(result.Visualization);
         Assert.Equal(KustoVisualizationKind.TimeChart, result.Visualization.Kind);
         Assert.Equal("Traffic", result.Visualization.Title);
         Assert.Equal(["Protocol"], result.Visualization.SeriesColumns);
         Assert.Equal(["Events", "Latency"], result.Visualization.YColumns);
         Assert.True(result.Visualization.LegendVisible);
+    }
+
+    /// <summary>
+    /// Verifies physical table names are resolved through the table of contents before materialization.
+    /// </summary>
+    [Fact]
+    public void ParseUsesTableOfContentsToExcludeProtocolMetadata()
+    {
+        const string Response = """
+            {
+              "Tables": [
+                {
+                  "TableName": "Table_0",
+                  "Columns": [{ "ColumnName": "State", "ColumnType": "string" }],
+                  "Rows": [["Texas"]]
+                },
+                {
+                  "TableName": "Table_1",
+                  "Columns": [{ "ColumnName": "Value", "ColumnType": "dynamic" }],
+                  "Rows": [[{"Visualization":"table"}]]
+                },
+                {
+                  "TableName": "Table_2",
+                  "Columns": [
+                    { "ColumnName": "Severity", "ColumnType": "int" },
+                    { "ColumnName": "StatusDescription", "ColumnType": "string" }
+                  ],
+                  "Rows": [[4, "Query completed"]]
+                },
+                {
+                  "TableName": "Table_3",
+                  "Columns": [
+                    { "ColumnName": "Ordinal", "ColumnType": "long" },
+                    { "ColumnName": "Kind", "ColumnType": "string" },
+                    { "ColumnName": "Name", "ColumnType": "string" },
+                    { "ColumnName": "Id", "ColumnType": "guid" },
+                    { "ColumnName": "PrettyName", "ColumnType": "string" }
+                  ],
+                  "Rows": [
+                    [0, "QueryResult", "PrimaryResult", "00000000-0000-0000-0000-000000000001", ""],
+                    [1, "QueryProperties", "@ExtendedProperties", "00000000-0000-0000-0000-000000000002", ""],
+                    [2, "QueryStatus", "QueryStatus", "00000000-0000-0000-0000-000000000000", ""]
+                  ]
+                }
+              ]
+            }
+            """;
+
+        KustoQueryResult result = KustoRestResponseParser.Parse(Response, TimeSpan.Zero, 10);
+
+        KustoResultTable table = Assert.Single(result.Tables);
+        Assert.Equal("PrimaryResult", table.Name);
+        Assert.Equal("Texas", Assert.Single(table.Rows).Values[0]);
+        Assert.NotNull(result.Visualization);
+
+        string failedResponse = Response.Replace(
+          "[4, \"Query completed\"]",
+          "[2, \"Resource limit exceeded\"]",
+          StringComparison.Ordinal);
+        InvalidOperationException exception = Assert.Throws<InvalidOperationException>(
+          () => KustoRestResponseParser.Parse(failedResponse, TimeSpan.Zero, 10));
+        Assert.Contains("Resource limit exceeded", exception.Message, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -85,6 +152,7 @@ public sealed class KustoRestResponseParserTests
         Assert.Equal(2, result.Tables[0].Rows.Count);
         Assert.Single(result.Tables[1].Rows);
         Assert.Equal("3", result.Tables[1].Rows[0].Values[0]);
+        Assert.Equal(KustoQueryResultCompleteness.RecordLimitReached, result.Completeness);
     }
 
     /// <summary>

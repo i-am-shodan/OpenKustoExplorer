@@ -1,4 +1,6 @@
+using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text;
 using Microsoft.Data.Sqlite;
@@ -7,17 +9,71 @@ using OpenKustoExplorer.Graph.Query;
 
 namespace OpenKustoExplorer.Infrastructure.Graph.Query;
 
-#pragma warning disable CA1859 // Private parser collections expose read-only interfaces shared by syntax nodes.
-#pragma warning disable S134, S3267, S3358, S3776 // Recursive parsing and bounded graph accumulation are intentionally branch-oriented.
-#pragma warning disable S3871 // The private parse exception carries source spans and never crosses the service boundary.
-#pragma warning disable SA1118, SA1201, SA1204 // Private nested compiler/parser types are grouped by responsibility.
-
 /// <summary>
 /// Parses and executes the bounded read-only openCypher subset over normalized SQLite graph rows.
 /// </summary>
 internal static class GraphCypherExecutor
 {
     private const int MaximumScannedMatchCount = 10_000;
+
+    private enum RelationshipDirection
+    {
+        Outgoing,
+        Incoming,
+        Undirected,
+    }
+
+    private enum BindingKind
+    {
+        Node,
+        Relationship,
+    }
+
+    private enum LiteralKind
+    {
+        Null,
+        Text,
+        Number,
+        Boolean,
+    }
+
+    private enum EvalKind
+    {
+        Null,
+        Text,
+        Number,
+        Boolean,
+        Node,
+        Relationship,
+    }
+
+    private enum TokenKind
+    {
+        End,
+        Identifier,
+        StringLiteral,
+        Number,
+        LeftParenthesis,
+        RightParenthesis,
+        LeftBracket,
+        RightBracket,
+        LeftBrace,
+        RightBrace,
+        Colon,
+        Comma,
+        Dot,
+        Semicolon,
+        Star,
+        Minus,
+        ArrowRight,
+        ArrowLeft,
+        Equals,
+        NotEquals,
+        LessThan,
+        LessThanOrEqual,
+        GreaterThan,
+        GreaterThanOrEqual,
+    }
 
     /// <summary>
     /// Executes a graph query and returns diagnostics instead of exposing parser failures.
@@ -114,6 +170,10 @@ internal static class GraphCypherExecutor
     /// <param name="snapshot">The graph generation to describe.</param>
     /// <param name="cancellationToken">A token that cancels row materialization.</param>
     /// <returns>The bounded query schema.</returns>
+    [SuppressMessage(
+        "StyleCop.CSharp.ReadabilityRules",
+        "SA1118:Parameter should not span multiple lines",
+        Justification = "Keeping each static schema query inline makes its bound and projection auditable.")]
     internal static GraphQuerySchema ReadSchema(
         SqliteConnection connection,
         GraphSnapshot snapshot,
@@ -172,37 +232,64 @@ internal static class GraphCypherExecutor
         {
             foreach (BoundNode node in match.Nodes)
             {
-                if (!entities.ContainsKey(node.Summary.Entity))
-                {
-                    if (entities.Count < maximumEntityCount)
-                    {
-                        entities.Add(node.Summary.Entity, node.Summary);
-                    }
-                    else
-                    {
-                        isTruncated = true;
-                    }
-                }
+                isTruncated |= !TryAddEntity(entities, node.Summary, maximumEntityCount);
             }
 
             if (match.Relationship is BoundRelationship relationship
-                && entities.ContainsKey(relationship.Key.Source)
-                && entities.ContainsKey(relationship.Key.Target)
-                && !relationships.Contains(relationship.Key))
+                && !TryAddRelationship(
+                    relationships,
+                    entities,
+                    relationship.Key,
+                    maximumRelationshipCount))
             {
-                if (relationships.Count < maximumRelationshipCount)
-                {
-                    relationships.Add(relationship.Key);
-                }
-                else
-                {
-                    isTruncated = true;
-                }
+                isTruncated = true;
             }
         }
 
         GraphEntityKey? center = entities.Count == 0 ? null : entities.Keys.First();
         return new GraphViewport(center, entities.Values, relationships, isTruncated);
+    }
+
+    private static bool TryAddEntity(
+        Dictionary<GraphEntityKey, GraphEntitySummary> entities,
+        GraphEntitySummary entity,
+        int maximumEntityCount)
+    {
+        if (entities.ContainsKey(entity.Entity))
+        {
+            return true;
+        }
+
+        if (entities.Count >= maximumEntityCount)
+        {
+            return false;
+        }
+
+        entities.Add(entity.Entity, entity);
+        return true;
+    }
+
+    private static bool TryAddRelationship(
+        List<GraphRelationshipKey> relationships,
+        Dictionary<GraphEntityKey, GraphEntitySummary> entities,
+        GraphRelationshipKey relationship,
+        int maximumRelationshipCount)
+    {
+        bool shouldInclude = entities.ContainsKey(relationship.Source)
+            && entities.ContainsKey(relationship.Target)
+            && !relationships.Contains(relationship);
+        if (!shouldInclude)
+        {
+            return true;
+        }
+
+        if (relationships.Count >= maximumRelationshipCount)
+        {
+            return false;
+        }
+
+        relationships.Add(relationship);
+        return true;
     }
 
     private static Projection Project(ParsedQuery query, IReadOnlyList<MatchRow> matches, int maximumRowCount)
@@ -294,7 +381,14 @@ internal static class GraphCypherExecutor
 
         if (left.Kind == EvalKind.Null || right.Kind == EvalKind.Null)
         {
-            comparison = left.Kind == right.Kind ? 0 : left.Kind == EvalKind.Null ? -1 : 1;
+            if (left.Kind == right.Kind)
+            {
+                comparison = 0;
+            }
+            else
+            {
+                comparison = left.Kind == EvalKind.Null ? -1 : 1;
+            }
         }
         else if (left.Number is double leftNumber && right.Number is double rightNumber)
         {
@@ -551,7 +645,7 @@ internal static class GraphCypherExecutor
             reader.GetString(offset + 3));
     }
 
-    private static IReadOnlyList<GraphQuerySchemaEntry> ReadSchemaEntries(
+    private static ReadOnlyCollection<GraphQuerySchemaEntry> ReadSchemaEntries(
         SqliteConnection connection,
         Guid generationId,
         string commandText,
@@ -580,7 +674,10 @@ internal static class GraphCypherExecutor
             DateTimeStyles.RoundtripKind).ToUniversalTime();
     }
 
-#pragma warning disable CA2100, S2077
+    private readonly record struct Token(TokenKind Kind, string Text, int Start, int Length);
+
+    private readonly record struct VariableBinding(BindingKind Kind, int Index);
+
     private sealed class SqlCompiler
     {
         private readonly SqliteCommand command;
@@ -630,10 +727,16 @@ internal static class GraphCypherExecutor
 
             sql.Append(" LIMIT $matchLimit;");
             command.Parameters.AddWithValue("$matchLimit", matchLimit);
+#pragma warning disable CA2100, S2077 // SQL structure is compiler-generated; all query values are parameters.
             command.CommandText = sql.ToString();
+#pragma warning restore CA2100, S2077
             return command;
         }
 
+        [SuppressMessage(
+            "StyleCop.CSharp.ReadabilityRules",
+            "SA1118:Parameter should not span multiple lines",
+            Justification = "The multiline SQL projection is clearer when passed directly to the builder.")]
         private static void AppendNodeColumns(StringBuilder sql, string entityAlias, string observationAlias)
         {
             sql.Append(CultureInfo.InvariantCulture, $"""
@@ -668,6 +771,10 @@ internal static class GraphCypherExecutor
                 """);
         }
 
+        [SuppressMessage(
+            "StyleCop.CSharp.ReadabilityRules",
+            "SA1118:Parameter should not span multiple lines",
+            Justification = "The multiline SQL projection is clearer when passed directly to the builder.")]
         private static void AppendRelationshipColumns(
             StringBuilder sql,
             string relationshipAlias,
@@ -691,6 +798,10 @@ internal static class GraphCypherExecutor
                 """);
         }
 
+        [SuppressMessage(
+            "StyleCop.CSharp.ReadabilityRules",
+            "SA1118:Parameter should not span multiple lines",
+            Justification = "The multiline SQL join is clearer when passed directly to the builder.")]
         private static void AppendNodeObservationJoin(
             StringBuilder sql,
             string entityAlias,
@@ -712,6 +823,10 @@ internal static class GraphCypherExecutor
                 """);
         }
 
+        [SuppressMessage(
+            "StyleCop.CSharp.ReadabilityRules",
+            "SA1118:Parameter should not span multiple lines",
+            Justification = "The multiline SQL join is clearer when passed directly to the builder.")]
         private static void AppendRelationshipObservationJoin(
             StringBuilder sql,
             string relationshipAlias,
@@ -825,8 +940,19 @@ internal static class GraphCypherExecutor
         {
             foreach (PropertyMapItem property in properties)
             {
+                string variableName;
+                if (isNode)
+                {
+                    int nodeIndex = ownerAlias == "n0" ? 0 : 1;
+                    variableName = query.GetNodeVariable(nodeIndex);
+                }
+                else
+                {
+                    variableName = query.Relationship!.VariableName;
+                }
+
                 PropertyExpression expression = new(
-                    isNode ? query.GetNodeVariable(ownerAlias == "n0" ? 0 : 1) : query.Relationship!.VariableName,
+                    variableName,
                     property.Name,
                     property.Start,
                     property.Length);
@@ -965,12 +1091,11 @@ internal static class GraphCypherExecutor
             return name;
         }
     }
-#pragma warning restore CA2100, S2077
 
     private sealed class Parser
     {
         private readonly string queryText;
-        private readonly IReadOnlyList<Token> tokens;
+        private readonly ReadOnlyCollection<Token> tokens;
         private int index;
 
         internal Parser(string queryText)
@@ -978,6 +1103,12 @@ internal static class GraphCypherExecutor
             this.queryText = queryText;
             tokens = new Lexer(queryText).Tokenize();
         }
+
+        internal Token Current => tokens[index];
+
+        internal Token Previous => tokens[Math.Max(0, index - 1)];
+
+        internal static int EndOf(Token token) => token.Start + token.Length;
 
         internal ParsedQuery Parse()
         {
@@ -1149,7 +1280,7 @@ internal static class GraphCypherExecutor
                 Current.Start - start.Start);
         }
 
-        private IReadOnlyList<PropertyMapItem> ParsePropertyMap()
+        private ReadOnlyCollection<PropertyMapItem> ParsePropertyMap()
         {
             Expect(TokenKind.LeftBrace, "Expected '{' to begin a property map.");
             List<PropertyMapItem> properties = [];
@@ -1403,6 +1534,10 @@ internal static class GraphCypherExecutor
             return new VariableExpression(token.Text, token.Start, token.Length);
         }
 
+        [SuppressMessage(
+            "StyleCop.CSharp.OrderingRules",
+            "SA1204:Static members should appear before non-static members",
+            Justification = "Function validation stays beside the parser production that invokes it.")]
         private static void ValidateFunction(Token token, IReadOnlyList<Expression> arguments, bool star)
         {
             string name = token.Text.ToUpperInvariant();
@@ -1538,12 +1673,6 @@ internal static class GraphCypherExecutor
         {
             return new GraphCypherParseException(Current.Start, Math.Max(Current.Length, 1), message);
         }
-
-        private Token Current => tokens[index];
-
-        private Token Previous => tokens[Math.Max(0, index - 1)];
-
-        private static int EndOf(Token token) => token.Start + token.Length;
     }
 
     private sealed class Lexer
@@ -1556,7 +1685,7 @@ internal static class GraphCypherExecutor
             this.text = text;
         }
 
-        internal IReadOnlyList<Token> Tokenize()
+        internal ReadOnlyCollection<Token> Tokenize()
         {
             List<Token> tokens = [];
 
@@ -1686,6 +1815,10 @@ internal static class GraphCypherExecutor
             throw new GraphCypherParseException(start, text.Length - start, "Unterminated string literal.");
         }
 
+        [SuppressMessage(
+            "StyleCop.CSharp.OrderingRules",
+            "SA1204:Static members should appear before non-static members",
+            Justification = "Escape decoding stays beside string-token parsing.")]
         private static char ReadEscape(char character)
         {
             return character switch
@@ -1720,49 +1853,67 @@ internal static class GraphCypherExecutor
         private void SkipTrivia()
         {
             bool skipped;
-
             do
             {
-                skipped = false;
-
-                while (position < text.Length && char.IsWhiteSpace(text[position]))
-                {
-                    position++;
-                    skipped = true;
-                }
-
-                if (position + 1 < text.Length && text[position] == '/' && text[position + 1] == '/')
-                {
-                    position += 2;
-
-                    while (position < text.Length && text[position] is not '\r' and not '\n')
-                    {
-                        position++;
-                    }
-
-                    skipped = true;
-                }
-                else if (position + 1 < text.Length && text[position] == '/' && text[position + 1] == '*')
-                {
-                    int start = position;
-                    position += 2;
-
-                    while (position + 1 < text.Length
-                        && (text[position] != '*' || text[position + 1] != '/'))
-                    {
-                        position++;
-                    }
-
-                    if (position + 1 >= text.Length)
-                    {
-                        throw new GraphCypherParseException(start, text.Length - start, "Unterminated block comment.");
-                    }
-
-                    position += 2;
-                    skipped = true;
-                }
+                skipped = SkipWhitespace() || SkipLineComment() || SkipBlockComment();
             }
             while (skipped);
+        }
+
+        private bool SkipWhitespace()
+        {
+            int start = position;
+            while (position < text.Length && char.IsWhiteSpace(text[position]))
+            {
+                position++;
+            }
+
+            return position > start;
+        }
+
+        private bool SkipLineComment()
+        {
+            if (!StartsWith("//"))
+            {
+                return false;
+            }
+
+            position += 2;
+            while (position < text.Length && text[position] is not '\r' and not '\n')
+            {
+                position++;
+            }
+
+            return true;
+        }
+
+        private bool SkipBlockComment()
+        {
+            if (!StartsWith("/*"))
+            {
+                return false;
+            }
+
+            int start = position;
+            position += 2;
+            while (position + 1 < text.Length && !StartsWith("*/"))
+            {
+                position++;
+            }
+
+            if (position + 1 >= text.Length)
+            {
+                throw new GraphCypherParseException(start, text.Length - start, "Unterminated block comment.");
+            }
+
+            position += 2;
+            return true;
+        }
+
+        private bool StartsWith(string value)
+        {
+            return position + value.Length <= text.Length
+                && text.AsSpan(position, value.Length).SequenceEqual(value);
         }
 
         private bool Match(char expected)
@@ -1955,9 +2106,12 @@ internal static class GraphCypherExecutor
         internal EvalValue GetVariable(string variableName)
         {
             VariableBinding binding = query.GetBinding(variableName, 0, Math.Max(variableName.Length, 1));
-            return binding.Kind == BindingKind.Node
-                ? EvalValue.FromNode(Nodes[binding.Index])
-                : Relationship is null ? EvalValue.Null : EvalValue.FromRelationship(Relationship);
+            if (binding.Kind == BindingKind.Node)
+            {
+                return EvalValue.FromNode(Nodes[binding.Index]);
+            }
+
+            return Relationship is null ? EvalValue.Null : EvalValue.FromRelationship(Relationship);
         }
     }
 
@@ -2202,6 +2356,10 @@ internal static class GraphCypherExecutor
         internal IReadOnlyList<Expression> Values { get; }
     }
 
+    [SuppressMessage(
+        "Major Code Smell",
+        "S3871:Exception types should be public",
+        Justification = "Parser failures are translated to diagnostics inside this type and never cross its boundary.")]
     private sealed class GraphCypherParseException : Exception
     {
         internal GraphCypherParseException(int start, int length, string message)
@@ -2354,72 +2512,4 @@ internal static class GraphCypherExecutor
                 false);
         }
     }
-
-    private readonly record struct Token(TokenKind Kind, string Text, int Start, int Length);
-
-    private readonly record struct VariableBinding(BindingKind Kind, int Index);
-
-    private enum RelationshipDirection
-    {
-        Outgoing,
-        Incoming,
-        Undirected,
-    }
-
-    private enum BindingKind
-    {
-        Node,
-        Relationship,
-    }
-
-    private enum LiteralKind
-    {
-        Null,
-        Text,
-        Number,
-        Boolean,
-    }
-
-    private enum EvalKind
-    {
-        Null,
-        Text,
-        Number,
-        Boolean,
-        Node,
-        Relationship,
-    }
-
-    private enum TokenKind
-    {
-        End,
-        Identifier,
-        StringLiteral,
-        Number,
-        LeftParenthesis,
-        RightParenthesis,
-        LeftBracket,
-        RightBracket,
-        LeftBrace,
-        RightBrace,
-        Colon,
-        Comma,
-        Dot,
-        Semicolon,
-        Star,
-        Minus,
-        ArrowRight,
-        ArrowLeft,
-        Equals,
-        NotEquals,
-        LessThan,
-        LessThanOrEqual,
-        GreaterThan,
-        GreaterThanOrEqual,
-    }
 }
-
-#pragma warning restore SA1118, SA1201, SA1204
-#pragma warning restore S134, S3267, S3358, S3776
-#pragma warning restore S3871
-#pragma warning restore CA1859

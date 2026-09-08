@@ -1,4 +1,6 @@
 using System.ComponentModel;
+using System.Text;
+using System.Text.Json;
 using GitHub.Copilot;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.AI;
@@ -6,6 +8,7 @@ using OpenKustoExplorer.Application.Dashboards;
 using OpenKustoExplorer.Application.Execution;
 using OpenKustoExplorer.Application.Graphs;
 using OpenKustoExplorer.Application.Language;
+using OpenKustoExplorer.Application.Sessions;
 using OpenKustoExplorer.Domain.Schema;
 using OpenKustoExplorer.Graph;
 using OpenKustoExplorer.Graph.Query;
@@ -13,6 +16,7 @@ using OpenKustoExplorer.Infrastructure.Assistance;
 using OpenKustoExplorer.Infrastructure.Dashboards;
 using OpenKustoExplorer.Infrastructure.Graph;
 using OpenKustoExplorer.Infrastructure.Language;
+using OpenKustoExplorer.Infrastructure.Sessions;
 using SkiaSharp;
 
 namespace OpenKustoExplorer.AotSmoke;
@@ -29,6 +33,7 @@ internal static class Program
         RunSqliteSmokeTest();
         RunGraphStoreSmokeTest();
         RunGraphIngestionSmokeTest();
+        RunRecordedSessionSmokeTest();
         RunMsaglSmokeTest();
         RunSkiaSmokeTest();
         RunCopilotToolSmokeTest();
@@ -275,6 +280,164 @@ internal static class Program
                 Directory.Delete(directoryPath, true);
             }
         }
+    }
+
+    private static void RunRecordedSessionSmokeTest()
+    {
+        const string Hostname = "SYNTHETIC-HOST";
+        string directoryPath = Path.Combine(Path.GetTempPath(), $"OpenKustoExplorer-AotRecording-{Guid.NewGuid():N}");
+        string filePath = Path.Combine(directoryPath, "recorded-sessions.db");
+        Uri clusterUri = new UriBuilder(Uri.UriSchemeHttps, "mock.kusto.example").Uri;
+        string url = new UriBuilder(Uri.UriSchemeHttps, "malware.example.test") { Path = "c2" }.Uri.AbsoluteUri;
+        string ipAddress = string.Join('.', 192, 0, 2, 56);
+        KustoDatabaseSchema schema = new(
+            clusterUri.Host,
+            "SyntheticSecurity",
+            [
+                new KustoTableSchema(
+                    "OutboundBrowsing",
+                    [
+                        new KustoColumnSchema("url", KustoScalarType.Text),
+                        new KustoColumnSchema("src_ip", KustoScalarType.Text),
+                    ]),
+                new KustoTableSchema(
+                    "Employees",
+                    [
+                        new KustoColumnSchema("email_addr", KustoScalarType.Text),
+                        new KustoColumnSchema("ip_addr", KustoScalarType.Text),
+                        new KustoColumnSchema("hostname", KustoScalarType.Text),
+                    ]),
+            ]);
+
+        try
+        {
+            using SqliteKustoRecordedSessionStore store = new(filePath);
+            KustoPredicateInterestExtractor interestExtractor = new();
+            KustoRecordedRelationExtractor relationExtractor = new();
+            DateTimeOffset startedAtUtc = DateTimeOffset.UtcNow;
+            KustoRecordingPeriod period = store.CreateSessionAsync("AOT recording", startedAtUtc)
+                .GetAwaiter()
+                .GetResult();
+            string firstQuery = $"OutboundBrowsing | where url == \"{url}\"";
+            Guid firstExecution = RecordSmokeQuery(
+                store,
+                period,
+                schema,
+                interestExtractor,
+                relationExtractor,
+                clusterUri,
+                firstQuery,
+                new KustoResultTable(
+                    "PrimaryResult",
+                    [new KustoResultColumn("url", "string"), new KustoResultColumn("src_ip", "string")],
+                    [new KustoResultRow([CreateTextValue(url), CreateTextValue(ipAddress)])]),
+                startedAtUtc);
+            store.AddMarkAsync(
+                period.SessionId,
+                KustoRecordedMarkKind.Cell,
+                new KustoRecordedValueCoordinate(firstExecution, 0, 0, 1),
+                startedAtUtc.AddSeconds(2)).GetAwaiter().GetResult();
+            string secondQuery = "Employees | where email_addr == \"analyst@example.test\"";
+            Guid secondExecution = RecordSmokeQuery(
+                store,
+                period,
+                schema,
+                interestExtractor,
+                relationExtractor,
+                clusterUri,
+                secondQuery,
+                new KustoResultTable(
+                    "PrimaryResult",
+                    [
+                        new KustoResultColumn("email_addr", "string"),
+                        new KustoResultColumn("ip_addr", "string"),
+                        new KustoResultColumn("hostname", "string"),
+                    ],
+                    [new KustoResultRow([
+                        CreateTextValue("analyst@example.test"),
+                        CreateTextValue(ipAddress),
+                        CreateTextValue(Hostname),
+                    ])]),
+                startedAtUtc.AddMinutes(1));
+            KustoRecordedValueCoordinate start = new(firstExecution, 0, 0, 0);
+            KustoRecordedValueCoordinate destination = new(secondExecution, 0, 0, 2);
+            store.AddMarkAsync(
+                period.SessionId,
+                KustoRecordedMarkKind.Cell,
+                destination,
+                startedAtUtc.AddMinutes(1).AddSeconds(2)).GetAwaiter().GetResult();
+            store.StopRecordingAsync(period.Id, startedAtUtc.AddMinutes(2)).GetAwaiter().GetResult();
+
+            KustoRecordedSession session = store.GetSessionAsync(period.SessionId).GetAwaiter().GetResult()
+                ?? throw new InvalidOperationException("The Native AOT recording could not be reloaded.");
+            KustoRecordedChainSearcher searcher = new(store);
+            KustoQueryChain chain = searcher.FindAsync(period.SessionId, start, destination).GetAwaiter().GetResult()
+                ?? throw new InvalidOperationException("The Native AOT pivot chain could not be found.");
+            KustoRelationalChainPlan plan = new KustoRecordedRelationPlanner().CreatePlan(session, chain)
+                ?? throw new InvalidOperationException("The Native AOT relation plan could not be created.");
+            KustoGeneratedChainQuery generated = new KustoRecordedChainQueryGenerator().Generate(plan, schema);
+
+            if (!generated.Succeeded
+                || !generated.QueryText.Contains("join kind=inner", StringComparison.Ordinal)
+                || chain.Pivots.Count != 2)
+            {
+                throw new InvalidOperationException("Recorded-session planning failed in the published executable.");
+            }
+
+            store.DeleteSessionAsync(period.SessionId).GetAwaiter().GetResult();
+            if (store.GetSessionsAsync().GetAwaiter().GetResult().Count != 0)
+            {
+                throw new InvalidOperationException("Recorded-session deletion failed in the published executable.");
+            }
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(directoryPath))
+            {
+                Directory.Delete(directoryPath, true);
+            }
+        }
+    }
+
+    private static Guid RecordSmokeQuery(
+        SqliteKustoRecordedSessionStore store,
+        KustoRecordingPeriod period,
+        KustoDatabaseSchema schema,
+        KustoPredicateInterestExtractor interestExtractor,
+        KustoRecordedRelationExtractor relationExtractor,
+        Uri clusterUri,
+        string queryText,
+        KustoResultTable table,
+        DateTimeOffset startedAtUtc)
+    {
+        Guid executionId = store.BeginExecutionAsync(new KustoRecordedExecutionStart(
+            period.Id,
+            Guid.NewGuid(),
+            "Native AOT recording",
+            new KustoQueryRequest(clusterUri, "SyntheticSecurity", queryText),
+            startedAtUtc,
+            interestExtractor.Extract(queryText, schema),
+            relationExtractor.Extract(queryText, schema))).GetAwaiter().GetResult();
+        store.CompleteExecutionAsync(
+            executionId,
+            new KustoRecordedExecutionCompletion(
+                KustoRecordedExecutionStatus.Succeeded,
+                startedAtUtc.AddSeconds(1),
+                new KustoQueryResult([table], TimeSpan.FromSeconds(1)),
+                null)).GetAwaiter().GetResult();
+        return executionId;
+    }
+
+    private static KustoResultValue CreateTextValue(string value)
+    {
+        using MemoryStream stream = new();
+        using (Utf8JsonWriter writer = new(stream))
+        {
+            writer.WriteStringValue(value);
+        }
+
+        return new KustoResultValue(value, Encoding.UTF8.GetString(stream.ToArray()), false);
     }
 
     private static bool IsKnownTableClassification(

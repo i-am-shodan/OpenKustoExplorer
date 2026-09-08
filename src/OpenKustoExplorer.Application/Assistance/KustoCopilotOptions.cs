@@ -15,7 +15,7 @@ public sealed class KustoCopilotOptions
         string modelId,
         bool enableMicrosoftLearnMcp,
         bool enableAzureMcp)
-        : this(modelId, enableMicrosoftLearnMcp, enableAzureMcp, false)
+        : this(modelId, enableMicrosoftLearnMcp, enableAzureMcp, false, false)
     {
     }
 
@@ -31,12 +31,31 @@ public sealed class KustoCopilotOptions
         bool enableMicrosoftLearnMcp,
         bool enableAzureMcp,
         bool shareGraphData)
+        : this(modelId, enableMicrosoftLearnMcp, enableAzureMcp, shareGraphData, false)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="KustoCopilotOptions"/> class.
+    /// </summary>
+    /// <param name="modelId">The selected GitHub Copilot model identifier.</param>
+    /// <param name="enableMicrosoftLearnMcp">Whether Microsoft Learn MCP is enabled.</param>
+    /// <param name="enableAzureMcp">Whether read-only Azure MCP access is enabled.</param>
+    /// <param name="shareGraphData">Whether bounded graph tools may read the scoped graph snapshot.</param>
+    /// <param name="shareRecordedSessionData">Whether bounded recorded-session tools may read data.</param>
+    public KustoCopilotOptions(
+        string modelId,
+        bool enableMicrosoftLearnMcp,
+        bool enableAzureMcp,
+        bool shareGraphData,
+        bool shareRecordedSessionData)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
         ModelId = modelId.Trim();
         EnableMicrosoftLearnMcp = enableMicrosoftLearnMcp;
         EnableAzureMcp = enableAzureMcp;
         ShareGraphData = shareGraphData;
+        ShareRecordedSessionData = shareRecordedSessionData;
     }
 
     /// <summary>
@@ -60,6 +79,11 @@ public sealed class KustoCopilotOptions
     public bool ShareGraphData { get; }
 
     /// <summary>
+    /// Gets a value indicating whether bounded recorded-session tools may read data.
+    /// </summary>
+    public bool ShareRecordedSessionData { get; }
+
+    /// <summary>
     /// Determines whether another option set requires the same SDK session configuration.
     /// </summary>
     /// <param name="other">The other option set.</param>
@@ -70,6 +94,7 @@ public sealed class KustoCopilotOptions
         return string.Equals(ModelId, other.ModelId, StringComparison.Ordinal)
             && EnableMicrosoftLearnMcp == other.EnableMicrosoftLearnMcp
             && EnableAzureMcp == other.EnableAzureMcp
-            && ShareGraphData == other.ShareGraphData;
+            && ShareGraphData == other.ShareGraphData
+            && ShareRecordedSessionData == other.ShareRecordedSessionData;
     }
 }

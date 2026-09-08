@@ -1,4 +1,5 @@
 using System.Globalization;
+using OpenKustoExplorer.Application.Diagnostics;
 
 namespace OpenKustoExplorer.Presentation.Workbench;
 
@@ -22,6 +23,9 @@ internal static class KustoResultViewEngine
         ArgumentNullException.ThrowIfNull(sourceRows);
         ArgumentNullException.ThrowIfNull(columns);
         ArgumentNullException.ThrowIfNull(searchText);
+        using KustoPerformanceTrace.OperationScope measurement = KustoPerformanceTrace.Measure(
+            "results.view.apply",
+            sourceRows.Count);
         IEnumerable<KustoResultRowViewModel> rows = sourceRows;
 
         if (!string.IsNullOrWhiteSpace(searchText))

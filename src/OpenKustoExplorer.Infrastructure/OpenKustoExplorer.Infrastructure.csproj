@@ -1,6 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <PackageReference Include="Azure.AI.OpenAI" />
+    <PackageReference Include="Azure.Identity" />
     <ProjectReference Include="..\OpenKustoExplorer.Application\OpenKustoExplorer.Application.csproj" />
   </ItemGroup>
 
@@ -8,8 +10,11 @@
     <PackageReference Include="GitHub.Copilot.SDK" />
     <PackageReference Include="Microsoft.Azure.Kusto.Language" />
     <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="Microsoft.Extensions.AI" />
+    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" />
     <PackageReference Include="Microsoft.Identity.Client" />
     <PackageReference Include="Msagl" />
+    <PackageReference Include="OpenAI" />
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" />
   </ItemGroup>
 

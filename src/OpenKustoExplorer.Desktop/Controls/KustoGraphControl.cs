@@ -1,5 +1,6 @@
 using System.Collections.Specialized;
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Data;
@@ -220,11 +221,97 @@ public sealed class KustoGraphControl : Control
             palette));
     }
 
+    /// <summary>
+    /// Finds the nearest graph node in one keyboard navigation direction.
+    /// </summary>
+    /// <param name="layout">The current graph layout.</param>
+    /// <param name="selectedEntity">The current entity, or <see langword="null"/>.</param>
+    /// <param name="key">An arrow key or <see cref="Key.Home"/>.</param>
+    /// <param name="nodeOffsets">Optional manual node offsets.</param>
+    /// <returns>The next entity, or <see langword="null"/> when no candidate exists.</returns>
+    internal static GraphEntityKey? FindDirectionalNode(
+        GraphLayout layout,
+        GraphEntityKey? selectedEntity,
+        Key key,
+        IReadOnlyDictionary<GraphEntityKey, Vector>? nodeOffsets = null)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        if (layout.Nodes.Count == 0)
+        {
+            return null;
+        }
+
+        GraphLayoutNode firstNode = layout.Nodes
+            .OrderBy(node => GetAdjustedCenter(node, nodeOffsets).Y)
+            .ThenBy(node => GetAdjustedCenter(node, nodeOffsets).X)
+            .First();
+        if (key == Key.Home || selectedEntity is null)
+        {
+            return firstNode.Entity.Entity;
+        }
+
+        GraphLayoutNode? selectedNode = layout.Nodes.FirstOrDefault(
+            node => node.Entity.Entity == selectedEntity.Value);
+        if (selectedNode is null)
+        {
+            return firstNode.Entity.Entity;
+        }
+
+        Vector direction = key switch
+        {
+            Key.Left => new Vector(-1, 0),
+            Key.Right => new Vector(1, 0),
+            Key.Up => new Vector(0, -1),
+            Key.Down => new Vector(0, 1),
+            _ => throw new ArgumentOutOfRangeException(nameof(key)),
+        };
+        GraphLayoutPoint origin = GetAdjustedCenter(selectedNode, nodeOffsets);
+        return layout.Nodes
+            .Where(node => node.Entity.Entity != selectedEntity.Value)
+            .Select(node =>
+            {
+                GraphLayoutPoint center = GetAdjustedCenter(node, nodeOffsets);
+                Vector delta = new(center.X - origin.X, center.Y - origin.Y);
+                double forward = (delta.X * direction.X) + (delta.Y * direction.Y);
+                double perpendicular = Math.Abs((delta.X * direction.Y) - (delta.Y * direction.X));
+                return new { Node = node, Forward = forward, Perpendicular = perpendicular };
+            })
+            .Where(candidate => candidate.Forward > 0)
+            .OrderBy(candidate => candidate.Perpendicular <= candidate.Forward ? 0 : 1)
+            .ThenBy(candidate =>
+                (candidate.Forward * candidate.Forward)
+                + (candidate.Perpendicular * candidate.Perpendicular))
+            .ThenBy(candidate => candidate.Perpendicular / candidate.Forward)
+            .Select(candidate => (GraphEntityKey?)candidate.Node.Entity.Entity)
+            .FirstOrDefault();
+    }
+
     /// <inheritdoc />
     protected override void OnKeyDown(KeyEventArgs e)
     {
         switch (e.Key)
         {
+            case Key.Left:
+            case Key.Right:
+            case Key.Up:
+            case Key.Down:
+            case Key.Home:
+                e.Handled = MoveKeyboardSelection(e.Key);
+                break;
+            case Key.Enter:
+                e.Handled = SelectedEntity is not null || MoveKeyboardSelection(Key.Home);
+                if (SelectedEntity is GraphEntityKey selectedEntity)
+                {
+                    ContextEntity = selectedEntity;
+                }
+
+                break;
+            case Key.Apps:
+                e.Handled = OpenKeyboardContextMenu();
+                break;
+            case Key.F10 when e.KeyModifiers == KeyModifiers.Shift:
+                e.Handled = OpenKeyboardContextMenu();
+                break;
             case Key.Add:
             case Key.OemPlus:
                 ZoomIn();
@@ -423,6 +510,17 @@ public sealed class KustoGraphControl : Control
 
     private static SKColor ToSkColor(Color color) => new(color.R, color.G, color.B, color.A);
 
+    private static GraphLayoutPoint GetAdjustedCenter(
+        GraphLayoutNode node,
+        IReadOnlyDictionary<GraphEntityKey, Vector>? nodeOffsets)
+    {
+        Vector nodeOffset = nodeOffsets is not null
+            && nodeOffsets.TryGetValue(node.Entity.Entity, out Vector offsetValue)
+                ? offsetValue
+                : default;
+        return new GraphLayoutPoint(node.Center.X + nodeOffset.X, node.Center.Y + nodeOffset.Y);
+    }
+
     private void UpdateHoverTooltip(GraphLayoutNode? node, GraphLayoutEdge? edge)
     {
         GraphEntityKey? updatedEntity = node?.Entity.Entity;
@@ -515,6 +613,50 @@ public sealed class KustoGraphControl : Control
         SelectedEntities?.Clear();
         SelectedEntity = null;
         SelectedRelationship = relationship;
+    }
+
+    private bool MoveKeyboardSelection(Key key)
+    {
+        if (Layout is not GraphLayout graphLayout)
+        {
+            return false;
+        }
+
+        GraphEntityKey? target = FindDirectionalNode(graphLayout, SelectedEntity, key, nodeOffsets);
+        if (target is not GraphEntityKey entity)
+        {
+            return false;
+        }
+
+        SelectNode(entity, KeyModifiers.None, preserveExistingContextSelection: false);
+        ContextEntity = entity;
+        GraphLayoutNode? node = graphLayout.Nodes.FirstOrDefault(candidate => candidate.Entity.Entity == entity);
+        if (node is not null)
+        {
+            AutomationProperties.SetHelpText(
+                this,
+                $"Selected {node.Entity.DisplayLabel}. Use arrow keys to navigate nodes, Enter to select, plus or minus to zoom, and zero to fit.");
+        }
+
+        InvalidateVisual();
+        return true;
+    }
+
+    private bool OpenKeyboardContextMenu()
+    {
+        if (SelectedEntity is null && !MoveKeyboardSelection(Key.Home))
+        {
+            return false;
+        }
+
+        ContextEntity = SelectedEntity;
+        if (ContextMenu is not ContextMenu contextMenu)
+        {
+            return false;
+        }
+
+        contextMenu.Open(this);
+        return true;
     }
 
     private GraphPalette CreatePalette()

@@ -1,4 +1,3 @@
-using System.Text.Json;
 using OpenKustoExplorer.Application.Automations;
 using OpenKustoExplorer.Infrastructure.Storage;
 
@@ -32,34 +31,10 @@ public sealed class FileKustoAutomationStore : IKustoAutomationStore
     /// <inheritdoc />
     public KustoAutomationCatalog Load()
     {
-        KustoAutomationCatalog catalog = new([]);
-
-        if (File.Exists(filePath))
-        {
-            try
-            {
-                using FileStream stream = File.OpenRead(filePath);
-                catalog = KustoAutomationCatalogJson.Read(stream);
-            }
-            catch (JsonException)
-            {
-                AtomicFileStore.PreserveUnreadable(filePath);
-            }
-            catch (InvalidDataException)
-            {
-                AtomicFileStore.PreserveUnreadable(filePath);
-            }
-            catch (ArgumentException)
-            {
-                AtomicFileStore.PreserveUnreadable(filePath);
-            }
-            catch (FormatException)
-            {
-                AtomicFileStore.PreserveUnreadable(filePath);
-            }
-        }
-
-        return catalog;
+        return AtomicFileStore.ReadOrDefault(
+            filePath,
+            KustoAutomationCatalogJson.Read,
+            static () => new KustoAutomationCatalog([]));
     }
 
     /// <inheritdoc />

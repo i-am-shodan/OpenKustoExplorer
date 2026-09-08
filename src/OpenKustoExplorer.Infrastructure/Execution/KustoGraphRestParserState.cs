@@ -15,6 +15,7 @@ internal sealed class KustoGraphRestParserState : IDisposable
     private readonly List<KustoResultRow> edgeResultRows = [];
     private readonly int maximumResultRowCount;
     private readonly KustoGraphQueryPlan plan;
+    private readonly List<KustoResultValue> rowResultValues = [];
     private readonly List<string> rowValues = [];
     private readonly IKustoGraphExportSink sink;
     private string columnDataType = string.Empty;
@@ -126,6 +127,30 @@ internal sealed class KustoGraphRestParserState : IDisposable
             _ => throw new InvalidDataException($"Unsupported Kusto graph cell token '{reader.TokenType}'."),
         };
         return value;
+    }
+
+    private static string GetRawScalar(ref Utf8JsonReader reader)
+    {
+        return reader.TokenType switch
+        {
+            JsonTokenType.String => EncodeJsonString(reader.GetString() ?? string.Empty),
+            JsonTokenType.Number => Encoding.UTF8.GetString(reader.ValueSpan),
+            JsonTokenType.True => "true",
+            JsonTokenType.False => "false",
+            JsonTokenType.Null => "null",
+            _ => throw new InvalidDataException($"Unsupported Kusto graph cell token '{reader.TokenType}'."),
+        };
+    }
+
+    private static string EncodeJsonString(string value)
+    {
+        using MemoryStream stream = new();
+        using (Utf8JsonWriter writer = new(stream))
+        {
+            writer.WriteStringValue(value);
+        }
+
+        return Encoding.UTF8.GetString(stream.ToArray());
     }
 
     private void BeginRows()
@@ -265,7 +290,7 @@ internal sealed class KustoGraphRestParserState : IDisposable
 
                 if (edgeResultRows.Count < maximumResultRowCount)
                 {
-                    edgeResultRows.Add(new KustoResultRow(rowValues));
+                    edgeResultRows.Add(new KustoResultRow(rowResultValues));
                 }
             }
         }
@@ -275,6 +300,7 @@ internal sealed class KustoGraphRestParserState : IDisposable
         }
 
         rowValues.Clear();
+        rowResultValues.Clear();
         inRow = false;
     }
 
@@ -303,7 +329,9 @@ internal sealed class KustoGraphRestParserState : IDisposable
 
         if (nestedValue.IsComplete)
         {
-            rowValues.Add(nestedValue.GetValue());
+            string value = nestedValue.GetValue();
+            rowValues.Add(value);
+            rowResultValues.Add(new KustoResultValue(value, value, false));
             ((IDisposable)nestedValue).Dispose();
             nestedValue = null;
         }
@@ -400,6 +428,10 @@ internal sealed class KustoGraphRestParserState : IDisposable
         if (inRow)
         {
             rowValues.Add(value);
+            rowResultValues.Add(new KustoResultValue(
+                value,
+                GetRawScalar(ref reader),
+                reader.TokenType == JsonTokenType.Null));
         }
         else if (inColumn)
         {
@@ -424,6 +456,7 @@ internal sealed class KustoGraphRestParserState : IDisposable
             inRow = true;
             rowDepth = reader.CurrentDepth;
             rowValues.Clear();
+            rowResultValues.Clear();
         }
         else if (inTable && string.Equals(propertyName, "Columns", StringComparison.Ordinal))
         {

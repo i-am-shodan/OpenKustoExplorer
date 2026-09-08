@@ -39,7 +39,7 @@ public sealed class KustoResultRowViewModel : ObservableObject
                 columnIndex,
                 columns[columnIndex].Name,
                 columns[columnIndex].TypeName,
-                value,
+                row.ResultValues[columnIndex],
                 columnWidths?[columnIndex] ?? 150))
             .ToArray();
         Cells = Array.AsReadOnly(cells);
@@ -54,6 +54,11 @@ public sealed class KustoResultRowViewModel : ObservableObject
     /// Gets the display cells in column order.
     /// </summary>
     public IReadOnlyList<KustoResultCellViewModel> Cells { get; }
+
+    /// <summary>
+    /// Gets the complete row context exposed to assistive technology.
+    /// </summary>
+    public string AutomationText => $"Row {RowIndex + 1}: {string.Join("; ", Cells.Select(cell => $"{cell.ColumnName}: {cell.AutomationValueText}"))}";
 
     /// <summary>
     /// Gets the alternating or conditional row background color.

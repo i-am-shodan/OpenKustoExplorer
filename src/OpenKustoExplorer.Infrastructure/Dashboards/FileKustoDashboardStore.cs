@@ -1,4 +1,3 @@
-using System.Text.Json;
 using OpenKustoExplorer.Application.Dashboards;
 using OpenKustoExplorer.Infrastructure.Storage;
 
@@ -32,34 +31,10 @@ public sealed class FileKustoDashboardStore : IKustoDashboardStore
     /// <inheritdoc />
     public KustoDashboardCatalog Load()
     {
-        KustoDashboardCatalog catalog = new([]);
-
-        if (File.Exists(filePath))
-        {
-            try
-            {
-                using FileStream stream = File.OpenRead(filePath);
-                catalog = KustoDashboardCatalogJson.Read(stream);
-            }
-            catch (JsonException)
-            {
-                AtomicFileStore.PreserveUnreadable(filePath);
-            }
-            catch (InvalidDataException)
-            {
-                AtomicFileStore.PreserveUnreadable(filePath);
-            }
-            catch (ArgumentException)
-            {
-                AtomicFileStore.PreserveUnreadable(filePath);
-            }
-            catch (FormatException)
-            {
-                AtomicFileStore.PreserveUnreadable(filePath);
-            }
-        }
-
-        return catalog;
+        return AtomicFileStore.ReadOrDefault(
+            filePath,
+            KustoDashboardCatalogJson.Read,
+            static () => new KustoDashboardCatalog([]));
     }
 
     /// <inheritdoc />

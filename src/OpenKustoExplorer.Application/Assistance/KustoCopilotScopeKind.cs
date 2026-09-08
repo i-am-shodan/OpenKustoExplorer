@@ -16,6 +16,11 @@ public enum KustoCopilotScopeKind
     Automation,
 
     /// <summary>
+    /// The conversation belongs to one recorded query session.
+    /// </summary>
+    RecordedSession,
+
+    /// <summary>
     /// The conversation belongs to one named graph generation.
     /// </summary>
     Graph,

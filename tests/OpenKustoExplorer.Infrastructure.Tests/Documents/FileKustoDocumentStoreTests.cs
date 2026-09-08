@@ -158,6 +158,38 @@ public sealed class FileKustoDocumentStoreTests
         }
     }
 
+    /// <summary>
+    /// Verifies that a failed primary write preserves the latest workspace at the recovery path.
+    /// </summary>
+    [Fact]
+    public void SaveWritesRecoveryCopyWhenPrimaryPathIsUnavailable()
+    {
+        string directoryPath = CreateTemporaryDirectory();
+        string blockingPath = Path.Combine(directoryPath, "not-a-directory");
+        string filePath = Path.Combine(blockingPath, "documents.json");
+        string recoveryFilePath = Path.Combine(directoryPath, "documents-recovery.json");
+        KustoDocumentWorkspace workspace = new(
+            [new KustoDocument(Guid.NewGuid(), "Recovered", "print 1", 0, null, null)],
+            null);
+
+        try
+        {
+            File.WriteAllText(blockingPath, string.Empty);
+            FileKustoDocumentStore store = new(filePath, recoveryFilePath);
+
+            IOException exception = Assert.Throws<IOException>(() => store.Save(workspace));
+
+            Assert.Contains(recoveryFilePath, exception.Message, StringComparison.Ordinal);
+            KustoDocument recovered = Assert.Single(new FileKustoDocumentStore(recoveryFilePath).Load().Documents);
+            Assert.Equal("Recovered", recovered.Title);
+            Assert.Equal("print 1", recovered.Text);
+        }
+        finally
+        {
+            Directory.Delete(directoryPath, true);
+        }
+    }
+
     private static string CreateTemporaryDirectory()
     {
         string directoryPath = Path.Combine(Path.GetTempPath(), $"OpenKustoExplorer-{Guid.NewGuid():N}");

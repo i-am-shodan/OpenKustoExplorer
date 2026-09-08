@@ -70,6 +70,26 @@ public sealed class GitHubCopilotKustoServiceTests
             graphToolRequest,
             graphOptions,
             KustoCopilotScopeKind.Query);
+        PermissionRequestCustomTool sessionToolRequest = new()
+        {
+            Kind = "custom-tool",
+            ToolCallId = "call-recorded-search",
+            ToolDescription = "Search the selected recorded session",
+            ToolName = CopilotRecordedSessionTools.SearchResultsToolName,
+        };
+        KustoCopilotOptions sessionOptions = new("auto", false, false, false, true);
+        PermissionDecision sessionToolDecision = GitHubCopilotKustoService.GetPermissionDecision(
+            sessionToolRequest,
+            sessionOptions,
+            KustoCopilotScopeKind.RecordedSession);
+        PermissionDecision sessionToolWithoutConsentDecision = GitHubCopilotKustoService.GetPermissionDecision(
+            sessionToolRequest,
+            new KustoCopilotOptions("auto", false, false),
+            KustoCopilotScopeKind.RecordedSession);
+        PermissionDecision wrongScopeSessionToolDecision = GitHubCopilotKustoService.GetPermissionDecision(
+            sessionToolRequest,
+            sessionOptions,
+            KustoCopilotScopeKind.Query);
 
         Assert.Equal(approvedKind, learnSearchDecision.Kind);
         Assert.Equal(approvedKind, azureQueryDecision.Kind);
@@ -79,6 +99,9 @@ public sealed class GitHubCopilotKustoServiceTests
         Assert.Equal(approvedKind, graphToolDecision.Kind);
         Assert.Equal(approvedKind, routeToolDecision.Kind);
         Assert.Equal(rejectedKind, wrongScopeGraphToolDecision.Kind);
+        Assert.Equal(approvedKind, sessionToolDecision.Kind);
+        Assert.Equal(rejectedKind, sessionToolWithoutConsentDecision.Kind);
+        Assert.Equal(rejectedKind, wrongScopeSessionToolDecision.Kind);
     }
 
     private static PermissionRequestMcp CreateMcpRequest(

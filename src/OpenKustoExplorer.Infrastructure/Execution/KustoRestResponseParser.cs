@@ -28,7 +28,10 @@ internal static class KustoRestResponseParser
 
         IReadOnlyList<KustoResultTable> tables = ParseTables(json, maximumRowCount);
         KustoVisualization? visualization = ParseVisualization(json);
-        return new KustoQueryResult(tables, duration, visualization);
+        KustoQueryResultCompleteness completeness = tables.Sum(table => table.Rows.Count) >= maximumRowCount
+            ? KustoQueryResultCompleteness.RecordLimitReached
+            : KustoQueryResultCompleteness.Complete;
+        return new KustoQueryResult(tables, duration, visualization, completeness);
     }
 
     /// <summary>
@@ -44,7 +47,8 @@ internal static class KustoRestResponseParser
 
         using JsonDocument document = JsonDocument.Parse(json);
         JsonElement tablesElement = document.RootElement.GetProperty("Tables");
-        string? partialFailure = FindPartialFailure(tablesElement);
+        Dictionary<int, ResponseTableDescriptor> descriptors = GetTableDescriptors(tablesElement);
+        string? partialFailure = FindPartialFailure(tablesElement, descriptors);
         if (partialFailure is not null)
         {
             throw new InvalidOperationException($"Kusto query failed: {partialFailure}");
@@ -52,14 +56,24 @@ internal static class KustoRestResponseParser
 
         List<KustoResultTable> tables = [];
         int remainingRowCount = maximumRowCount;
+        int tableOrdinal = 0;
 
         foreach (JsonElement tableElement in tablesElement.EnumerateArray())
         {
             string tableName = tableElement.GetProperty("TableName").GetString() ?? "Result";
-            if (remainingRowCount > 0 && !IsMetadataTable(tableName))
+            descriptors.TryGetValue(tableOrdinal, out ResponseTableDescriptor? descriptor);
+            bool isUserResult = descriptor is not null
+                ? string.Equals(descriptor.Kind, "QueryResult", StringComparison.OrdinalIgnoreCase)
+                : descriptors.Count == 0 && !IsMetadataTable(tableName);
+            if (remainingRowCount > 0 && isUserResult && !IsTableOfContents(tableElement))
             {
-                tables.Add(ParseTable(tableElement, tableName, ref remainingRowCount));
+                tables.Add(ParseTable(
+                    tableElement,
+                    descriptor?.Name ?? tableName,
+                    ref remainingRowCount));
             }
+
+            tableOrdinal++;
         }
 
         return tables.AsReadOnly();
@@ -100,17 +114,25 @@ internal static class KustoRestResponseParser
         return errorMessage;
     }
 
-    private static string? FindPartialFailure(JsonElement tablesElement)
+    private static string? FindPartialFailure(
+        JsonElement tablesElement,
+        IReadOnlyDictionary<int, ResponseTableDescriptor> descriptors)
     {
         string? failure = null;
+        int tableOrdinal = 0;
 
         foreach (JsonElement tableElement in tablesElement.EnumerateArray())
         {
             string tableName = tableElement.GetProperty("TableName").GetString() ?? string.Empty;
-            if (string.Equals(tableName, "QueryStatus", StringComparison.Ordinal))
+            descriptors.TryGetValue(tableOrdinal, out ResponseTableDescriptor? descriptor);
+            if (string.Equals(tableName, "QueryStatus", StringComparison.Ordinal)
+                || string.Equals(descriptor?.Kind, "QueryStatus", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(descriptor?.Name, "QueryStatus", StringComparison.OrdinalIgnoreCase))
             {
                 failure = FindQueryStatusFailure(tableElement);
             }
+
+            tableOrdinal++;
         }
 
         return failure;
@@ -151,6 +173,55 @@ internal static class KustoRestResponseParser
         }
 
         return columnIndexes;
+    }
+
+    private static Dictionary<int, ResponseTableDescriptor> GetTableDescriptors(
+        JsonElement tablesElement)
+    {
+        Dictionary<int, ResponseTableDescriptor> descriptors = [];
+        foreach (JsonElement tableElement in tablesElement.EnumerateArray().Where(IsTableOfContents))
+        {
+            Dictionary<string, int> columnIndexes = GetColumnIndexes(tableElement);
+            int ordinalIndex = columnIndexes["Ordinal"];
+            int kindIndex = columnIndexes["Kind"];
+            int nameIndex = columnIndexes["Name"];
+            foreach (JsonElement row in tableElement.GetProperty("Rows").EnumerateArray())
+            {
+                JsonElement[] values = row.EnumerateArray().ToArray();
+                if (TryGetInt32(values[ordinalIndex], out int ordinal))
+                {
+                    descriptors[ordinal] = new ResponseTableDescriptor(
+                        FormatValue(values[kindIndex]),
+                        FormatValue(values[nameIndex]));
+                }
+            }
+        }
+
+        return descriptors;
+    }
+
+    private static bool IsTableOfContents(JsonElement tableElement)
+    {
+        string tableName = tableElement.GetProperty("TableName").GetString() ?? string.Empty;
+        if (string.Equals(tableName, "TableOfContents", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        Dictionary<string, int> columnIndexes = GetColumnIndexes(tableElement);
+        return tableName.StartsWith("Table_", StringComparison.OrdinalIgnoreCase)
+            && columnIndexes.ContainsKey("Ordinal")
+            && columnIndexes.ContainsKey("Kind")
+            && columnIndexes.ContainsKey("Name")
+            && columnIndexes.ContainsKey("Id")
+            && columnIndexes.ContainsKey("PrettyName");
+    }
+
+    private static bool TryGetInt32(JsonElement value, out int result)
+    {
+        return value.TryGetInt32(out result)
+            || (value.ValueKind == JsonValueKind.String
+                && int.TryParse(value.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out result));
     }
 
     private static ReadOnlyCollection<string> GetColumnList(JsonElement visualization, string propertyName)
@@ -217,15 +288,21 @@ internal static class KustoRestResponseParser
     {
         using JsonDocument document = JsonDocument.Parse(json);
         JsonElement tablesElement = document.RootElement.GetProperty("Tables");
+        Dictionary<int, ResponseTableDescriptor> descriptors = GetTableDescriptors(tablesElement);
         KustoVisualization? visualization = null;
+        int tableOrdinal = 0;
 
         foreach (JsonElement tableElement in tablesElement.EnumerateArray())
         {
             string tableName = tableElement.GetProperty("TableName").GetString() ?? string.Empty;
-            if (string.Equals(tableName, "@ExtendedProperties", StringComparison.OrdinalIgnoreCase))
+            descriptors.TryGetValue(tableOrdinal, out ResponseTableDescriptor? descriptor);
+            if (string.Equals(tableName, "@ExtendedProperties", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(descriptor?.Name, "@ExtendedProperties", StringComparison.OrdinalIgnoreCase))
             {
                 visualization = ParseVisualizationTable(tableElement) ?? visualization;
             }
+
+            tableOrdinal++;
         }
 
         return visualization;
@@ -397,7 +474,13 @@ internal static class KustoRestResponseParser
             .EnumerateArray()
             .Take(remainingRowCount))
         {
-            string[] values = rowElement.EnumerateArray().Select(FormatValue).ToArray();
+            KustoResultValue[] values = rowElement
+                .EnumerateArray()
+                .Select(value => new KustoResultValue(
+                    FormatValue(value),
+                    value.GetRawText(),
+                    value.ValueKind == JsonValueKind.Null))
+                .ToArray();
             rows.Add(new KustoResultRow(values));
             remainingRowCount--;
         }
@@ -429,4 +512,6 @@ internal static class KustoRestResponseParser
 
         return displayValue;
     }
+
+    private sealed record ResponseTableDescriptor(string Kind, string Name);
 }
