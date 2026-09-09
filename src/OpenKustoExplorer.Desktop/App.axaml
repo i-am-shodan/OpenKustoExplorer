@@ -153,6 +153,57 @@
     <Style Selector="TextBlock.tertiary">
       <Setter Property="Foreground" Value="{DynamicResource TextTertiaryBrush}" />
     </Style>
+    <Style Selector="ListBox.kustoCompletionList">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="Padding" Value="0" />
+    </Style>
+    <Style Selector="ListBox.kustoCompletionList > ListBoxItem">
+      <Setter Property="MinHeight" Value="36" />
+      <Setter Property="Margin" Value="0,1" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+    </Style>
+    <Style Selector="ListBox.kustoCompletionList > ListBoxItem /template/ ContentPresenter">
+      <Setter Property="Padding" Value="4,0,8,0" />
+      <Setter Property="CornerRadius" Value="4" />
+    </Style>
+    <Style Selector="ListBox.kustoCompletionList > ListBoxItem:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource SubtleSurfaceBrush}" />
+    </Style>
+    <Style Selector="ListBox.kustoCompletionList > ListBoxItem:selected /template/ ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource SelectionBrush}" />
+    </Style>
+    <Style Selector="Grid.kustoCompletionItem">
+      <Setter Property="MinHeight" Value="34" />
+    </Style>
+    <Style Selector="TextBlock.completionText">
+      <Setter Property="FontFamily" Value="Cascadia Code, JetBrains Mono, Noto Sans Mono, monospace" />
+      <Setter Property="FontSize" Value="{DynamicResource TypeCaptionSize}" />
+      <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+    </Style>
+    <Style Selector="TextBlock.completionKindLabel">
+      <Setter Property="FontSize" Value="{DynamicResource TypeMetadataSize}" />
+      <Setter Property="Foreground" Value="{DynamicResource TextTertiaryBrush}" />
+    </Style>
+    <Style Selector="LucideIcon.completionKindIcon.completionEntity">
+      <Setter Property="Foreground" Value="{DynamicResource SyntaxEntityBrush}" />
+    </Style>
+    <Style Selector="LucideIcon.completionKindIcon.completionName">
+      <Setter Property="Foreground" Value="{DynamicResource SyntaxNameBrush}" />
+    </Style>
+    <Style Selector="LucideIcon.completionKindIcon.completionVariable">
+      <Setter Property="Foreground" Value="{DynamicResource SyntaxVariableBrush}" />
+    </Style>
+    <Style Selector="LucideIcon.completionKindIcon.completionFunction">
+      <Setter Property="Foreground" Value="{DynamicResource SyntaxFunctionBrush}" />
+    </Style>
+    <Style Selector="LucideIcon.completionKindIcon.completionOperator, LucideIcon.completionKindIcon.completionKeyword">
+      <Setter Property="Foreground" Value="{DynamicResource SyntaxKeywordBrush}" />
+    </Style>
+    <Style Selector="LucideIcon.completionKindIcon.completionSyntax">
+      <Setter Property="Foreground" Value="{DynamicResource TextTertiaryBrush}" />
+    </Style>
     <Style Selector="TabItem.toolTab">
       <Setter Property="FontSize" Value="{DynamicResource TypeCaptionSize}" />
       <Setter Property="Padding" Value="12,7" />

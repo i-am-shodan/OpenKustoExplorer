@@ -1154,7 +1154,10 @@
                     </Grid>
                   </Border>
 
-                  <Grid IsVisible="{Binding HasResultTable}" RowDefinitions="42,*,Auto">
+                    <Grid
+                      x:Name="ResultView"
+                      IsVisible="{Binding HasResultTable}"
+                      RowDefinitions="42,*,Auto">
                     <Grid
                         Grid.Row="0"
                         Margin="12,5"

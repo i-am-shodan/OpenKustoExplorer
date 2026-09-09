@@ -1,3 +1,4 @@
+using Avalonia.Controls;
 using Avalonia.Media;
 using AvaloniaEdit.CodeCompletion;
 using AvaloniaEdit.Document;
@@ -12,6 +13,7 @@ namespace OpenKustoExplorer.Desktop.Editor;
 internal sealed class KustoCompletionData : ICompletionData
 {
     private readonly KustoCompletion completion;
+    private Control? content;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="KustoCompletionData"/> class.
@@ -27,10 +29,10 @@ internal sealed class KustoCompletionData : ICompletionData
     public IImage? Image => null;
 
     /// <inheritdoc />
-    public string Text => completion.DisplayText;
+    public string Text => completion.MatchText;
 
     /// <inheritdoc />
-    public object Content => completion.DisplayText;
+    public object Content => content ??= new KustoCompletionItemContent(completion);
 
     /// <inheritdoc />
     public object Description => completion.Kind;

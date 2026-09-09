@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
@@ -475,7 +476,23 @@ internal sealed class KustoEditorController : IDisposable
                 StartOffset = analysis.CompletionEditStart,
                 EndOffset = analysis.CompletionEditStart + analysis.CompletionEditLength,
                 CloseWhenCaretAtBeginning = false,
+                Width = 480,
+                MaxWidth = 560,
+                MaxHeight = 390,
+                WindowManagerAddShadowHint = true,
             };
+            newCompletionWindow.Classes.Add("kustoCompletionWindow");
+            newCompletionWindow.CompletionList.Background = ResolveBrush("SurfaceBrush");
+            newCompletionWindow.CompletionList.BorderBrush = ResolveBrush("ControlBoundaryBrush");
+            newCompletionWindow.CompletionList.BorderThickness = new Thickness(1);
+            newCompletionWindow.CompletionList.CornerRadius = new CornerRadius(6);
+            newCompletionWindow.CompletionList.Padding = new Thickness(3);
+            newCompletionWindow.CompletionList.MaxHeight = 390;
+            newCompletionWindow.CompletionList.ListBox.Classes.Add("kustoCompletionList");
+            newCompletionWindow.CompletionList.ListBox.MaxHeight = 380;
+            ScrollViewer.SetHorizontalScrollBarVisibility(
+                newCompletionWindow.CompletionList.ListBox,
+                ScrollBarVisibility.Disabled);
 
             foreach (KustoCompletion completion in analysis.Completions)
             {

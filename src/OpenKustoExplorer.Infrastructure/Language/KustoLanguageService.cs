@@ -155,11 +155,16 @@ public sealed class KustoLanguageService : IKustoLanguageService
         int completionEditStart = completionBlock is null ? caretPosition : completionInfo.EditStart;
         bool isQuerySourceStart = completionBlock is not null
             && IsQuerySourceStart(completionBlock, caretPosition);
-        IEnumerable<KustoCompletion> completions = completionInfo.Items
+        CompletionItem[] completionItems = completionInfo.Items
             .Where(item => !isQuerySourceStart || IsValidAtQuerySourceStart(item.Kind))
-            .Select(item => CreateCompletion(item, isQuerySourceStart))
-            .OrderByDescending(completion => completion.Priority)
-            .ThenBy(completion => completion.DisplayText, StringComparer.OrdinalIgnoreCase);
+            .ToArray();
+        IReadOnlyList<KustoCompletion> completions = KustoCompletionRanker.Rank(
+            completionItems,
+            text,
+            caretPosition,
+            completionEditStart,
+            isQuerySourceStart,
+            classifications);
 
         KustoLanguageAnalysis analysis = new(
             classifications,
@@ -336,11 +341,22 @@ public sealed class KustoLanguageService : IKustoLanguageService
     private static bool IsQuerySourceStart(CodeBlock block, int caretPosition)
     {
         int localPosition = Math.Clamp(caretPosition - block.Start, 0, block.Length);
-        string prefix = block.Text[..localPosition].Trim();
-        bool containsOnlyIdentifierPrefix = prefix.All(character =>
-            char.IsLetterOrDigit(character) || character == '_');
+        int tokenStart = localPosition;
 
-        return prefix.Length == 0 || containsOnlyIdentifierPrefix;
+        while (tokenStart > 0
+            && (char.IsLetterOrDigit(block.Text[tokenStart - 1]) || block.Text[tokenStart - 1] == '_'))
+        {
+            tokenStart--;
+        }
+
+        int previousPosition = tokenStart - 1;
+
+        while (previousPosition >= 0 && char.IsWhiteSpace(block.Text[previousPosition]))
+        {
+            previousPosition--;
+        }
+
+        return previousPosition < 0 || block.Text[previousPosition] == ';';
     }
 
     private static bool IsValidAtQuerySourceStart(CompletionKind kind)
@@ -361,41 +377,6 @@ public sealed class KustoLanguageService : IKustoLanguageService
             classifiedRange.Length);
 
         return classification;
-    }
-
-    private static KustoCompletion CreateCompletion(
-        CompletionItem completionItem,
-        bool isQuerySourceStart)
-    {
-        double priority = isQuerySourceStart ? GetQuerySourcePriority(completionItem.Kind) : 0;
-        KustoCompletion completion = new(
-            completionItem.Kind.ToString(),
-            completionItem.DisplayText,
-            completionItem.BeforeText,
-            completionItem.AfterText,
-            priority);
-
-        return completion;
-    }
-
-    private static double GetQuerySourcePriority(CompletionKind kind)
-    {
-        double priority = kind switch
-        {
-            CompletionKind.Table => 1000,
-            CompletionKind.DatabaseFunction => 950,
-            CompletionKind.MaterialiedView => 900,
-            CompletionKind.StoredQueryResult => 850,
-            CompletionKind.LocalFunction => 800,
-            CompletionKind.Variable => 750,
-            CompletionKind.TabularPrefix => 650,
-            CompletionKind.BuiltInFunction => 550,
-            CompletionKind.QueryPrefix => 450,
-            CompletionKind.Keyword => 350,
-            _ => 100,
-        };
-
-        return priority;
     }
 
     private static KustoDiagnostic CreateDiagnostic(Diagnostic diagnostic)

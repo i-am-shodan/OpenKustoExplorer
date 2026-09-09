@@ -44,6 +44,7 @@ public sealed partial class MainWindow : Window, IDisposable
     private const int DashboardMinimumColumnSpan = 8;
     private const int DashboardMinimumRowSpan = 6;
     private const double DocumentTabDragThreshold = 6;
+    private const double ResultWheelScrollDistance = 90;
     private static readonly TimeSpan AutomationTickInterval = TimeSpan.FromSeconds(5);
 
     private static readonly (string ResourceKey, string LightColor, string DarkColor)[] HighContrastBrushSpecifications =
@@ -170,6 +171,7 @@ public sealed partial class MainWindow : Window, IDisposable
     private ScrollViewer? resultScrollViewer;
     private TabControl? resultTabs;
     private ScrollBar? resultVerticalScrollBar;
+    private Grid? resultView;
     private ListBox? resultsList;
     private TextBox? schemaSearch;
     private Button? sessionsButton;
@@ -335,6 +337,24 @@ public sealed partial class MainWindow : Window, IDisposable
         widget.PreviewLayout(column, row, columnSpan, rowSpan);
         widget.CommitLayout();
         return true;
+    }
+
+    /// <summary>
+    /// Calculates the bounded row offset produced by vertical wheel input.
+    /// </summary>
+    /// <param name="currentOffset">The current vertical row offset.</param>
+    /// <param name="maximumOffset">The maximum vertical row offset.</param>
+    /// <param name="wheelDelta">The vertical wheel delta, where positive values scroll up.</param>
+    /// <returns>The next bounded vertical row offset.</returns>
+    internal static double CalculateResultWheelOffset(
+        double currentOffset,
+        double maximumOffset,
+        double wheelDelta)
+    {
+        return Math.Clamp(
+            currentOffset - (wheelDelta * ResultWheelScrollDistance),
+            0,
+            Math.Max(0, maximumOffset));
     }
 
     /// <inheritdoc />
@@ -859,6 +879,30 @@ public sealed partial class MainWindow : Window, IDisposable
         {
             UpdateResultVerticalScrollBar(scrollViewer);
         }
+    }
+
+    private void OnResultPointerWheelChanged(object? sender, PointerWheelEventArgs eventArguments)
+    {
+        _ = sender;
+        if (resultRowsScrollViewer is null || eventArguments.Delta.Y == 0)
+        {
+            return;
+        }
+
+        double maximumOffset = Math.Max(
+            0,
+            resultRowsScrollViewer.Extent.Height - resultRowsScrollViewer.Viewport.Height);
+        double nextOffset = CalculateResultWheelOffset(
+            resultRowsScrollViewer.Offset.Y,
+            maximumOffset,
+            eventArguments.Delta.Y);
+        if (Math.Abs(nextOffset - resultRowsScrollViewer.Offset.Y) < 0.01)
+        {
+            return;
+        }
+
+        resultRowsScrollViewer.Offset = new Vector(resultRowsScrollViewer.Offset.X, nextOffset);
+        eventArguments.Handled = true;
     }
 
     [SuppressMessage("Major Code Smell", "S2325", Justification = "Avalonia compiled XAML resolves this instance event handler.")]
@@ -2322,6 +2366,12 @@ public sealed partial class MainWindow : Window, IDisposable
         resultScrollViewer = FindRequiredControl<ScrollViewer>("ResultScrollViewer");
         resultTabs = FindRequiredControl<TabControl>("ResultTabs");
         resultVerticalScrollBar = FindRequiredControl<ScrollBar>("ResultVerticalScrollBar");
+        resultView = FindRequiredControl<Grid>("ResultView");
+        resultView.AddHandler(
+            InputElement.PointerWheelChangedEvent,
+            OnResultPointerWheelChanged,
+            RoutingStrategies.Tunnel,
+            handledEventsToo: true);
         resultsList = FindRequiredControl<ListBox>("ResultsList");
         schemaSearch = FindRequiredControl<TextBox>("SchemaSearch");
         sessionsButton = FindRequiredControl<Button>("SessionsButton");
