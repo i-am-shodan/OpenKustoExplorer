@@ -21,6 +21,8 @@
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <OutputType>WinExe</OutputType>
     <PublishAot>true</PublishAot>
+    <!-- Azure.AI.OpenAI emits aggregate warnings for generated serializers; see azure-sdk-for-net#45712. -->
+    <WarningsNotAsErrors>$(WarningsNotAsErrors);IL2104;IL3053</WarningsNotAsErrors>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>

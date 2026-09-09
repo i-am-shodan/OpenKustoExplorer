@@ -23,6 +23,16 @@
     MinHeight="600"
     WindowStartupLocation="CenterScreen">
   <Window.Styles>
+    <Style Selector="SplitView.databaseExplorer:left:open /template/ Panel#PART_PaneRoot">
+      <Setter Property="Transitions">
+        <Transitions />
+      </Setter>
+    </Style>
+    <Style Selector="SplitView.databaseExplorer:left:closed /template/ Panel#PART_PaneRoot">
+      <Setter Property="Transitions">
+        <Transitions />
+      </Setter>
+    </Style>
     <Style Selector="LucideIcon.copilotSpinner">
       <Setter Property="RenderTransformOrigin" Value="50%,50%" />
       <Setter Property="RenderTransform">
@@ -366,6 +376,7 @@
       <SplitView
           x:Name="NavigationSplitView"
           Grid.Column="1"
+          Classes="databaseExplorer"
           CompactPaneLength="0"
           DisplayMode="Inline"
           IsVisible="{Binding IsQueryWorkbenchView}"
