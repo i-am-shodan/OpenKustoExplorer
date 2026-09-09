@@ -1,7 +1,5 @@
 using System.Net;
 using System.Net.Mail;
-using Avalonia.Controls;
-using Avalonia.Controls.Notifications;
 using OpenKustoExplorer.Application.Automations;
 
 namespace OpenKustoExplorer.Desktop;
@@ -14,21 +12,17 @@ internal sealed class AutomationNotificationDispatcher
     private const string SmtpPasswordEnvironmentVariable = "OPENKUSTOEXPLORER_SMTP_PASSWORD";
     private const string SmtpUsernameEnvironmentVariable = "OPENKUSTOEXPLORER_SMTP_USERNAME";
     private readonly AutomationApplicationDispatcher applicationDispatcher;
-    private readonly WindowNotificationManager notificationManager;
+    private readonly DesktopNotificationService notifications;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="AutomationNotificationDispatcher"/> class.
     /// </summary>
-    /// <param name="host">The window that owns in-app desktop toasts.</param>
-    public AutomationNotificationDispatcher(TopLevel host)
+    /// <param name="notifications">The window-owned notification presenter.</param>
+    public AutomationNotificationDispatcher(DesktopNotificationService notifications)
     {
-        ArgumentNullException.ThrowIfNull(host);
+        ArgumentNullException.ThrowIfNull(notifications);
         applicationDispatcher = new AutomationApplicationDispatcher(new AutomationApplicationLauncher());
-        notificationManager = new WindowNotificationManager(host)
-        {
-            MaxItems = 4,
-            Position = NotificationPosition.BottomRight,
-        };
+        this.notifications = notifications;
     }
 
     /// <summary>
@@ -45,21 +39,17 @@ internal sealed class AutomationNotificationDispatcher
 
         if (notification.Settings.DesktopEnabled)
         {
-            notificationManager.Show(new Notification(
+            notifications.ShowInformation(
                 notification.Title,
-                notification.Message,
-                NotificationType.Information,
-                TimeSpan.FromSeconds(10)));
+                notification.Message);
         }
 
         string? applicationFailure = applicationDispatcher.Dispatch(notification);
         if (applicationFailure is not null)
         {
-            notificationManager.Show(new Notification(
+            notifications.ShowError(
                 "Automation application failed",
-                applicationFailure,
-                NotificationType.Error,
-                TimeSpan.FromSeconds(12)));
+                applicationFailure);
         }
 
         if (notification.Settings.EmailEnabled)
@@ -118,10 +108,8 @@ internal sealed class AutomationNotificationDispatcher
 
     private void ShowEmailFailure(string errorMessage)
     {
-        notificationManager.Show(new Notification(
+        notifications.ShowError(
             "Automation email failed",
-            errorMessage,
-            NotificationType.Error,
-            TimeSpan.FromSeconds(12)));
+            errorMessage);
     }
 }

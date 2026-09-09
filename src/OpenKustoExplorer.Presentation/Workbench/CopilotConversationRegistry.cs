@@ -13,14 +13,17 @@ internal sealed class CopilotConversationRegistry
     private readonly Func<KustoCopilotViewModel> createQueryConversation;
     private readonly Func<KustoCopilotViewModel> createAutomationConversation;
     private readonly Func<KustoCopilotViewModel> createGraphConversation;
+    private readonly Func<KustoCopilotViewModel> createRecordedSessionConversation;
     private readonly Dictionary<Guid, KustoCopilotViewModel> documentConversations = [];
     private readonly Dictionary<Guid, KustoCopilotViewModel> automationConversations = [];
     private readonly Dictionary<GraphSnapshot, KustoCopilotViewModel> graphConversations = [];
+    private readonly Dictionary<Guid, KustoCopilotViewModel> recordedSessionConversations = [];
     private readonly HashSet<KustoCopilotViewModel> trackedConversations = [];
     private KustoCopilotDefaults defaults = KustoCopilotDefaults.Standard;
     private KustoCopilotViewModel? standaloneQueryConversation;
     private KustoCopilotViewModel? unboundAutomationConversation;
     private KustoCopilotViewModel? unboundGraphConversation;
+    private KustoCopilotViewModel? unboundRecordedSessionConversation;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="CopilotConversationRegistry"/> class.
@@ -29,20 +32,24 @@ internal sealed class CopilotConversationRegistry
     /// <param name="createQueryConversation">Creates a query-scope conversation.</param>
     /// <param name="createAutomationConversation">Creates an automation-scope conversation.</param>
     /// <param name="createGraphConversation">Creates a graph-scope conversation.</param>
+    /// <param name="createRecordedSessionConversation">Creates a recorded-session-scope conversation.</param>
     public CopilotConversationRegistry(
         IKustoCopilotService service,
         Func<KustoCopilotViewModel> createQueryConversation,
         Func<KustoCopilotViewModel> createAutomationConversation,
-        Func<KustoCopilotViewModel> createGraphConversation)
+        Func<KustoCopilotViewModel> createGraphConversation,
+        Func<KustoCopilotViewModel> createRecordedSessionConversation)
     {
         ArgumentNullException.ThrowIfNull(service);
         ArgumentNullException.ThrowIfNull(createQueryConversation);
         ArgumentNullException.ThrowIfNull(createAutomationConversation);
         ArgumentNullException.ThrowIfNull(createGraphConversation);
+        ArgumentNullException.ThrowIfNull(createRecordedSessionConversation);
         this.service = service;
         this.createQueryConversation = createQueryConversation;
         this.createAutomationConversation = createAutomationConversation;
         this.createGraphConversation = createGraphConversation;
+        this.createRecordedSessionConversation = createRecordedSessionConversation;
     }
 
     /// <summary>
@@ -53,7 +60,8 @@ internal sealed class CopilotConversationRegistry
     /// <summary>
     /// Gets a value indicating whether any tracked conversation currently has an active turn.
     /// </summary>
-    public bool IsWorking => trackedConversations.Any(conversation => conversation.IsBusy);
+    public bool IsWorking => trackedConversations.Any(
+        conversation => conversation.IsBusy || conversation.IsLoadingModels);
 
     /// <summary>
     /// Gets the shared query conversation used before a specific document tab is active.
@@ -101,6 +109,18 @@ internal sealed class CopilotConversationRegistry
     }
 
     /// <summary>
+    /// Gets or creates the conversation for the selected recorded session, or the shared unbound conversation.
+    /// </summary>
+    /// <param name="sessionId">The selected recorded session identifier, or <see langword="null"/>.</param>
+    /// <returns>The recorded-session conversation.</returns>
+    public KustoCopilotViewModel GetOrCreateRecordedSessionConversation(Guid? sessionId)
+    {
+        return sessionId is Guid identifier
+            ? GetOrCreate(recordedSessionConversations, identifier, createRecordedSessionConversation)
+            : unboundRecordedSessionConversation ??= Track(createRecordedSessionConversation());
+    }
+
+    /// <summary>
     /// Applies application defaults to current scopes and scopes created later.
     /// </summary>
     /// <param name="newDefaults">The current application Copilot defaults.</param>
@@ -112,6 +132,17 @@ internal sealed class CopilotConversationRegistry
         foreach (KustoCopilotViewModel conversation in trackedConversations)
         {
             conversation.ApplyDefaults(defaults);
+        }
+    }
+
+    /// <summary>
+    /// Clears provider-specific state in every active conversation after provider configuration changes.
+    /// </summary>
+    public void RefreshProvider()
+    {
+        foreach (KustoCopilotViewModel conversation in trackedConversations)
+        {
+            conversation.RefreshProvider();
         }
     }
 
@@ -205,7 +236,8 @@ internal sealed class CopilotConversationRegistry
     {
         _ = sender;
 
-        if (eventArguments.PropertyName == nameof(KustoCopilotViewModel.IsBusy))
+        if (eventArguments.PropertyName is nameof(KustoCopilotViewModel.IsBusy)
+            or nameof(KustoCopilotViewModel.IsLoadingModels))
         {
             WorkingChanged?.Invoke(this, EventArgs.Empty);
         }

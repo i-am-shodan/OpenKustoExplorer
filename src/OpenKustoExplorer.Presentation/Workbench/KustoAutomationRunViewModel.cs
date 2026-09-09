@@ -3,6 +3,7 @@ using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using OpenKustoExplorer.Application.Automations;
+using OpenKustoExplorer.Application.Diagnostics;
 using OpenKustoExplorer.Application.Execution;
 
 namespace OpenKustoExplorer.Presentation.Workbench;
@@ -12,11 +13,16 @@ namespace OpenKustoExplorer.Presentation.Workbench;
 /// </summary>
 public sealed class KustoAutomationRunViewModel : ObservableObject
 {
+    private readonly Lazy<KustoVisualization?> fallbackVisualization;
     private readonly KustoAutomationRun run;
     private readonly KustoResultTable? primaryTable;
+    private IReadOnlyList<KustoResultColumnViewModel>? resultColumns;
+    private IReadOnlyList<KustoResultRowViewModel>? resultRows;
     private int? rowDelta;
     private int selectedOutputTabIndex;
     private KustoVisualizationViewModel? visualization;
+    private IReadOnlyList<KustoVisualizationChoiceViewModel>? visualizationChoices;
+    private bool visualizationInitialized;
     private string visualizationMessage = "No visualization available";
 
     /// <summary>
@@ -27,23 +33,26 @@ public sealed class KustoAutomationRunViewModel : ObservableObject
     public KustoAutomationRunViewModel(
         KustoAutomationRun run,
         KustoVisualization? fallbackVisualization)
+        : this(run, new Lazy<KustoVisualization?>(() => fallbackVisualization))
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="KustoAutomationRunViewModel"/> class with a shared lazy fallback.
+    /// </summary>
+    /// <param name="run">The immutable completed run.</param>
+    /// <param name="fallbackVisualization">The lazily recovered scheduled KQL render instructions.</param>
+    internal KustoAutomationRunViewModel(
+        KustoAutomationRun run,
+        Lazy<KustoVisualization?> fallbackVisualization)
     {
         ArgumentNullException.ThrowIfNull(run);
+        ArgumentNullException.ThrowIfNull(fallbackVisualization);
 
         this.run = run;
+        this.fallbackVisualization = fallbackVisualization;
         primaryTable = run.Result is { Tables.Count: > 0 } ? run.Result.Tables[0] : null;
-        ResultColumns = primaryTable is null
-            ? []
-            : KustoResultColumnViewModel.CreateForTable(primaryTable);
-        ResultRows = CreateRows(primaryTable, ResultColumns.Select(column => column.DisplayWidth).ToArray());
         RenderVisualizationCommand = new RelayCommand<string>(RenderVisualization, _ => primaryTable is not null);
-        VisualizationChoices = KustoVisualizationChoiceViewModel.CreateAll(RenderVisualization);
-
-        KustoVisualization? effectiveVisualization = run.Result?.Visualization ?? fallbackVisualization;
-        if (effectiveVisualization is not null)
-        {
-            ApplyVisualization(effectiveVisualization);
-        }
     }
 
     /// <summary>
@@ -103,12 +112,15 @@ public sealed class KustoAutomationRunViewModel : ObservableObject
     /// <summary>
     /// Gets result columns from the primary table.
     /// </summary>
-    public IReadOnlyList<KustoResultColumnViewModel> ResultColumns { get; }
+    public IReadOnlyList<KustoResultColumnViewModel> ResultColumns =>
+        resultColumns ??= primaryTable is null
+            ? []
+            : KustoResultColumnViewModel.CreateForTable(primaryTable);
 
     /// <summary>
     /// Gets result rows from the primary table.
     /// </summary>
-    public IReadOnlyList<KustoResultRowViewModel> ResultRows { get; }
+    public IReadOnlyList<KustoResultRowViewModel> ResultRows => resultRows ??= CreateResultRows();
 
     /// <summary>
     /// Gets the minimum result table width needed to keep columns readable.
@@ -118,7 +130,8 @@ public sealed class KustoAutomationRunViewModel : ObservableObject
     /// <summary>
     /// Gets the visualization choices shared with normal query output.
     /// </summary>
-    public IReadOnlyList<KustoVisualizationChoiceViewModel> VisualizationChoices { get; }
+    public IReadOnlyList<KustoVisualizationChoiceViewModel> VisualizationChoices =>
+        visualizationChoices ??= KustoVisualizationChoiceViewModel.CreateAll(RenderVisualization);
 
     /// <summary>
     /// Gets a value indicating whether a primary result table is available.
@@ -130,9 +143,15 @@ public sealed class KustoAutomationRunViewModel : ObservableObject
     /// </summary>
     public KustoVisualizationViewModel? Visualization
     {
-        get => visualization;
+        get
+        {
+            EnsureVisualizationInitialized();
+            return visualization;
+        }
+
         private set
         {
+            visualizationInitialized = true;
             if (SetProperty(ref visualization, value))
             {
                 OnPropertyChanged(nameof(HasVisualization));
@@ -162,7 +181,12 @@ public sealed class KustoAutomationRunViewModel : ObservableObject
     /// </summary>
     public string VisualizationMessage
     {
-        get => visualizationMessage;
+        get
+        {
+            EnsureVisualizationInitialized();
+            return visualizationMessage;
+        }
+
         private set => SetProperty(ref visualizationMessage, value);
     }
 
@@ -224,6 +248,34 @@ public sealed class KustoAutomationRunViewModel : ObservableObject
         return Array.AsReadOnly(rows);
     }
 
+    private ReadOnlyCollection<KustoResultRowViewModel> CreateResultRows()
+    {
+        using KustoPerformanceTrace.OperationScope performanceScope = KustoPerformanceTrace.Measure(
+            "automation.run.rows.project",
+            primaryTable?.Rows.Count ?? 0);
+        return CreateRows(primaryTable, ResultColumns.Select(column => column.DisplayWidth).ToArray());
+    }
+
+    private void EnsureVisualizationInitialized()
+    {
+        if (visualizationInitialized)
+        {
+            return;
+        }
+
+        visualizationInitialized = true;
+        KustoVisualization? effectiveVisualization = run.Result?.Visualization ?? fallbackVisualization.Value;
+        if (primaryTable is not null && effectiveVisualization is not null)
+        {
+            KustoVisualizationViewModel.TryCreate(
+                primaryTable,
+                effectiveVisualization,
+                out visualization,
+                out visualizationMessage);
+            selectedOutputTabIndex = 1;
+        }
+    }
+
     private void RenderVisualization(string? visualizationName)
     {
         bool hasKind = Enum.TryParse(
@@ -254,6 +306,7 @@ public sealed class KustoAutomationRunViewModel : ObservableObject
     {
         if (primaryTable is not null)
         {
+            visualizationInitialized = true;
             KustoVisualizationViewModel.TryCreate(
                 primaryTable,
                 instructions,

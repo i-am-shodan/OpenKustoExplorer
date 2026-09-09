@@ -1,4 +1,3 @@
-using System.Text.Json;
 using OpenKustoExplorer.Application.Connections;
 using OpenKustoExplorer.Infrastructure.Storage;
 
@@ -32,26 +31,10 @@ public sealed class FileKustoConnectionStore : IKustoConnectionStore
     /// <inheritdoc />
     public KustoConnectionCatalog Load()
     {
-        KustoConnectionCatalog catalog = new([]);
-
-        if (File.Exists(filePath))
-        {
-            try
-            {
-                using FileStream stream = File.OpenRead(filePath);
-                catalog = KustoConnectionCatalogJson.Read(stream);
-            }
-            catch (JsonException)
-            {
-                AtomicFileStore.PreserveUnreadable(filePath);
-            }
-            catch (InvalidDataException)
-            {
-                AtomicFileStore.PreserveUnreadable(filePath);
-            }
-        }
-
-        return catalog;
+        return AtomicFileStore.ReadOrDefault(
+            filePath,
+            KustoConnectionCatalogJson.Read,
+            static () => new KustoConnectionCatalog([]));
     }
 
     /// <inheritdoc />

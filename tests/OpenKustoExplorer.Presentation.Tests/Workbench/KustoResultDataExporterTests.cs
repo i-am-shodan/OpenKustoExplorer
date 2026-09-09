@@ -67,6 +67,26 @@ public sealed class KustoResultDataExporterTests
     }
 
     /// <summary>
+    /// Verifies selected values are deduplicated and combined with an OR expression.
+    /// </summary>
+    [Fact]
+    public void MultipleValuesCreateOrFilterPredicate()
+    {
+        KustoResultTable table = new(
+            "Result 1",
+            [new KustoResultColumn("State", "string")],
+            [
+                new KustoResultRow(["Texas"]),
+                new KustoResultRow(["Ohio"]),
+                new KustoResultRow(["Texas"]),
+            ]);
+
+        string predicate = KustoResultDataExporter.CreateFilterPredicate(table, table.Rows, 0);
+
+        Assert.Equal("(['State'] == 'Texas' or ['State'] == 'Ohio')", predicate);
+    }
+
+    /// <summary>
     /// Verifies missing string values use Kusto's valid empty string literal rather than an unsupported typed null.
     /// </summary>
     [Fact]

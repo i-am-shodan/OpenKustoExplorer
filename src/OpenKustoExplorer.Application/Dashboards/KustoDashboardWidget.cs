@@ -22,6 +22,8 @@ public sealed class KustoDashboardWidget
     /// <param name="backgroundColor">The widget background color.</param>
     /// <param name="foregroundColor">The widget text color.</param>
     /// <param name="accentColor">The widget accent color.</param>
+    /// <param name="cachedResult">The optional last successful materialized result.</param>
+    /// <param name="cachedAtUtc">The optional UTC time at which the cached result was refreshed.</param>
     public KustoDashboardWidget(
         Guid id,
         string title,
@@ -34,7 +36,9 @@ public sealed class KustoDashboardWidget
         KustoDashboardWidgetLayout layout,
         string backgroundColor,
         string foregroundColor,
-        string accentColor)
+        string accentColor,
+        KustoQueryResult? cachedResult = null,
+        DateTimeOffset? cachedAtUtc = null)
     {
         ArgumentOutOfRangeException.ThrowIfEqual(id, Guid.Empty);
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
@@ -43,6 +47,10 @@ public sealed class KustoDashboardWidget
         ArgumentException.ThrowIfNullOrWhiteSpace(queryText);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(refreshInterval, TimeSpan.Zero);
         ArgumentNullException.ThrowIfNull(layout);
+        if ((cachedResult is null) != (cachedAtUtc is null))
+        {
+            throw new ArgumentException("A dashboard result and its refresh time must be provided together.");
+        }
 
         if (!clusterUri.IsAbsoluteUri || clusterUri.Scheme != Uri.UriSchemeHttps)
         {
@@ -75,6 +83,8 @@ public sealed class KustoDashboardWidget
         BackgroundColor = KustoDashboardColor.Validate(backgroundColor, nameof(backgroundColor));
         ForegroundColor = KustoDashboardColor.Validate(foregroundColor, nameof(foregroundColor));
         AccentColor = KustoDashboardColor.Validate(accentColor, nameof(accentColor));
+        CachedResult = cachedResult;
+        CachedAtUtc = cachedAtUtc?.ToUniversalTime();
     }
 
     /// <summary>
@@ -136,4 +146,10 @@ public sealed class KustoDashboardWidget
     /// Gets the widget accent color.
     /// </summary>
     public string AccentColor { get; }
+
+    /// <summary>Gets the optional last successful materialized result.</summary>
+    public KustoQueryResult? CachedResult { get; }
+
+    /// <summary>Gets the optional UTC time at which the cached result was refreshed.</summary>
+    public DateTimeOffset? CachedAtUtc { get; }
 }

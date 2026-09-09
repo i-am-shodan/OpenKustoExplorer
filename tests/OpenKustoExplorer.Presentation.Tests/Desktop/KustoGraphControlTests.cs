@@ -1,5 +1,7 @@
 using Avalonia;
+using Avalonia.Input;
 using OpenKustoExplorer.Application.Graphs;
+using OpenKustoExplorer.Desktop.Controls;
 using OpenKustoExplorer.Desktop.Graphs;
 using OpenKustoExplorer.Graph;
 
@@ -258,5 +260,50 @@ public sealed class KustoGraphControlTests
         Assert.Equal(new GraphLayoutPoint(110, 45), exportLayout.Edges[0].Route[0]);
         Assert.Equal(new GraphLayoutPoint(195, 112.5), exportLayout.Edges[0].Route[1]);
         Assert.Equal(new GraphLayoutPoint(280, 180), exportLayout.Edges[0].Route[2]);
+    }
+
+    /// <summary>
+    /// Verifies arrow navigation chooses the closest node in the requested direction.
+    /// </summary>
+    [Fact]
+    public void DirectionalNavigationChoosesNearestAlignedNode()
+    {
+        DateTimeOffset observedAt = new(2026, 2, 1, 12, 0, 0, TimeSpan.Zero);
+        GraphEntityKey center = new(GraphEntityKind.User, "User", "center");
+        GraphEntityKey nearRight = new(GraphEntityKind.Device, "Device", "near-right");
+        GraphEntityKey farRight = new(GraphEntityKind.Device, "Device", "far-right");
+        GraphEntityKey down = new(GraphEntityKind.Host, "Host", "down");
+        GraphLayout layout = new(
+            500,
+            300,
+            [
+                CreateNode(center, "Center", 100, 100, observedAt),
+                CreateNode(nearRight, "Near right", 200, 105, observedAt),
+                CreateNode(farRight, "Far right", 350, 100, observedAt),
+                CreateNode(down, "Down", 100, 220, observedAt),
+            ],
+            [],
+            false);
+
+        GraphEntityKey? right = KustoGraphControl.FindDirectionalNode(layout, center, Key.Right);
+        GraphEntityKey? below = KustoGraphControl.FindDirectionalNode(layout, center, Key.Down);
+
+        Assert.Equal(nearRight, right);
+        Assert.Equal(down, below);
+    }
+
+    private static GraphLayoutNode CreateNode(
+        GraphEntityKey entity,
+        string label,
+        double x,
+        double y,
+        DateTimeOffset observedAt)
+    {
+        return new GraphLayoutNode(
+            new GraphEntitySummary(entity, label, observedAt, observedAt, 1),
+            new GraphLayoutPoint(x, y),
+            80,
+            36,
+            false);
     }
 }

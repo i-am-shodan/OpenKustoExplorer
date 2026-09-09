@@ -31,6 +31,7 @@ public sealed class KustoCopilotContext
             targetText,
             schemaText,
             sharedDataText,
+            null,
             null)
     {
     }
@@ -46,6 +47,7 @@ public sealed class KustoCopilotContext
     /// <param name="schemaText">The bounded schema summary.</param>
     /// <param name="sharedDataText">Optional bounded data shared after explicit consent.</param>
     /// <param name="graphSnapshot">The graph snapshot for a Graph conversation.</param>
+    /// <param name="recordedSessionScope">The pinned recorded-session scope, if any.</param>
     public KustoCopilotContext(
         Guid documentId,
         KustoCopilotScopeKind scopeKind,
@@ -54,7 +56,8 @@ public sealed class KustoCopilotContext
         string targetText,
         string schemaText,
         string sharedDataText,
-        GraphSnapshot? graphSnapshot)
+        GraphSnapshot? graphSnapshot,
+        KustoCopilotRecordedSessionScope? recordedSessionScope = null)
     {
         ArgumentOutOfRangeException.ThrowIfEqual(documentId, Guid.Empty);
         ArgumentException.ThrowIfNullOrWhiteSpace(documentTitle);
@@ -71,6 +74,7 @@ public sealed class KustoCopilotContext
         SchemaText = schemaText;
         SharedDataText = sharedDataText;
         GraphSnapshot = graphSnapshot;
+        RecordedSessionScope = recordedSessionScope;
     }
 
     /// <summary>
@@ -112,4 +116,9 @@ public sealed class KustoCopilotContext
     /// Gets the immutable graph snapshot for Graph scope, or <see langword="null"/> otherwise.
     /// </summary>
     public GraphSnapshot? GraphSnapshot { get; }
+
+    /// <summary>
+    /// Gets the pinned recorded-session scope, or <see langword="null"/> otherwise.
+    /// </summary>
+    public KustoCopilotRecordedSessionScope? RecordedSessionScope { get; }
 }

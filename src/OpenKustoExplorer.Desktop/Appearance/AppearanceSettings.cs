@@ -9,7 +9,7 @@ namespace OpenKustoExplorer.Desktop.Appearance;
 /// <summary>
 /// Coordinates user appearance choices with the current platform accessibility settings.
 /// </summary>
-internal sealed class AppearanceSettings : INotifyPropertyChanged, IDisposable
+internal sealed class AppearanceSettings : IKustoAIProviderConfiguration, INotifyPropertyChanged, IDisposable
 {
     /// <summary>
     /// Gets the largest supported application base text size.
@@ -22,19 +22,30 @@ internal sealed class AppearanceSettings : INotifyPropertyChanged, IDisposable
     internal const double MinimumTextSize = 11;
 
     private const double DefaultTextSize = 13;
+    private const string DefaultAzureOpenAIApiKeyEnvironmentVariable = "AZURE_OPENAI_API_KEY";
+    private const string DefaultOpenAIApiKeyEnvironmentVariable = "OPENAI_API_KEY";
+    private const string DefaultOpenAIModel = "gpt-4.1-mini";
     private const int SettingsVersion = 1;
     private readonly string filePath;
     private Avalonia.Application? application;
     private bool copilotEnableAzureMcpByDefault;
     private bool copilotEnableMicrosoftLearnMcpByDefault;
     private KustoCopilotModel copilotDefaultModel = new("auto", "Automatic");
+    private KustoAIProviderKind providerKind;
     private bool copilotShareResultDataByDefault;
     private bool copilotShareSchemaByDefault = true;
     private bool copilotShareTabContentByDefault = true;
+    private KustoAzureOpenAIAuthenticationKind azureOpenAIAuthenticationKind;
+    private string azureOpenAIApiKeyEnvironmentVariable = DefaultAzureOpenAIApiKeyEnvironmentVariable;
+    private string azureOpenAIDeployment = string.Empty;
+    private string azureOpenAIEndpoint = string.Empty;
     private WorkbenchDensity density = WorkbenchDensity.Compact;
     private bool isDisposed;
     private bool isHighContrast;
     private IPlatformSettings? platformSettings;
+    private string openAIApiKeyEnvironmentVariable = DefaultOpenAIApiKeyEnvironmentVariable;
+    private string openAIEndpoint = string.Empty;
+    private string openAIModel = DefaultOpenAIModel;
     private double textSize = DefaultTextSize;
     private ThemePreference themePreference = ThemePreference.System;
 
@@ -113,6 +124,96 @@ internal sealed class AppearanceSettings : INotifyPropertyChanged, IDisposable
                 Save();
             }
         }
+    }
+
+    /// <inheritdoc />
+    public KustoAIProviderKind ProviderKind
+    {
+        get => providerKind;
+        set
+        {
+            if (!Enum.IsDefined(value))
+            {
+                throw new ArgumentOutOfRangeException(nameof(value));
+            }
+
+            if (providerKind != value)
+            {
+                providerKind = value;
+                OnPropertyChanged(nameof(ProviderKind));
+                Save();
+            }
+        }
+    }
+
+    /// <inheritdoc />
+    public string AzureOpenAIEndpoint
+    {
+        get => azureOpenAIEndpoint;
+        set => SetProviderText(ref azureOpenAIEndpoint, value, nameof(AzureOpenAIEndpoint));
+    }
+
+    /// <inheritdoc />
+    public string AzureOpenAIDeployment
+    {
+        get => azureOpenAIDeployment;
+        set => SetProviderText(ref azureOpenAIDeployment, value, nameof(AzureOpenAIDeployment));
+    }
+
+    /// <inheritdoc />
+    public KustoAzureOpenAIAuthenticationKind AzureOpenAIAuthenticationKind
+    {
+        get => azureOpenAIAuthenticationKind;
+        set
+        {
+            if (!Enum.IsDefined(value))
+            {
+                throw new ArgumentOutOfRangeException(nameof(value));
+            }
+
+            if (azureOpenAIAuthenticationKind != value)
+            {
+                azureOpenAIAuthenticationKind = value;
+                OnPropertyChanged(nameof(AzureOpenAIAuthenticationKind));
+                Save();
+            }
+        }
+    }
+
+    /// <inheritdoc />
+    public string AzureOpenAIApiKeyEnvironmentVariable
+    {
+        get => azureOpenAIApiKeyEnvironmentVariable;
+        set => SetProviderText(
+            ref azureOpenAIApiKeyEnvironmentVariable,
+            value,
+            nameof(AzureOpenAIApiKeyEnvironmentVariable),
+            DefaultAzureOpenAIApiKeyEnvironmentVariable);
+    }
+
+    /// <inheritdoc />
+    public string OpenAIEndpoint
+    {
+        get => openAIEndpoint;
+        set => SetProviderText(ref openAIEndpoint, value, nameof(OpenAIEndpoint));
+    }
+
+    /// <inheritdoc />
+    public string OpenAIModel
+    {
+        get => openAIModel;
+        set => SetProviderText(ref openAIModel, value, nameof(OpenAIModel), DefaultOpenAIModel);
+    }
+
+    /// <inheritdoc />
+    public string OpenAIApiKeyEnvironmentVariable
+    {
+        get => openAIApiKeyEnvironmentVariable;
+        set => SetProviderText(
+            ref openAIApiKeyEnvironmentVariable,
+            value,
+            nameof(OpenAIApiKeyEnvironmentVariable),
+            DefaultOpenAIApiKeyEnvironmentVariable);
     }
 
     /// <summary>
@@ -355,6 +456,18 @@ internal sealed class AppearanceSettings : INotifyPropertyChanged, IDisposable
             : new KustoCopilotModel(modelId, modelName);
     }
 
+    private static string ReadString(
+        JsonElement root,
+        string propertyName,
+        string defaultValue)
+    {
+        string? value = root.TryGetProperty(propertyName, out JsonElement element)
+            && element.ValueKind == JsonValueKind.String
+                ? element.GetString()
+                : null;
+        return string.IsNullOrWhiteSpace(value) ? defaultValue : value.Trim();
+    }
+
     private void ApplyThemePreference()
     {
         if (application is not null)
@@ -372,10 +485,17 @@ internal sealed class AppearanceSettings : INotifyPropertyChanged, IDisposable
     {
         if (application is not null)
         {
+            application.Resources["TypeBadgeSize"] = Math.Max(7, TextSize - 6);
+            application.Resources["TypeMicroSize"] = Math.Max(8, TextSize - 5);
+            application.Resources["TypeMetadataSize"] = Math.Max(9, TextSize - 4);
+            application.Resources["TypeSmallSize"] = Math.Max(10, TextSize - 3);
+            application.Resources["TypeCompactSize"] = Math.Max(11, TextSize - 2);
             application.Resources["TypeCaptionSize"] = Math.Max(10, TextSize - 1);
             application.Resources["TypeBodySize"] = TextSize;
             application.Resources["TypeEmphasisSize"] = TextSize + 1;
+            application.Resources["TypeSubheadingSize"] = TextSize + 2;
             application.Resources["TypeTitleSize"] = TextSize + 3;
+            application.Resources["TypeMetricSize"] = TextSize + 5;
             application.Resources["TypeDisplaySize"] = TextSize + 7;
             application.Resources["QueryEditorTextSize"] = TextSize + 1;
         }
@@ -398,6 +518,23 @@ internal sealed class AppearanceSettings : INotifyPropertyChanged, IDisposable
                     density = ReadEnum(root, "density", WorkbenchDensity.Compact);
                     textSize = ReadTextSize(root);
                     copilotDefaultModel = ReadCopilotDefaultModel(root);
+                    providerKind = ReadEnum(root, "aiProvider", KustoAIProviderKind.GitHubCopilot);
+                    azureOpenAIEndpoint = ReadString(root, "azureOpenAIEndpoint", string.Empty);
+                    azureOpenAIDeployment = ReadString(root, "azureOpenAIDeployment", string.Empty);
+                    azureOpenAIAuthenticationKind = ReadEnum(
+                        root,
+                        "azureOpenAIAuthentication",
+                        KustoAzureOpenAIAuthenticationKind.MicrosoftEntraId);
+                    azureOpenAIApiKeyEnvironmentVariable = ReadString(
+                        root,
+                        "azureOpenAIApiKeyEnvironmentVariable",
+                        DefaultAzureOpenAIApiKeyEnvironmentVariable);
+                    openAIEndpoint = ReadString(root, "openAIEndpoint", string.Empty);
+                    openAIModel = ReadString(root, "openAIModel", DefaultOpenAIModel);
+                    openAIApiKeyEnvironmentVariable = ReadString(
+                        root,
+                        "openAIApiKeyEnvironmentVariable",
+                        DefaultOpenAIApiKeyEnvironmentVariable);
                     copilotShareTabContentByDefault = ReadBoolean(root, "copilotShareTabContent", true);
                     copilotShareSchemaByDefault = ReadBoolean(root, "copilotShareSchema", true);
                     copilotShareResultDataByDefault = ReadBoolean(root, "copilotShareResultData", false);
@@ -449,6 +586,18 @@ internal sealed class AppearanceSettings : INotifyPropertyChanged, IDisposable
                 writer.WriteString("theme", ThemePreference.ToString());
                 writer.WriteString("density", Density.ToString());
                 writer.WriteNumber("textSize", TextSize);
+                writer.WriteString("aiProvider", ProviderKind.ToString());
+                writer.WriteString("azureOpenAIEndpoint", AzureOpenAIEndpoint);
+                writer.WriteString("azureOpenAIDeployment", AzureOpenAIDeployment);
+                writer.WriteString(
+                    "azureOpenAIAuthentication",
+                    AzureOpenAIAuthenticationKind.ToString());
+                writer.WriteString(
+                    "azureOpenAIApiKeyEnvironmentVariable",
+                    AzureOpenAIApiKeyEnvironmentVariable);
+                writer.WriteString("openAIEndpoint", OpenAIEndpoint);
+                writer.WriteString("openAIModel", OpenAIModel);
+                writer.WriteString("openAIApiKeyEnvironmentVariable", OpenAIApiKeyEnvironmentVariable);
                 writer.WriteString("copilotDefaultModelId", CopilotDefaultModel.Id);
                 writer.WriteString("copilotDefaultModelName", CopilotDefaultModel.Name);
                 writer.WriteBoolean("copilotShareTabContent", CopilotShareTabContentByDefault);
@@ -480,6 +629,21 @@ internal sealed class AppearanceSettings : INotifyPropertyChanged, IDisposable
     private void OnColorValuesChanged(object? sender, PlatformColorValues eventArguments)
     {
         UpdatePlatformPreferences(eventArguments);
+    }
+
+    private void SetProviderText(
+        ref string field,
+        string? value,
+        string propertyName,
+        string defaultValue = "")
+    {
+        string normalized = string.IsNullOrWhiteSpace(value) ? defaultValue : value.Trim();
+        if (!string.Equals(field, normalized, StringComparison.Ordinal))
+        {
+            field = normalized;
+            OnPropertyChanged(propertyName);
+            Save();
+        }
     }
 
     private void UpdatePlatformPreferences(PlatformColorValues colorValues)

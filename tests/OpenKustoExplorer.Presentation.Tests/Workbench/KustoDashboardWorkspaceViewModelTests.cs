@@ -1,5 +1,7 @@
+using Avalonia.Input;
 using OpenKustoExplorer.Application.Dashboards;
 using OpenKustoExplorer.Application.Execution;
+using OpenKustoExplorer.Desktop;
 using OpenKustoExplorer.Presentation.Workbench;
 
 namespace OpenKustoExplorer.Presentation.Tests.Workbench;
@@ -58,6 +60,33 @@ public sealed class KustoDashboardWorkspaceViewModelTests
         Assert.Equal(9, persistedWidget.Layout.Row);
         Assert.Equal(18, persistedWidget.Layout.ColumnSpan);
         Assert.Equal(12, persistedWidget.Layout.RowSpan);
+    }
+
+    /// <summary>
+    /// Verifies keyboard movement and resizing share the persisted snapped-layout path.
+    /// </summary>
+    [Fact]
+    public void KeyboardWidgetLayoutActionsMoveResizeAndPersist()
+    {
+        StubKustoDashboardStore store = new();
+        using KustoDashboardWorkspaceViewModel viewModel = new(store, new StubKustoQueryService());
+        viewModel.AddDashboard("Operations");
+        viewModel.OpenNewWidget(
+            "Errors",
+            new Uri("https://adx.contoso.com"),
+            "Telemetry",
+            "Errors | count",
+            null);
+        viewModel.SaveWidgetCommand.Execute(null);
+        KustoDashboardWidgetViewModel widget = Assert.Single(viewModel.SelectedDashboard!.Widgets);
+
+        Assert.True(KustoDashboardWidgetKeyboardLayout.TryAdjust(widget, Key.Right, isResize: false));
+        Assert.True(KustoDashboardWidgetKeyboardLayout.TryAdjust(widget, Key.Down, isResize: true));
+
+        KustoDashboardWidget persisted = Assert.Single(Assert.Single(store.SavedCatalog!.Dashboards).Widgets);
+        Assert.Equal(1, persisted.Layout.Column);
+        Assert.Equal(widget.RowSpan, persisted.Layout.RowSpan);
+        Assert.Contains("column 2", widget.LayoutAutomationText, StringComparison.Ordinal);
     }
 
     private sealed class StubKustoDashboardStore : IKustoDashboardStore

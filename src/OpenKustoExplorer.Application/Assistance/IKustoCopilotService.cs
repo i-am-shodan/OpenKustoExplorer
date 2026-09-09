@@ -1,19 +1,31 @@
 namespace OpenKustoExplorer.Application.Assistance;
 
 /// <summary>
-/// Uses GitHub Copilot to answer KQL questions and propose complete query documents.
+/// Uses a configured AI provider to answer KQL questions and propose complete query documents.
 /// </summary>
 public interface IKustoCopilotService
 {
+    /// <summary>Gets the active language-model provider.</summary>
+    public KustoAIProviderKind ProviderKind { get; }
+
+    /// <summary>Gets the active provider display name.</summary>
+    public string ProviderDisplayName { get; }
+
+    /// <summary>Gets a value indicating whether the provider supports an interactive sign-in flow.</summary>
+    public bool SupportsInteractiveSignIn { get; }
+
+    /// <summary>Gets a value indicating whether the provider supports configured MCP servers.</summary>
+    public bool SupportsMcp { get; }
+
     /// <summary>
-    /// Opens the official GitHub Copilot CLI sign-in flow.
+    /// Opens the active provider's interactive sign-in flow when supported.
     /// </summary>
     /// <param name="cancellationToken">Cancels waiting for the sign-in process.</param>
     /// <returns>A task that completes when the sign-in process exits.</returns>
     public Task SignInAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets models available to the signed-in GitHub Copilot account.
+    /// Gets models available from the active provider.
     /// </summary>
     /// <param name="cancellationToken">Cancels model discovery.</param>
     /// <returns>The available models in display order.</returns>

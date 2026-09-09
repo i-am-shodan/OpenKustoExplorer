@@ -1,9 +1,11 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using Avalonia;
 using Avalonia.Automation;
+using Avalonia.Automation.Peers;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
@@ -19,8 +21,10 @@ using Avalonia.VisualTree;
 using AvaloniaEdit;
 using OpenKustoExplorer.Application.Assistance;
 using OpenKustoExplorer.Application.Automations;
+using OpenKustoExplorer.Application.Diagnostics;
 using OpenKustoExplorer.Application.Execution;
 using OpenKustoExplorer.Application.Graphs;
+using OpenKustoExplorer.Application.Sessions;
 using OpenKustoExplorer.Desktop.Appearance;
 using OpenKustoExplorer.Desktop.Controls;
 using OpenKustoExplorer.Desktop.Editor;
@@ -119,18 +123,34 @@ public sealed partial class MainWindow : Window, IDisposable
     private KustoEditorController? editorController;
     private RadioButton? darkThemeOption;
     private RadioButton? settingsDarkThemeOption;
+    private ComboBox? settingsAIProvider;
+    private ComboBox? settingsAzureOpenAIAuthentication;
+    private TextBox? settingsAzureOpenAIApiKeyEnvironmentVariable;
+    private Grid? settingsAzureOpenAIApiKeyRow;
+    private TextBox? settingsAzureOpenAIDeployment;
+    private TextBox? settingsAzureOpenAIEndpoint;
+    private StackPanel? settingsAzureOpenAIOptions;
     private ToggleSwitch? settingsCopilotAzureMcpToggle;
+    private Grid? settingsCopilotAzureMcpRow;
     private ComboBox? settingsCopilotDefaultModel;
+    private Grid? settingsCopilotDefaultModelRow;
     private ToggleSwitch? settingsCopilotMicrosoftLearnMcpToggle;
+    private Grid? settingsCopilotMicrosoftLearnMcpRow;
     private ToggleSwitch? settingsCopilotShareResultDataToggle;
     private ToggleSwitch? settingsCopilotShareSchemaToggle;
     private ToggleSwitch? settingsCopilotShareTabContentToggle;
     private ToggleSwitch? settingsDensityToggle;
     private Border? settingsDialog;
     private RadioButton? settingsLightThemeOption;
+    private TextBox? settingsOpenAIApiKeyEnvironmentVariable;
+    private TextBox? settingsOpenAIEndpoint;
+    private TextBox? settingsOpenAIModel;
+    private StackPanel? settingsOpenAIOptions;
     private Button? settingsButton;
     private RadioButton? settingsSystemThemeOption;
     private NumericUpDown? settingsTextSize;
+    private bool suppressSettingsAIProviderChange;
+    private bool suppressSettingsAzureOpenAIAuthenticationChange;
     private bool suppressSettingsCopilotDefaultModelChange;
     private bool isDisposed;
     private bool isDocumentTabDragging;
@@ -140,7 +160,10 @@ public sealed partial class MainWindow : Window, IDisposable
     private RadioButton? lightThemeOption;
     private SplitView? navigationSplitView;
     private Button? newQueryButton;
+    private SplitView? pertinentValuesSplitView;
     private TextEditor? queryEditor;
+    private Button? recordButton;
+    private TextBox? recordingNameTextBox;
     private Border? resultHorizontalOverflowHint;
     private ScrollBar? resultHorizontalScrollBar;
     private ScrollViewer? resultRowsScrollViewer;
@@ -149,6 +172,7 @@ public sealed partial class MainWindow : Window, IDisposable
     private ScrollBar? resultVerticalScrollBar;
     private ListBox? resultsList;
     private TextBox? schemaSearch;
+    private Button? sessionsButton;
     private ItemsControl? signedInUsersList;
     private RadioButton? systemThemeOption;
     private TextBox? tabSearchBox;
@@ -159,7 +183,10 @@ public sealed partial class MainWindow : Window, IDisposable
     /// </summary>
     public MainWindow()
     {
-        AvaloniaXamlLoader.Load(this);
+        using (KustoPerformanceTrace.Measure("startup.main_window.xaml.load"))
+        {
+            AvaloniaXamlLoader.Load(this);
+        }
     }
 
     /// <summary>
@@ -184,7 +211,8 @@ public sealed partial class MainWindow : Window, IDisposable
 
         DataContext = viewModel;
         InitializeInteractiveControls();
-        automationNotificationDispatcher = new AutomationNotificationDispatcher(this);
+        automationNotificationDispatcher = new AutomationNotificationDispatcher(
+            new DesktopNotificationService(this));
         viewModel.AutomationNotificationRequested += OnAutomationNotificationRequested;
         this.appearanceSettings = appearanceSettings;
         viewModel.ApplyCopilotDefaults(CreateCopilotDefaults(appearanceSettings));
@@ -251,6 +279,64 @@ public sealed partial class MainWindow : Window, IDisposable
         }
     }
 
+    /// <summary>
+    /// Applies one bounded keyboard move or resize step to a dashboard widget.
+    /// </summary>
+    /// <param name="widget">The widget to adjust.</param>
+    /// <param name="key">The requested arrow direction.</param>
+    /// <param name="isResize">Whether to resize instead of move.</param>
+    /// <returns><see langword="true"/> when the key represents a layout action.</returns>
+    internal static bool AdjustDashboardWidgetLayout(
+        KustoDashboardWidgetViewModel widget,
+        Key key,
+        bool isResize)
+    {
+        ArgumentNullException.ThrowIfNull(widget);
+        if (key is not (Key.Left or Key.Right or Key.Up or Key.Down))
+        {
+            return false;
+        }
+
+        int column = widget.Column;
+        int row = widget.Row;
+        int columnSpan = widget.ColumnSpan;
+        int rowSpan = widget.RowSpan;
+        if (isResize)
+        {
+            columnSpan = key switch
+            {
+                Key.Left => Math.Max(DashboardMinimumColumnSpan, columnSpan - 1),
+                Key.Right => Math.Min(DashboardGridColumnCount - column, columnSpan + 1),
+                _ => columnSpan,
+            };
+            rowSpan = key switch
+            {
+                Key.Up => Math.Max(DashboardMinimumRowSpan, rowSpan - 1),
+                Key.Down => Math.Min(DashboardGridMaximumRowCount - row, rowSpan + 1),
+                _ => rowSpan,
+            };
+        }
+        else
+        {
+            column = key switch
+            {
+                Key.Left => Math.Max(0, column - 1),
+                Key.Right => Math.Min(DashboardGridColumnCount - columnSpan, column + 1),
+                _ => column,
+            };
+            row = key switch
+            {
+                Key.Up => Math.Max(0, row - 1),
+                Key.Down => Math.Min(DashboardGridMaximumRowCount - rowSpan, row + 1),
+                _ => row,
+            };
+        }
+
+        widget.PreviewLayout(column, row, columnSpan, rowSpan);
+        widget.CommitLayout();
+        return true;
+    }
+
     /// <inheritdoc />
     protected override void OnClosed(EventArgs e)
     {
@@ -262,6 +348,7 @@ public sealed partial class MainWindow : Window, IDisposable
     protected override void OnOpened(EventArgs e)
     {
         base.OnOpened(e);
+        KustoPerformanceTrace.RecordStartupMilestone("startup.main_window.opened");
 
         if (DataContext is MainWindowViewModel viewModel
             && !automationCancellationSource.IsCancellationRequested)
@@ -307,13 +394,69 @@ public sealed partial class MainWindow : Window, IDisposable
             or nameof(AppearanceSettings.CopilotEnableAzureMcpByDefault);
     }
 
+    private static bool IsAIProviderProperty(string? propertyName)
+    {
+        return propertyName is nameof(AppearanceSettings.ProviderKind)
+            or nameof(AppearanceSettings.AzureOpenAIEndpoint)
+            or nameof(AppearanceSettings.AzureOpenAIDeployment)
+            or nameof(AppearanceSettings.AzureOpenAIAuthenticationKind)
+            or nameof(AppearanceSettings.AzureOpenAIApiKeyEnvironmentVariable)
+            or nameof(AppearanceSettings.OpenAIEndpoint)
+            or nameof(AppearanceSettings.OpenAIModel)
+            or nameof(AppearanceSettings.OpenAIApiKeyEnvironmentVariable);
+    }
+
+    private static int GetDocumentShortcutIndex(Key key)
+    {
+        return key switch
+        {
+            Key.D1 => 0,
+            Key.D2 => 1,
+            Key.D3 => 2,
+            Key.D4 => 3,
+            Key.D5 => 4,
+            Key.D6 => 5,
+            Key.D7 => 6,
+            _ => -1,
+        };
+    }
+
+    private static void OnDashboardWidgetKeyDown(object? sender, KeyEventArgs eventArguments)
+    {
+        bool isMove = eventArguments.KeyModifiers == KeyModifiers.Alt;
+        bool isResize = eventArguments.KeyModifiers == (KeyModifiers.Alt | KeyModifiers.Shift);
+        if ((isMove || isResize)
+            && sender is Control { DataContext: KustoDashboardWidgetViewModel widget }
+            && AdjustDashboardWidgetLayout(widget, eventArguments.Key, isResize))
+        {
+            eventArguments.Handled = true;
+        }
+    }
+
+    private static void OnResultRowContainerPrepared(object? sender, ContainerPreparedEventArgs eventArguments)
+    {
+        _ = sender;
+        if (eventArguments.Container is ListBoxItem item
+            && item.DataContext is KustoResultRowViewModel row)
+        {
+            AutomationProperties.SetName(item, row.AutomationText);
+            AutomationProperties.SetControlTypeOverride(item, AutomationControlType.DataItem);
+        }
+    }
+
     private void OnAppearancePropertyChanged(object? sender, PropertyChangedEventArgs eventArguments)
     {
         if (sender is AppearanceSettings settings
-            && IsCopilotDefaultProperty(eventArguments.PropertyName)
             && DataContext is MainWindowViewModel viewModel)
         {
-            viewModel.ApplyCopilotDefaults(CreateCopilotDefaults(settings));
+            if (IsCopilotDefaultProperty(eventArguments.PropertyName))
+            {
+                viewModel.ApplyCopilotDefaults(CreateCopilotDefaults(settings));
+            }
+            else if (IsAIProviderProperty(eventArguments.PropertyName))
+            {
+                viewModel.RefreshCopilotProvider();
+            }
         }
 
         UpdateAppearanceClasses();
@@ -388,23 +531,26 @@ public sealed partial class MainWindow : Window, IDisposable
     private void OnConnectionsClick(object? sender, RoutedEventArgs eventArguments)
     {
         bool returningFromWorkspace = false;
+        MainWindowViewModel? viewModel = DataContext as MainWindowViewModel;
 
-        if (DataContext is MainWindowViewModel viewModel)
+        if (viewModel is not null)
         {
             returningFromWorkspace = !viewModel.IsQueryWorkbenchView;
-            viewModel.ShowQueryWorkbenchCommand.Execute(null);
         }
-
-        connectionsButton?.Classes.Add("selected");
-        dashboardButton?.Classes.Remove("selected");
-        automationButton?.Classes.Remove("selected");
-        graphButton?.Classes.Remove("selected");
 
         if (navigationSplitView is not null)
         {
             navigationSplitView.IsPaneOpen = returningFromWorkspace || !navigationSplitView.IsPaneOpen;
             Classes.Set("explorerOpen", navigationSplitView.IsPaneOpen);
         }
+
+        viewModel?.ShowQueryWorkbenchCommand.Execute(null);
+
+        connectionsButton?.Classes.Add("selected");
+        dashboardButton?.Classes.Remove("selected");
+        automationButton?.Classes.Remove("selected");
+        sessionsButton?.Classes.Remove("selected");
+        graphButton?.Classes.Remove("selected");
     }
 
     private void OnDashboardsClick(object? sender, RoutedEventArgs eventArguments)
@@ -418,6 +564,7 @@ public sealed partial class MainWindow : Window, IDisposable
         connectionsButton?.Classes.Remove("selected");
         dashboardButton?.Classes.Add("selected");
         automationButton?.Classes.Remove("selected");
+        sessionsButton?.Classes.Remove("selected");
         graphButton?.Classes.Remove("selected");
 
         if (navigationSplitView is not null)
@@ -437,7 +584,28 @@ public sealed partial class MainWindow : Window, IDisposable
         connectionsButton?.Classes.Remove("selected");
         dashboardButton?.Classes.Remove("selected");
         automationButton?.Classes.Add("selected");
+        sessionsButton?.Classes.Remove("selected");
         graphButton?.Classes.Remove("selected");
+    }
+
+    private async void OnSessionsClick(object? sender, RoutedEventArgs eventArguments)
+    {
+        if (DataContext is MainWindowViewModel viewModel)
+        {
+            await viewModel.ShowSessionsCommand.ExecuteAsync(null);
+        }
+
+        connectionsButton?.Classes.Remove("selected");
+        dashboardButton?.Classes.Remove("selected");
+        automationButton?.Classes.Remove("selected");
+        sessionsButton?.Classes.Add("selected");
+        graphButton?.Classes.Remove("selected");
+
+        if (navigationSplitView is not null)
+        {
+            navigationSplitView.IsPaneOpen = false;
+            Classes.Set("explorerOpen", false);
+        }
     }
 
     private void OnGraphClick(object? sender, RoutedEventArgs eventArguments)
@@ -450,6 +618,7 @@ public sealed partial class MainWindow : Window, IDisposable
         connectionsButton?.Classes.Remove("selected");
         dashboardButton?.Classes.Remove("selected");
         automationButton?.Classes.Remove("selected");
+        sessionsButton?.Classes.Remove("selected");
         graphButton?.Classes.Add("selected");
 
         if (navigationSplitView is not null)
@@ -819,6 +988,41 @@ public sealed partial class MainWindow : Window, IDisposable
         }
     }
 
+    private void OnSettingsAIProviderChanged(object? sender, SelectionChangedEventArgs eventArguments)
+    {
+        _ = eventArguments;
+        if (!suppressSettingsAIProviderChange
+            && appearanceSettings is not null
+            && sender is ComboBox { SelectedIndex: >= 0 } providerSelector
+            && Enum.IsDefined((KustoAIProviderKind)providerSelector.SelectedIndex))
+        {
+            appearanceSettings.ProviderKind = (KustoAIProviderKind)providerSelector.SelectedIndex;
+        }
+    }
+
+    private void OnSettingsAzureOpenAIAuthenticationChanged(
+        object? sender,
+        SelectionChangedEventArgs eventArguments)
+    {
+        _ = eventArguments;
+        if (!suppressSettingsAzureOpenAIAuthenticationChange
+            && appearanceSettings is not null
+            && sender is ComboBox { SelectedIndex: >= 0 } authenticationSelector
+            && Enum.IsDefined(
+                (KustoAzureOpenAIAuthenticationKind)authenticationSelector.SelectedIndex))
+        {
+            appearanceSettings.AzureOpenAIAuthenticationKind =
+                (KustoAzureOpenAIAuthenticationKind)authenticationSelector.SelectedIndex;
+        }
+    }
+
+    private void OnSettingsAIProviderTextLostFocus(object? sender, RoutedEventArgs eventArguments)
+    {
+        _ = sender;
+        _ = eventArguments;
+        ApplyAIProviderSettingsFromControls();
+    }
+
     private void OnSettingsCopilotDefaultModelChanged(object? sender, SelectionChangedEventArgs eventArguments)
     {
         _ = eventArguments;
@@ -891,6 +1095,97 @@ public sealed partial class MainWindow : Window, IDisposable
         }
     }
 
+    private async void OnOpenRecordingClick(object? sender, RoutedEventArgs eventArguments)
+    {
+        _ = sender;
+        _ = eventArguments;
+        if (DataContext is MainWindowViewModel viewModel)
+        {
+            await viewModel.Recording.OpenRecordingCommand.ExecuteAsync(null);
+            Dispatcher.UIThread.Post(() => recordingNameTextBox?.Focus());
+        }
+    }
+
+    private void OnCloseRecordingClick(object? sender, RoutedEventArgs eventArguments)
+    {
+        _ = sender;
+        _ = eventArguments;
+        if (DataContext is MainWindowViewModel viewModel)
+        {
+            viewModel.Recording.CloseRecordingCommand.Execute(null);
+            recordButton?.Focus();
+        }
+    }
+
+    private async void OnStartRecordingClick(object? sender, RoutedEventArgs eventArguments)
+    {
+        _ = sender;
+        _ = eventArguments;
+        if (DataContext is MainWindowViewModel viewModel
+            && viewModel.Recording.StartRecordingCommand.CanExecute(null))
+        {
+            await viewModel.Recording.StartRecordingCommand.ExecuteAsync(null);
+            if (!viewModel.Recording.IsRecordingDialogOpen)
+            {
+                viewModel.ShowQueryWorkbenchCommand.Execute(null);
+                queryEditor?.Focus();
+            }
+        }
+    }
+
+    private void OnTogglePertinentValuesClick(object? sender, RoutedEventArgs eventArguments)
+    {
+        _ = sender;
+        _ = eventArguments;
+        if (pertinentValuesSplitView is not null)
+        {
+            pertinentValuesSplitView.IsPaneOpen = !pertinentValuesSplitView.IsPaneOpen;
+        }
+    }
+
+    private void OnCancelRecordedSessionDeleteClick(object? sender, RoutedEventArgs eventArguments)
+    {
+        _ = sender;
+        _ = eventArguments;
+        if (DataContext is MainWindowViewModel viewModel)
+        {
+            viewModel.Recording.CancelDeleteSessionCommand.Execute(null);
+            sessionsButton?.Focus();
+        }
+    }
+
+    private async void OnDeleteRecordedSessionClick(object? sender, RoutedEventArgs eventArguments)
+    {
+        _ = sender;
+        _ = eventArguments;
+        if (DataContext is MainWindowViewModel viewModel
+            && viewModel.Recording.DeleteSessionCommand.CanExecute(null))
+        {
+            await viewModel.Recording.DeleteSessionCommand.ExecuteAsync(null);
+            sessionsButton?.Focus();
+        }
+    }
+
+    private async void OnRecordedSessionSelectionChanged(object? sender, SelectionChangedEventArgs eventArguments)
+    {
+        _ = eventArguments;
+        if (sender is ListBox { SelectedItem: KustoRecordedSessionSummaryViewModel session }
+            && DataContext is MainWindowViewModel viewModel)
+        {
+            await viewModel.Recording.SelectSessionCommand.ExecuteAsync(session);
+        }
+    }
+
+    private void OnRenameRecordedQueryClick(object? sender, RoutedEventArgs eventArguments)
+    {
+        if (sender is Control { DataContext: KustoRecordedExecutionViewModel execution }
+            && DataContext is MainWindowViewModel viewModel)
+        {
+            viewModel.Recording.OpenRenameExecution(execution);
+            eventArguments.Handled = true;
+        }
+    }
+
     private async Task RefreshSettingsCopilotModelsAsync(MainWindowViewModel viewModel)
     {
         if (!viewModel.Copilot.RefreshModelsCommand.CanExecute(null))
@@ -915,8 +1210,36 @@ public sealed partial class MainWindow : Window, IDisposable
     {
         if (settingsDialog is not null)
         {
+            ApplyAIProviderSettingsFromControls();
             settingsDialog.IsVisible = false;
             settingsButton?.Focus();
+        }
+    }
+
+    private void OnOpenLocalDataFolderClick(object? sender, RoutedEventArgs eventArguments)
+    {
+        _ = sender;
+        _ = eventArguments;
+        if (DataContext is not MainWindowViewModel viewModel
+            || string.IsNullOrWhiteSpace(viewModel.Recording.DatabaseDirectoryPath))
+        {
+            return;
+        }
+
+        try
+        {
+            Directory.CreateDirectory(viewModel.Recording.DatabaseDirectoryPath);
+            _ = Process.Start(new ProcessStartInfo(viewModel.Recording.DatabaseDirectoryPath)
+            {
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception exception) when (exception is Win32Exception
+            or IOException
+            or InvalidOperationException
+            or UnauthorizedAccessException)
+        {
+            ReportDesktopStatus($"Unable to open the local data folder: {exception.Message}");
         }
     }
 
@@ -949,6 +1272,16 @@ public sealed partial class MainWindow : Window, IDisposable
                 selectedItems.Clear();
                 selectedItems.Add(cell.Row);
             }
+        }
+    }
+
+    private void OnRecordedResultCellPointerPressed(object? sender, PointerPressedEventArgs eventArguments)
+    {
+        if (sender is Control { DataContext: KustoResultCellViewModel cell }
+            && DataContext is MainWindowViewModel viewModel)
+        {
+            viewModel.Recording.SetResultContext(cell);
+            eventArguments.Handled = eventArguments.GetCurrentPoint((Control)sender).Properties.IsRightButtonPressed;
         }
     }
 
@@ -1097,12 +1430,169 @@ public sealed partial class MainWindow : Window, IDisposable
 
     private void OnAddCellFilterClick(object? sender, RoutedEventArgs eventArguments)
     {
-        ExecuteResultContextCommand(sender, viewModel => viewModel.AddCellFilterCommand.Execute(null));
+        ExecuteResultContextCommand(
+            sender,
+            viewModel => viewModel.AddCellFilterFromResults(GetSelectedResultRows()));
+        eventArguments.Handled = true;
     }
 
     private void OnAddRowFilterClick(object? sender, RoutedEventArgs eventArguments)
     {
         ExecuteResultContextCommand(sender, viewModel => viewModel.AddRowFilterCommand.Execute(null));
+    }
+
+    private async void OnMarkRecordedCellClick(object? sender, RoutedEventArgs eventArguments)
+    {
+        if (DataContext is MainWindowViewModel viewModel)
+        {
+            if (sender is MenuItem { DataContext: KustoResultCellViewModel cell })
+            {
+                viewModel.SetResultContext(cell);
+            }
+
+            await viewModel.MarkRecordedCellCommand.ExecuteAsync(null);
+            eventArguments.Handled = true;
+        }
+    }
+
+    private async void OnMarkRecordedColumnClick(object? sender, RoutedEventArgs eventArguments)
+    {
+        if (DataContext is MainWindowViewModel viewModel)
+        {
+            if (sender is MenuItem { DataContext: KustoResultCellViewModel cell })
+            {
+                viewModel.SetResultContext(cell);
+            }
+
+            await viewModel.MarkRecordedColumnCommand.ExecuteAsync(null);
+            eventArguments.Handled = true;
+        }
+    }
+
+    private async void OnUnmarkRecordedCellClick(object? sender, RoutedEventArgs eventArguments)
+    {
+        if (DataContext is MainWindowViewModel viewModel)
+        {
+            if (sender is MenuItem { DataContext: KustoResultCellViewModel cell })
+            {
+                viewModel.SetResultContext(cell);
+            }
+
+            await viewModel.UnmarkRecordedCellCommand.ExecuteAsync(null);
+            eventArguments.Handled = true;
+        }
+    }
+
+    private async void OnMarkHistoricalCellClick(object? sender, RoutedEventArgs eventArguments)
+    {
+        await ExecuteHistoricalContextCommandAsync(
+            sender,
+            workspace => workspace.MarkSelectedCellCommand.ExecuteAsync(null));
+        eventArguments.Handled = true;
+    }
+
+    private async void OnMarkHistoricalColumnClick(object? sender, RoutedEventArgs eventArguments)
+    {
+        await ExecuteHistoricalContextCommandAsync(
+            sender,
+            workspace => workspace.MarkSelectedColumnCommand.ExecuteAsync(null));
+        eventArguments.Handled = true;
+    }
+
+    private async void OnUnmarkHistoricalCellClick(object? sender, RoutedEventArgs eventArguments)
+    {
+        await ExecuteHistoricalContextCommandAsync(
+            sender,
+            workspace => workspace.UnmarkSelectedCellCommand.ExecuteAsync(null));
+        eventArguments.Handled = true;
+    }
+
+    private async void OnSetHistoricalChainStartClick(object? sender, RoutedEventArgs eventArguments)
+    {
+        await ExecuteHistoricalContextCommandAsync(
+            sender,
+            workspace => workspace.SetChainStartCommand.ExecuteAsync(null));
+        eventArguments.Handled = true;
+    }
+
+    private async void OnSetHistoricalChainEndClick(object? sender, RoutedEventArgs eventArguments)
+    {
+        await ExecuteHistoricalContextCommandAsync(
+            sender,
+            workspace => workspace.SetChainEndCommand.ExecuteAsync(null));
+        eventArguments.Handled = true;
+    }
+
+    private async void OnSetPertinentValueChainStartClick(object? sender, RoutedEventArgs eventArguments)
+    {
+        await SetPertinentValueEndpointAsync(sender, KustoChainEndpointRole.Start);
+        eventArguments.Handled = true;
+    }
+
+    private async void OnSetPertinentValueChainEndClick(object? sender, RoutedEventArgs eventArguments)
+    {
+        await SetPertinentValueEndpointAsync(sender, KustoChainEndpointRole.End);
+        eventArguments.Handled = true;
+    }
+
+    private void OnRecordedTimelineValuePointerPressed(object? sender, PointerPressedEventArgs eventArguments)
+    {
+        if (sender is Control { DataContext: KustoRecordedTimelineValueViewModel value } control
+            && DataContext is MainWindowViewModel viewModel
+            && eventArguments.GetCurrentPoint(control).Properties.IsLeftButtonPressed)
+        {
+            viewModel.Recording.SelectTimelineValue(value);
+            eventArguments.Handled = true;
+        }
+    }
+
+    private async void OnSetTimelineValueChainStartClick(object? sender, RoutedEventArgs eventArguments)
+    {
+        await SetTimelineValueEndpointAsync(sender, KustoChainEndpointRole.Start);
+        eventArguments.Handled = true;
+    }
+
+    private async void OnSetTimelineValueChainEndClick(object? sender, RoutedEventArgs eventArguments)
+    {
+        await SetTimelineValueEndpointAsync(sender, KustoChainEndpointRole.End);
+        eventArguments.Handled = true;
+    }
+
+    private async Task SetPertinentValueEndpointAsync(
+        object? sender,
+        KustoChainEndpointRole role)
+    {
+        if (sender is MenuItem { DataContext: KustoRecordedPertinentValueViewModel value }
+            && DataContext is MainWindowViewModel viewModel)
+        {
+            await viewModel.Recording.SetEndpointFromPertinentValueAsync(value, role);
+        }
+    }
+
+    private async Task SetTimelineValueEndpointAsync(
+        object? sender,
+        KustoChainEndpointRole role)
+    {
+        if (sender is MenuItem { DataContext: KustoRecordedTimelineValueViewModel value }
+            && DataContext is MainWindowViewModel viewModel)
+        {
+            await viewModel.Recording.SetEndpointFromTimelineValueAsync(value, role);
+        }
+    }
+
+    private async Task ExecuteHistoricalContextCommandAsync(
+        object? sender,
+        Func<KustoRecordingWorkspaceViewModel, Task> action)
+    {
+        if (DataContext is MainWindowViewModel viewModel)
+        {
+            if (sender is MenuItem { DataContext: KustoResultCellViewModel cell })
+            {
+                viewModel.Recording.SetResultContext(cell);
+            }
+
+            await action(viewModel.Recording);
+        }
     }
 
     private void OnConditionalFormattingClick(object? sender, RoutedEventArgs eventArguments)
@@ -1117,6 +1607,13 @@ public sealed partial class MainWindow : Window, IDisposable
     private void OnExportCsvClick(object? sender, RoutedEventArgs eventArguments)
     {
         _ = ExportResultsAsync(KustoResultExportFormat.Csv);
+    }
+
+    private void OnExportPertinentValuesCsvClick(object? sender, RoutedEventArgs eventArguments)
+    {
+        _ = sender;
+        _ = eventArguments;
+        _ = ExportPertinentValuesCsvAsync();
     }
 
     private void OnExportExcelClick(object? sender, RoutedEventArgs eventArguments)
@@ -1415,7 +1912,8 @@ public sealed partial class MainWindow : Window, IDisposable
 
     private bool TryHandleGlobalShortcut(KeyEventArgs eventArguments)
     {
-        bool handled = TryCloseSettings(eventArguments);
+        bool handled = TryCloseRecordingDialog(eventArguments)
+            || TryCloseSettings(eventArguments);
 
         if (!handled && DataContext is MainWindowViewModel viewModel)
         {
@@ -1486,6 +1984,53 @@ public sealed partial class MainWindow : Window, IDisposable
         return requestsRun || requestsCancellation;
     }
 
+    private bool TryCloseRecordingDialog(KeyEventArgs eventArguments)
+    {
+        bool requestsClose = eventArguments.Key == Key.Escape
+            && eventArguments.KeyModifiers == KeyModifiers.None;
+        if (!requestsClose || DataContext is not MainWindowViewModel viewModel)
+        {
+            return false;
+        }
+
+        if (viewModel.Recording.IsDatabaseRecoveryOpen)
+        {
+            viewModel.Recording.CancelDatabaseRecoveryCommand.Execute(null);
+            sessionsButton?.Focus();
+            return true;
+        }
+
+        if (viewModel.Recording.IsRecordingDialogOpen)
+        {
+            viewModel.Recording.CloseRecordingCommand.Execute(null);
+            recordButton?.Focus();
+            return true;
+        }
+
+        if (viewModel.Recording.IsDeleteConfirmationOpen)
+        {
+            viewModel.Recording.CancelDeleteSessionCommand.Execute(null);
+            sessionsButton?.Focus();
+            return true;
+        }
+
+        if (viewModel.Recording.IsDeleteExecutionConfirmationOpen)
+        {
+            viewModel.Recording.CancelDeleteExecutionCommand.Execute(null);
+            sessionsButton?.Focus();
+            return true;
+        }
+
+        if (viewModel.Recording.IsChainGenerationDialogOpen)
+        {
+            viewModel.Recording.DismissChainGenerationDialogCommand.Execute(null);
+            sessionsButton?.Focus();
+            return true;
+        }
+
+        return false;
+    }
+
     private bool TryCloseSettings(KeyEventArgs eventArguments)
     {
         bool handled = settingsDialog?.IsVisible == true
@@ -1503,22 +2048,16 @@ public sealed partial class MainWindow : Window, IDisposable
 
     private bool TryHandleDocumentShortcut(KeyEventArgs eventArguments)
     {
-        bool handled = false;
+        if (TryHandleDocumentReorderShortcut(eventArguments))
+        {
+            return true;
+        }
 
+        bool handled = false;
         if (eventArguments.KeyModifiers == KeyModifiers.Control
             && DataContext is MainWindowViewModel viewModel)
         {
-            int documentIndex = eventArguments.Key switch
-            {
-                Key.D1 => 0,
-                Key.D2 => 1,
-                Key.D3 => 2,
-                Key.D4 => 3,
-                Key.D5 => 4,
-                Key.D6 => 5,
-                Key.D7 => 6,
-                _ => -1,
-            };
+            int documentIndex = GetDocumentShortcutIndex(eventArguments.Key);
 
             if (eventArguments.Key == Key.N)
             {
@@ -1544,6 +2083,22 @@ public sealed partial class MainWindow : Window, IDisposable
         }
 
         return handled;
+    }
+
+    private bool TryHandleDocumentReorderShortcut(KeyEventArgs eventArguments)
+    {
+        if (eventArguments.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift)
+            && DataContext is MainWindowViewModel viewModel
+            && viewModel.SelectedDocument is KustoDocumentViewModel selectedDocument
+            && eventArguments.Key is Key.PageUp or Key.PageDown)
+        {
+            int offset = eventArguments.Key == Key.PageUp ? -1 : 1;
+            viewModel.MoveDocumentBlock(selectedDocument, offset);
+            documentTabs?.Focus();
+            return true;
+        }
+
+        return false;
     }
 
     private bool TryHandlePanelShortcut(KeyEventArgs eventArguments)
@@ -1636,16 +2191,18 @@ public sealed partial class MainWindow : Window, IDisposable
 
     private void FocusConnectionsPanel(MainWindowViewModel viewModel)
     {
-        viewModel.ShowQueryWorkbenchCommand.Execute(null);
-        connectionsButton?.Classes.Add("selected");
-        automationButton?.Classes.Remove("selected");
-        graphButton?.Classes.Remove("selected");
-
         if (navigationSplitView is not null)
         {
             navigationSplitView.IsPaneOpen = true;
             Classes.Set("explorerOpen", true);
         }
+
+        viewModel.ShowQueryWorkbenchCommand.Execute(null);
+        connectionsButton?.Classes.Add("selected");
+        dashboardButton?.Classes.Remove("selected");
+        automationButton?.Classes.Remove("selected");
+        sessionsButton?.Classes.Remove("selected");
+        graphButton?.Classes.Remove("selected");
 
         schemaSearch?.Focus();
     }
@@ -1756,7 +2313,10 @@ public sealed partial class MainWindow : Window, IDisposable
         lightThemeOption = FindRequiredControl<RadioButton>("LightThemeOption");
         navigationSplitView = FindRequiredControl<SplitView>("NavigationSplitView");
         newQueryButton = FindRequiredControl<Button>("NewQueryButton");
+        pertinentValuesSplitView = FindRequiredControl<SplitView>("PertinentValuesSplitView");
         queryEditor = FindRequiredControl<TextEditor>("QueryEditor");
+        recordButton = FindRequiredControl<Button>("RecordButton");
+        recordingNameTextBox = FindRequiredControl<TextBox>("RecordingNameTextBox");
         resultHorizontalOverflowHint = FindRequiredControl<Border>("ResultHorizontalOverflowHint");
         resultHorizontalScrollBar = FindRequiredControl<ScrollBar>("ResultHorizontalScrollBar");
         resultScrollViewer = FindRequiredControl<ScrollViewer>("ResultScrollViewer");
@@ -1764,10 +2324,23 @@ public sealed partial class MainWindow : Window, IDisposable
         resultVerticalScrollBar = FindRequiredControl<ScrollBar>("ResultVerticalScrollBar");
         resultsList = FindRequiredControl<ListBox>("ResultsList");
         schemaSearch = FindRequiredControl<TextBox>("SchemaSearch");
+        sessionsButton = FindRequiredControl<Button>("SessionsButton");
         settingsButton = FindRequiredControl<Button>("SettingsButton");
+        settingsAIProvider = FindRequiredControl<ComboBox>("SettingsAIProvider");
+        settingsAzureOpenAIAuthentication = FindRequiredControl<ComboBox>(
+            "SettingsAzureOpenAIAuthentication");
+        settingsAzureOpenAIApiKeyEnvironmentVariable = FindRequiredControl<TextBox>(
+            "SettingsAzureOpenAIApiKeyEnvironmentVariable");
+        settingsAzureOpenAIApiKeyRow = FindRequiredControl<Grid>("SettingsAzureOpenAIApiKeyRow");
+        settingsAzureOpenAIDeployment = FindRequiredControl<TextBox>("SettingsAzureOpenAIDeployment");
+        settingsAzureOpenAIEndpoint = FindRequiredControl<TextBox>("SettingsAzureOpenAIEndpoint");
+        settingsAzureOpenAIOptions = FindRequiredControl<StackPanel>("SettingsAzureOpenAIOptions");
         settingsCopilotAzureMcpToggle = FindRequiredControl<ToggleSwitch>("SettingsCopilotAzureMcpToggle");
+        settingsCopilotAzureMcpRow = FindRequiredControl<Grid>("SettingsCopilotAzureMcpRow");
         settingsCopilotDefaultModel = FindRequiredControl<ComboBox>("SettingsCopilotDefaultModel");
+        settingsCopilotDefaultModelRow = FindRequiredControl<Grid>("SettingsCopilotDefaultModelRow");
         settingsCopilotMicrosoftLearnMcpToggle = FindRequiredControl<ToggleSwitch>("SettingsCopilotMicrosoftLearnMcpToggle");
+        settingsCopilotMicrosoftLearnMcpRow = FindRequiredControl<Grid>("SettingsCopilotMicrosoftLearnMcpRow");
         settingsCopilotShareResultDataToggle = FindRequiredControl<ToggleSwitch>("SettingsCopilotShareResultDataToggle");
         settingsCopilotShareSchemaToggle = FindRequiredControl<ToggleSwitch>("SettingsCopilotShareSchemaToggle");
         settingsCopilotShareTabContentToggle = FindRequiredControl<ToggleSwitch>("SettingsCopilotShareTabContentToggle");
@@ -1775,6 +2348,11 @@ public sealed partial class MainWindow : Window, IDisposable
         settingsDensityToggle = FindRequiredControl<ToggleSwitch>("SettingsDensityToggle");
         settingsDialog = FindRequiredControl<Border>("SettingsDialog");
         settingsLightThemeOption = FindRequiredControl<RadioButton>("SettingsLightThemeOption");
+        settingsOpenAIApiKeyEnvironmentVariable = FindRequiredControl<TextBox>(
+            "SettingsOpenAIApiKeyEnvironmentVariable");
+        settingsOpenAIEndpoint = FindRequiredControl<TextBox>("SettingsOpenAIEndpoint");
+        settingsOpenAIModel = FindRequiredControl<TextBox>("SettingsOpenAIModel");
+        settingsOpenAIOptions = FindRequiredControl<StackPanel>("SettingsOpenAIOptions");
         settingsSystemThemeOption = FindRequiredControl<RadioButton>("SettingsSystemThemeOption");
         settingsTextSize = FindRequiredControl<NumericUpDown>("SettingsTextSize");
         signedInUsersList = FindRequiredControl<ItemsControl>("SignedInUsersList");
@@ -1873,6 +2451,45 @@ public sealed partial class MainWindow : Window, IDisposable
                 }
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                viewModel.ReportActionStatus($"Export failed: {exception.Message}");
+            }
+        }
+    }
+
+    private async Task ExportPertinentValuesCsvAsync()
+    {
+        if (DataContext is MainWindowViewModel viewModel)
+        {
+            try
+            {
+                KustoResultExportFile export = viewModel.Recording.CreatePertinentValuesCsvExport();
+                FilePickerFileType fileType = new("CSV")
+                {
+                    Patterns = ["*.csv"],
+                    MimeTypes = [export.ContentType],
+                };
+                IStorageFile? file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+                {
+                    Title = "Export pertinent values",
+                    SuggestedFileName = export.SuggestedFileName,
+                    DefaultExtension = "csv",
+                    SuggestedFileType = fileType,
+                    FileTypeChoices = [fileType],
+                    ShowOverwritePrompt = true,
+                });
+
+                if (file is not null)
+                {
+                    await using Stream stream = await file.OpenWriteAsync();
+                    stream.SetLength(0);
+                    await stream.WriteAsync(export.Content);
+                    viewModel.ReportActionStatus("Exported pertinent values");
+                }
+            }
+            catch (Exception exception) when (exception is IOException
+                or UnauthorizedAccessException
+                or InvalidOperationException)
             {
                 viewModel.ReportActionStatus($"Export failed: {exception.Message}");
             }
@@ -2218,6 +2835,33 @@ public sealed partial class MainWindow : Window, IDisposable
     {
         if (appearanceSettings is not null)
         {
+            suppressSettingsAIProviderChange = true;
+            try
+            {
+                settingsAIProvider!.SelectedIndex = (int)appearanceSettings.ProviderKind;
+            }
+            finally
+            {
+                suppressSettingsAIProviderChange = false;
+            }
+
+            bool usesAzureOpenAI = appearanceSettings.ProviderKind == KustoAIProviderKind.AzureOpenAI;
+            bool usesOpenAI = appearanceSettings.ProviderKind == KustoAIProviderKind.OpenAI;
+            bool usesGitHubCopilot = appearanceSettings.ProviderKind == KustoAIProviderKind.GitHubCopilot;
+            settingsAzureOpenAIOptions!.IsVisible = usesAzureOpenAI;
+            settingsOpenAIOptions!.IsVisible = usesOpenAI;
+            settingsCopilotDefaultModelRow!.IsVisible = usesGitHubCopilot;
+            settingsCopilotMicrosoftLearnMcpRow!.IsVisible = usesGitHubCopilot;
+            settingsCopilotAzureMcpRow!.IsVisible = usesGitHubCopilot;
+            settingsAzureOpenAIEndpoint!.Text = appearanceSettings.AzureOpenAIEndpoint;
+            settingsAzureOpenAIDeployment!.Text = appearanceSettings.AzureOpenAIDeployment;
+            UpdateAzureOpenAIAuthenticationControls();
+            settingsAzureOpenAIApiKeyEnvironmentVariable!.Text =
+                appearanceSettings.AzureOpenAIApiKeyEnvironmentVariable;
+            settingsOpenAIEndpoint!.Text = appearanceSettings.OpenAIEndpoint;
+            settingsOpenAIModel!.Text = appearanceSettings.OpenAIModel;
+            settingsOpenAIApiKeyEnvironmentVariable!.Text = appearanceSettings.OpenAIApiKeyEnvironmentVariable;
+
             if (settingsCopilotDefaultModel is not null && DataContext is MainWindowViewModel viewModel)
             {
                 KustoCopilotModel? selectedModel = viewModel.Copilot.Models.FirstOrDefault(model => string.Equals(
@@ -2242,6 +2886,42 @@ public sealed partial class MainWindow : Window, IDisposable
             settingsCopilotMicrosoftLearnMcpToggle!.IsChecked = appearanceSettings.CopilotEnableMicrosoftLearnMcpByDefault;
             settingsCopilotAzureMcpToggle!.IsChecked = appearanceSettings.CopilotEnableAzureMcpByDefault;
             settingsCopilotAzureMcpToggle.IsEnabled = appearanceSettings.CanEnableAzureMcpByDefault;
+        }
+    }
+
+    private void ApplyAIProviderSettingsFromControls()
+    {
+        if (appearanceSettings is not null)
+        {
+            appearanceSettings.AzureOpenAIEndpoint = settingsAzureOpenAIEndpoint?.Text ?? string.Empty;
+            appearanceSettings.AzureOpenAIDeployment = settingsAzureOpenAIDeployment?.Text ?? string.Empty;
+            appearanceSettings.AzureOpenAIApiKeyEnvironmentVariable =
+                settingsAzureOpenAIApiKeyEnvironmentVariable?.Text ?? string.Empty;
+            appearanceSettings.OpenAIEndpoint = settingsOpenAIEndpoint?.Text ?? string.Empty;
+            appearanceSettings.OpenAIModel = settingsOpenAIModel?.Text ?? string.Empty;
+            appearanceSettings.OpenAIApiKeyEnvironmentVariable =
+                settingsOpenAIApiKeyEnvironmentVariable?.Text ?? string.Empty;
+        }
+    }
+
+    private void UpdateAzureOpenAIAuthenticationControls()
+    {
+        if (appearanceSettings is not null)
+        {
+            suppressSettingsAzureOpenAIAuthenticationChange = true;
+            try
+            {
+                settingsAzureOpenAIAuthentication!.SelectedIndex =
+                    (int)appearanceSettings.AzureOpenAIAuthenticationKind;
+            }
+            finally
+            {
+                suppressSettingsAzureOpenAIAuthenticationChange = false;
+            }
+
+            settingsAzureOpenAIApiKeyRow!.IsVisible =
+                appearanceSettings.AzureOpenAIAuthenticationKind
+                == KustoAzureOpenAIAuthenticationKind.ApiKey;
         }
     }
 
@@ -2336,6 +3016,23 @@ public sealed partial class MainWindow : Window, IDisposable
                 ? Avalonia.Layout.HorizontalAlignment.Right
                 : Avalonia.Layout.HorizontalAlignment.Stretch;
             copilotPanel.ZIndex = useOverlay ? 20 : 0;
+        }
+
+        UpdatePertinentValuesLayout(width);
+    }
+
+    private void UpdatePertinentValuesLayout(double width)
+    {
+        if (pertinentValuesSplitView is not null)
+        {
+            SplitViewDisplayMode displayMode = width < CompactLayoutBreakpoint
+                ? SplitViewDisplayMode.Overlay
+                : SplitViewDisplayMode.Inline;
+            if (pertinentValuesSplitView.DisplayMode != displayMode)
+            {
+                pertinentValuesSplitView.DisplayMode = displayMode;
+                pertinentValuesSplitView.IsPaneOpen = displayMode == SplitViewDisplayMode.Inline;
+            }
         }
     }
 }

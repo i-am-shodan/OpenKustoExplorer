@@ -48,8 +48,25 @@ internal sealed class KustoCompletionData : ICompletionData
         ArgumentNullException.ThrowIfNull(completionSegment);
         ArgumentNullException.ThrowIfNull(insertionRequestEventArgs);
 
+        int caretOffset = ApplyToDocument(textArea.Document, completionSegment);
+        textArea.Caret.Offset = caretOffset;
+    }
+
+    /// <summary>
+    /// Applies the completion text and returns the resulting caret offset.
+    /// </summary>
+    /// <param name="document">The editor document.</param>
+    /// <param name="completionSegment">The document segment replaced by the completion.</param>
+    /// <returns>The caret offset between the completion's before and after text.</returns>
+    internal int ApplyToDocument(TextDocument document, ISegment completionSegment)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(completionSegment);
+
+        int insertionOffset = completionSegment.Offset;
         string insertionText = completion.BeforeText + completion.AfterText;
-        textArea.Document.Replace(completionSegment.Offset, completionSegment.Length, insertionText);
-        textArea.Caret.Offset = completionSegment.Offset + completion.BeforeText.Length;
+        document.Replace(insertionOffset, completionSegment.Length, insertionText);
+
+        return insertionOffset + completion.BeforeText.Length;
     }
 }

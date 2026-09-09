@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace OpenKustoExplorer.Infrastructure.Storage;
 
 /// <summary>
@@ -5,6 +7,43 @@ namespace OpenKustoExplorer.Infrastructure.Storage;
 /// </summary>
 internal static class AtomicFileStore
 {
+    /// <summary>
+    /// Reads a persisted value, preserving malformed input and returning a clean default.
+    /// </summary>
+    /// <typeparam name="T">The persisted value type.</typeparam>
+    /// <param name="filePath">The absolute source path.</param>
+    /// <param name="readContent">Reads the complete value from the supplied stream.</param>
+    /// <param name="createDefault">Creates the value returned when no readable file exists.</param>
+    /// <returns>The persisted value, or a clean default when the file is absent or malformed.</returns>
+    internal static T ReadOrDefault<T>(
+        string filePath,
+        Func<Stream, T> readContent,
+        Func<T> createDefault)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
+        ArgumentNullException.ThrowIfNull(readContent);
+        ArgumentNullException.ThrowIfNull(createDefault);
+
+        if (!File.Exists(filePath))
+        {
+            return createDefault();
+        }
+
+        try
+        {
+            using FileStream stream = File.OpenRead(filePath);
+            return readContent(stream);
+        }
+        catch (Exception exception) when (exception is JsonException
+            or InvalidDataException
+            or ArgumentException
+            or FormatException)
+        {
+            PreserveUnreadable(filePath);
+            return createDefault();
+        }
+    }
+
     /// <summary>
     /// Atomically writes a file by staging content in a temporary file and moving it into place.
     /// </summary>

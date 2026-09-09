@@ -1,7 +1,6 @@
 using System.Text;
 using Kusto.Language;
 using Kusto.Language.Editor;
-using Kusto.Language.Symbols;
 using Kusto.Language.Syntax;
 using OpenKustoExplorer.Application.Execution;
 using OpenKustoExplorer.Application.Language;
@@ -128,7 +127,7 @@ public sealed class KustoLanguageService : IKustoLanguageService
         ArgumentOutOfRangeException.ThrowIfGreaterThan(caretPosition, text.Length);
         cancellationToken.ThrowIfCancellationRequested();
 
-        GlobalState globalState = CreateGlobalState(databaseSchema);
+        GlobalState globalState = KustoGlobalStateFactory.Create(databaseSchema);
         CodeScript script = CodeScript.From(text, globalState);
         List<KustoClassification> classifications = [];
         List<KustoDiagnostic> diagnostics = [];
@@ -170,25 +169,6 @@ public sealed class KustoLanguageService : IKustoLanguageService
             completionInfo.EditLength);
 
         return analysis;
-    }
-
-    private static GlobalState CreateGlobalState(KustoDatabaseSchema databaseSchema)
-    {
-        IEnumerable<Symbol> tableSymbols = databaseSchema.Tables
-            .Select(CreateTableSymbol)
-            .Cast<Symbol>();
-        IEnumerable<Symbol> functionSymbols = databaseSchema.Functions
-            .Select(CreateFunctionSymbol)
-            .Cast<Symbol>();
-        DatabaseSymbol databaseSymbol = new(
-            databaseSchema.DatabaseName,
-            tableSymbols.Concat(functionSymbols).ToArray());
-        ClusterSymbol clusterSymbol = new(databaseSchema.ClusterName, databaseSymbol);
-        GlobalState globalState = GlobalState.Default
-            .WithCluster(clusterSymbol)
-            .WithDatabase(databaseSymbol);
-
-        return globalState;
     }
 
     private static KustoGraphQueryPlan? CreateGraphQueryPlan(
@@ -285,16 +265,6 @@ public sealed class KustoLanguageService : IKustoLanguageService
         return makeGraph;
     }
 
-    private static FunctionSymbol CreateFunctionSymbol(KustoFunctionSchema functionSchema)
-    {
-        return new FunctionSymbol(
-            functionSchema.Name,
-            functionSchema.Parameters,
-            functionSchema.Body,
-            Tabularity.Tabular,
-            functionSchema.Documentation);
-    }
-
     private static ExpressionStatement? FindFinalExpressionStatement(SyntaxNode syntax)
     {
         ExpressionStatement? finalStatement = null;
@@ -307,44 +277,6 @@ public sealed class KustoLanguageService : IKustoLanguageService
             }
         });
         return finalStatement;
-    }
-
-    private static TableSymbol CreateTableSymbol(KustoTableSchema tableSchema)
-    {
-        ColumnSymbol[] columnSymbols = tableSchema.Columns
-            .Select(CreateColumnSymbol)
-            .ToArray();
-        TableSymbol tableSymbol = new(tableSchema.Name, columnSymbols);
-
-        return tableSymbol;
-    }
-
-    private static ColumnSymbol CreateColumnSymbol(KustoColumnSchema columnSchema)
-    {
-        TypeSymbol scalarType = GetScalarType(columnSchema.Type);
-        ColumnSymbol columnSymbol = new(columnSchema.Name, scalarType);
-
-        return columnSymbol;
-    }
-
-    private static TypeSymbol GetScalarType(KustoScalarType scalarType)
-    {
-        TypeSymbol result = scalarType switch
-        {
-            KustoScalarType.Bool => ScalarTypes.Bool,
-            KustoScalarType.DateTime => ScalarTypes.DateTime,
-            KustoScalarType.FixedPoint => ScalarTypes.Decimal,
-            KustoScalarType.Dynamic => ScalarTypes.Dynamic,
-            KustoScalarType.Identifier => ScalarTypes.Guid,
-            KustoScalarType.WholeNumber => ScalarTypes.Int,
-            KustoScalarType.WideInteger => ScalarTypes.Long,
-            KustoScalarType.Real => ScalarTypes.Real,
-            KustoScalarType.Text => ScalarTypes.String,
-            KustoScalarType.TimeSpan => ScalarTypes.TimeSpan,
-            _ => throw new ArgumentOutOfRangeException(nameof(scalarType), scalarType, "Unsupported Kusto scalar type."),
-        };
-
-        return result;
     }
 
     private static KustoQuerySelection CreateQuerySelection(string text, CodeBlock block)

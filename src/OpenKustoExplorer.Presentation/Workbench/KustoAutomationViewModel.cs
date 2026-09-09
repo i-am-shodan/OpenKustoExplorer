@@ -28,7 +28,7 @@ public sealed class KustoAutomationViewModel : ObservableObject
     /// Initializes a new instance of the <see cref="KustoAutomationViewModel"/> class.
     /// </summary>
     /// <param name="automation">The immutable persisted automation.</param>
-    /// <param name="fallbackVisualization">Render instructions recovered from scheduled KQL.</param>
+    /// <param name="fallbackVisualizationFactory">Creates render instructions recovered from scheduled KQL.</param>
     /// <param name="deleteAction">Deletes this automation.</param>
     /// <param name="stateChangedAction">Persists a scheduler state change.</param>
     /// <param name="runNowAction">Executes this automation immediately.</param>
@@ -36,7 +36,7 @@ public sealed class KustoAutomationViewModel : ObservableObject
     /// <param name="configureNotificationsAction">Opens notification settings when supplied.</param>
     internal KustoAutomationViewModel(
         KustoAutomation automation,
-        KustoVisualization? fallbackVisualization,
+        Func<KustoVisualization?> fallbackVisualizationFactory,
         Action<KustoAutomationViewModel> deleteAction,
         Action<KustoAutomationViewModel> stateChangedAction,
         Func<KustoAutomationViewModel, Task> runNowAction,
@@ -44,6 +44,7 @@ public sealed class KustoAutomationViewModel : ObservableObject
         Action<KustoAutomationViewModel>? configureNotificationsAction = null)
     {
         ArgumentNullException.ThrowIfNull(automation);
+        ArgumentNullException.ThrowIfNull(fallbackVisualizationFactory);
         ArgumentNullException.ThrowIfNull(deleteAction);
         ArgumentNullException.ThrowIfNull(stateChangedAction);
         ArgumentNullException.ThrowIfNull(runNowAction);
@@ -60,6 +61,7 @@ public sealed class KustoAutomationViewModel : ObservableObject
         nextRunAtUtc = automation.NextRunAtUtc;
         StopAtUtc = automation.StopAtUtc;
         isEnabled = automation.IsEnabled;
+        Lazy<KustoVisualization?> fallbackVisualization = new(fallbackVisualizationFactory);
         Runs = new ObservableCollection<KustoAutomationRunViewModel>(
             automation.Runs
                 .Reverse()
