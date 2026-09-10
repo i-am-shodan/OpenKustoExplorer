@@ -13,18 +13,21 @@ public sealed class KustoLanguageAnalysis
     /// <param name="diagnostics">The syntax and semantic diagnostics.</param>
     /// <param name="completionEditStart">The zero-based start of text replaced by a completion.</param>
     /// <param name="completionEditLength">The number of source characters replaced by a completion.</param>
+    /// <param name="syntaxHelp">The contextual help at the analyzed caret position.</param>
     public KustoLanguageAnalysis(
         IEnumerable<KustoClassification> classifications,
         IEnumerable<KustoCompletion> completions,
         IEnumerable<KustoDiagnostic> diagnostics,
         int completionEditStart,
-        int completionEditLength)
+        int completionEditLength,
+        KustoSyntaxHelp? syntaxHelp = null)
     {
         Classifications = Array.AsReadOnly(classifications.ToArray());
         Completions = Array.AsReadOnly(completions.ToArray());
         Diagnostics = Array.AsReadOnly(diagnostics.ToArray());
         CompletionEditStart = completionEditStart;
         CompletionEditLength = completionEditLength;
+        SyntaxHelp = syntaxHelp;
     }
 
     /// <summary>
@@ -51,4 +54,9 @@ public sealed class KustoLanguageAnalysis
     /// Gets the number of source characters replaced by a completion.
     /// </summary>
     public int CompletionEditLength { get; }
+
+    /// <summary>
+    /// Gets contextual help for the syntax at the analyzed caret position, when available.
+    /// </summary>
+    public KustoSyntaxHelp? SyntaxHelp { get; }
 }

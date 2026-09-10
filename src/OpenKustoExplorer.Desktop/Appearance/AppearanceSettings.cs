@@ -43,6 +43,7 @@ internal sealed class AppearanceSettings : IKustoAIProviderConfiguration, INotif
     private bool isDisposed;
     private bool isHighContrast;
     private IPlatformSettings? platformSettings;
+    private bool showKqlHoverHelp = true;
     private string openAIApiKeyEnvironmentVariable = DefaultOpenAIApiKeyEnvironmentVariable;
     private string openAIEndpoint = string.Empty;
     private string openAIModel = DefaultOpenAIModel;
@@ -344,6 +345,23 @@ internal sealed class AppearanceSettings : IKustoAIProviderConfiguration, INotif
     public bool IsHighContrast => isHighContrast;
 
     /// <summary>
+    /// Gets or sets a value indicating whether delayed KQL syntax help appears while hovering.
+    /// </summary>
+    public bool ShowKqlHoverHelp
+    {
+        get => showKqlHoverHelp;
+        set
+        {
+            if (showKqlHoverHelp != value)
+            {
+                showKqlHoverHelp = value;
+                OnPropertyChanged(nameof(ShowKqlHoverHelp));
+                Save();
+            }
+        }
+    }
+
+    /// <summary>
     /// Connects the settings coordinator to an initialized Avalonia application.
     /// </summary>
     /// <param name="application">The initialized desktop application.</param>
@@ -544,6 +562,7 @@ internal sealed class AppearanceSettings : IKustoAIProviderConfiguration, INotif
                         false);
                     copilotEnableAzureMcpByDefault = copilotShareResultDataByDefault
                         && ReadBoolean(root, "copilotEnableAzureMcp", false);
+                    showKqlHoverHelp = ReadBoolean(root, "showKqlHoverHelp", true);
                 }
             }
             catch (IOException)
@@ -605,6 +624,7 @@ internal sealed class AppearanceSettings : IKustoAIProviderConfiguration, INotif
                 writer.WriteBoolean("copilotShareResultData", CopilotShareResultDataByDefault);
                 writer.WriteBoolean("copilotEnableMicrosoftLearnMcp", CopilotEnableMicrosoftLearnMcpByDefault);
                 writer.WriteBoolean("copilotEnableAzureMcp", CopilotEnableAzureMcpByDefault);
+                writer.WriteBoolean("showKqlHoverHelp", ShowKqlHoverHelp);
                 writer.WriteEndObject();
                 writer.Flush();
                 stream.Flush(true);

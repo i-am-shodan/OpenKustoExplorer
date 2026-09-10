@@ -9,6 +9,35 @@ namespace OpenKustoExplorer.Presentation.Tests.Desktop;
 public sealed class AppearanceSettingsTests
 {
     /// <summary>
+    /// Verifies delayed KQL hover help is enabled by default and its preference survives reload.
+    /// </summary>
+    [Fact]
+    public void KqlHoverHelpPreferencePersistsAndDefaultsOn()
+    {
+        string directoryPath = Path.Combine(Path.GetTempPath(), $"OpenKustoExplorer-{Guid.NewGuid():N}");
+        string filePath = Path.Combine(directoryPath, "settings.json");
+
+        try
+        {
+            using (AppearanceSettings settings = new(filePath))
+            {
+                Assert.True(settings.ShowKqlHoverHelp);
+                settings.ShowKqlHoverHelp = false;
+            }
+
+            using AppearanceSettings reloaded = new(filePath);
+            Assert.False(reloaded.ShowKqlHoverHelp);
+        }
+        finally
+        {
+            if (Directory.Exists(directoryPath))
+            {
+                Directory.Delete(directoryPath, recursive: true);
+            }
+        }
+    }
+
+    /// <summary>
     /// Verifies every semantic text tier grows with the application text-size preference.
     /// </summary>
     [Fact]

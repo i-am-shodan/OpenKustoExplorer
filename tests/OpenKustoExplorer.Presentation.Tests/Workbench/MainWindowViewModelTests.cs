@@ -4091,6 +4091,15 @@ public sealed class MainWindowViewModelTests
                 : null;
         }
 
+        public KustoSyntaxHelp? GetSyntaxHelp(
+            string text,
+            int position,
+            KustoDatabaseSchema databaseSchema,
+            CancellationToken cancellationToken = default)
+        {
+            return null;
+        }
+
         public KustoLanguageAnalysis Analyze(
             string text,
             int caretPosition,

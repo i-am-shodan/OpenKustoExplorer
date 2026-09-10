@@ -115,6 +115,24 @@ public sealed class KustoLanguageService : IKustoLanguageService
     }
 
     /// <inheritdoc />
+    public KustoSyntaxHelp? GetSyntaxHelp(
+        string text,
+        int position,
+        KustoDatabaseSchema databaseSchema,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        ArgumentNullException.ThrowIfNull(databaseSchema);
+        ArgumentOutOfRangeException.ThrowIfNegative(position);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(position, text.Length);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        GlobalState globalState = KustoGlobalStateFactory.Create(databaseSchema);
+        CodeScript script = CodeScript.From(text, globalState);
+        return CreateSyntaxHelp(text, position, script, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public KustoLanguageAnalysis Analyze(
         string text,
         int caretPosition,
@@ -165,15 +183,90 @@ public sealed class KustoLanguageService : IKustoLanguageService
             completionEditStart,
             isQuerySourceStart,
             classifications);
+        KustoSyntaxHelp? syntaxHelp = CreateSyntaxHelp(
+            text,
+            caretPosition,
+            script,
+            cancellationToken);
 
         KustoLanguageAnalysis analysis = new(
             classifications,
             completions,
             diagnostics,
             completionEditStart,
-            completionInfo.EditLength);
+            completionInfo.EditLength,
+            syntaxHelp);
 
         return analysis;
+    }
+
+    private static KustoSyntaxHelp? CreateSyntaxHelp(
+        string text,
+        int position,
+        CodeScript script,
+        CancellationToken cancellationToken)
+    {
+        if (text.Length == 0)
+        {
+            return null;
+        }
+
+        int helpPosition = GetHelpPosition(text, position);
+        CodeBlock? block = GetNearestBlock(script, helpPosition);
+        if (block is null)
+        {
+            return null;
+        }
+
+        TextRange element = block.Service.GetElement(
+            helpPosition,
+            cancellationToken: cancellationToken);
+        if (element.Length == 0 || element.Start < 0 || element.End > text.Length)
+        {
+            return null;
+        }
+
+        string elementText = text.Substring(element.Start, element.Length);
+        _ = KustoHelpCatalog.TryGet(elementText, out KustoHelpCatalogEntry? catalogEntry);
+        QuickInfoItem? semanticItem = null;
+        string? semanticDescription = null;
+        if (catalogEntry?.Signature is null)
+        {
+            QuickInfo quickInfo = block.Service.GetQuickInfo(
+                helpPosition,
+                QuickInfoOptions.Default.WithShowDiagnostics(false),
+                cancellationToken);
+            semanticItem = quickInfo.Items.FirstOrDefault(item =>
+                item.Kind is not (QuickInfoKind.Text
+                    or QuickInfoKind.Error
+                    or QuickInfoKind.Literal
+                    or QuickInfoKind.Warning
+                    or QuickInfoKind.Suggestion));
+            semanticDescription = quickInfo.Items
+                .FirstOrDefault(item => item.Kind == QuickInfoKind.Text && !string.IsNullOrWhiteSpace(item.Text))
+                ?.Text;
+        }
+
+        string? signature = semanticItem?.Text;
+
+        if (catalogEntry is null && semanticItem is null)
+        {
+            return null;
+        }
+
+        string title = catalogEntry?.Title ?? elementText;
+        string kind = catalogEntry?.Kind ?? GetHelpKind(semanticItem!.Kind);
+        string description = catalogEntry?.Description
+            ?? semanticDescription
+            ?? GetSemanticDescription(semanticItem!.Kind);
+        return new KustoSyntaxHelp(
+            title,
+            kind,
+            signature ?? catalogEntry?.Signature,
+            description,
+            element.Start,
+            element.Length,
+            catalogEntry?.DocumentationUri);
     }
 
     private static KustoGraphQueryPlan? CreateGraphQueryPlan(
@@ -357,6 +450,47 @@ public sealed class KustoLanguageService : IKustoLanguageService
         }
 
         return previousPosition < 0 || block.Text[previousPosition] == ';';
+    }
+
+    private static int GetHelpPosition(string text, int position)
+    {
+        int boundedPosition = Math.Min(position, text.Length - 1);
+        bool followsSyntax = position > 0
+            && IsHelpTokenCharacter(text[position - 1])
+            && (position == text.Length || !IsHelpTokenCharacter(text[boundedPosition]));
+        return followsSyntax ? position - 1 : boundedPosition;
+    }
+
+    private static bool IsHelpTokenCharacter(char character)
+    {
+        return char.IsLetterOrDigit(character)
+            || character is '_' or '-' or '=' or '!' or '~' or '<' or '>';
+    }
+
+    private static string GetHelpKind(QuickInfoKind kind)
+    {
+        return kind switch
+        {
+            QuickInfoKind.BuiltInFunction => "Built-in function",
+            QuickInfoKind.DatabaseFunction => "Database function",
+            QuickInfoKind.LocalFunction => "Local function",
+            _ => kind.ToString(),
+        };
+    }
+
+    private static string GetSemanticDescription(QuickInfoKind kind)
+    {
+        return kind switch
+        {
+            QuickInfoKind.Column => "A column available in the current query scope.",
+            QuickInfoKind.Table => "A tabular data source available in the current query scope.",
+            QuickInfoKind.Variable => "A value defined in the current query.",
+            QuickInfoKind.Parameter => "A parameter accepted by the current function or query.",
+            QuickInfoKind.DatabaseFunction => "A stored function in the active database.",
+            QuickInfoKind.LocalFunction => "A function defined in the current query.",
+            QuickInfoKind.BuiltInFunction => "A built-in KQL function.",
+            _ => "A KQL syntax element in the current query.",
+        };
     }
 
     private static bool IsValidAtQuerySourceStart(CompletionKind kind)

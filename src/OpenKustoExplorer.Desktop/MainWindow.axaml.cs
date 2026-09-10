@@ -142,6 +142,7 @@ public sealed partial class MainWindow : Window, IDisposable
     private ToggleSwitch? settingsCopilotShareTabContentToggle;
     private ToggleSwitch? settingsDensityToggle;
     private Border? settingsDialog;
+    private ToggleSwitch? settingsKqlHoverHelpToggle;
     private RadioButton? settingsLightThemeOption;
     private TextBox? settingsOpenAIApiKeyEnvironmentVariable;
     private TextBox? settingsOpenAIEndpoint;
@@ -227,7 +228,7 @@ public sealed partial class MainWindow : Window, IDisposable
         UpdateAppearanceClasses();
         UpdateResponsiveLayout(Width);
 
-        editorController = new KustoEditorController(queryEditor!, viewModel);
+        editorController = new KustoEditorController(queryEditor!, viewModel, appearanceSettings);
         automationTimer = new DispatcherTimer(
             AutomationTickInterval,
             DispatcherPriority.Background,
@@ -1292,6 +1293,15 @@ public sealed partial class MainWindow : Window, IDisposable
         if (appearanceSettings is not null && eventArguments.NewValue is decimal value)
         {
             appearanceSettings.TextSize = (double)value;
+        }
+    }
+
+    private void OnSettingsKqlHoverHelpChanged(object? sender, RoutedEventArgs eventArguments)
+    {
+        _ = eventArguments;
+        if (appearanceSettings is not null && sender is ToggleSwitch toggle)
+        {
+            appearanceSettings.ShowKqlHoverHelp = toggle.IsChecked == true;
         }
     }
 
@@ -2397,6 +2407,7 @@ public sealed partial class MainWindow : Window, IDisposable
         settingsDarkThemeOption = FindRequiredControl<RadioButton>("SettingsDarkThemeOption");
         settingsDensityToggle = FindRequiredControl<ToggleSwitch>("SettingsDensityToggle");
         settingsDialog = FindRequiredControl<Border>("SettingsDialog");
+        settingsKqlHoverHelpToggle = FindRequiredControl<ToggleSwitch>("SettingsKqlHoverHelpToggle");
         settingsLightThemeOption = FindRequiredControl<RadioButton>("SettingsLightThemeOption");
         settingsOpenAIApiKeyEnvironmentVariable = FindRequiredControl<TextBox>(
             "SettingsOpenAIApiKeyEnvironmentVariable");
@@ -2858,6 +2869,11 @@ public sealed partial class MainWindow : Window, IDisposable
             UpdateCopilotDefaultControls();
             UpdateHighContrastNotice(appearanceSettings.IsHighContrast);
             UpdateThemeControls(appearanceSettings.ThemePreference);
+
+            if (settingsKqlHoverHelpToggle is not null)
+            {
+                settingsKqlHoverHelpToggle.IsChecked = appearanceSettings.ShowKqlHoverHelp;
+            }
         }
     }
 

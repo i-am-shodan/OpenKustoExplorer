@@ -1959,6 +1959,22 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
+    /// Gets contextual help for the KQL syntax element at a document position.
+    /// </summary>
+    /// <param name="text">The complete KQL document text.</param>
+    /// <param name="position">The zero-based document position.</param>
+    /// <param name="cancellationToken">A token that cancels parsing and semantic analysis.</param>
+    /// <returns>Contextual syntax help, or <see langword="null"/> when no help is available.</returns>
+    public KustoSyntaxHelp? GetSyntaxHelp(
+        string text,
+        int position,
+        CancellationToken cancellationToken = default)
+    {
+        KustoDatabaseSchema databaseSchema = GetActiveDatabaseSchema();
+        return languageService.GetSyntaxHelp(text, position, databaseSchema, cancellationToken);
+    }
+
+    /// <summary>
     /// Applies a completed analysis snapshot to the workbench problems and status views.
     /// </summary>
     /// <param name="analysis">The completed immutable analysis snapshot.</param>
