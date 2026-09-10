@@ -10,6 +10,23 @@ namespace OpenKustoExplorer.Presentation.Tests.Desktop;
 public sealed class KustoCompletionDataTests
 {
     /// <summary>
+    /// Verifies SDK match text remains the filter key when display content is richer.
+    /// </summary>
+    [Fact]
+    public void TextUsesCompletionMatchText()
+    {
+        KustoCompletionData completionData = new(
+            new KustoCompletion(
+                "DatabaseFunction",
+                "RecentStorms(lookback)",
+                "RecentStorms(",
+                ")",
+                matchText: "RecentStorms"));
+
+        Assert.Equal("RecentStorms", completionData.Text);
+    }
+
+    /// <summary>
     /// Verifies paired completion text places the caret before the trailing text.
     /// </summary>
     [Fact]

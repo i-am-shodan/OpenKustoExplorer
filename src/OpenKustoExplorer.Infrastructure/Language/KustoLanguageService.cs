@@ -115,6 +115,24 @@ public sealed class KustoLanguageService : IKustoLanguageService
     }
 
     /// <inheritdoc />
+    public KustoSyntaxHelp? GetSyntaxHelp(
+        string text,
+        int position,
+        KustoDatabaseSchema databaseSchema,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        ArgumentNullException.ThrowIfNull(databaseSchema);
+        ArgumentOutOfRangeException.ThrowIfNegative(position);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(position, text.Length);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        GlobalState globalState = KustoGlobalStateFactory.Create(databaseSchema);
+        CodeScript script = CodeScript.From(text, globalState);
+        return CreateSyntaxHelp(text, position, script, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public KustoLanguageAnalysis Analyze(
         string text,
         int caretPosition,
@@ -155,20 +173,100 @@ public sealed class KustoLanguageService : IKustoLanguageService
         int completionEditStart = completionBlock is null ? caretPosition : completionInfo.EditStart;
         bool isQuerySourceStart = completionBlock is not null
             && IsQuerySourceStart(completionBlock, caretPosition);
-        IEnumerable<KustoCompletion> completions = completionInfo.Items
+        CompletionItem[] completionItems = completionInfo.Items
             .Where(item => !isQuerySourceStart || IsValidAtQuerySourceStart(item.Kind))
-            .Select(item => CreateCompletion(item, isQuerySourceStart))
-            .OrderByDescending(completion => completion.Priority)
-            .ThenBy(completion => completion.DisplayText, StringComparer.OrdinalIgnoreCase);
+            .ToArray();
+        IReadOnlyList<KustoCompletion> completions = KustoCompletionRanker.Rank(
+            completionItems,
+            text,
+            caretPosition,
+            completionEditStart,
+            isQuerySourceStart,
+            classifications);
+        KustoSyntaxHelp? syntaxHelp = CreateSyntaxHelp(
+            text,
+            caretPosition,
+            script,
+            cancellationToken);
 
         KustoLanguageAnalysis analysis = new(
             classifications,
             completions,
             diagnostics,
             completionEditStart,
-            completionInfo.EditLength);
+            completionInfo.EditLength,
+            syntaxHelp);
 
         return analysis;
+    }
+
+    private static KustoSyntaxHelp? CreateSyntaxHelp(
+        string text,
+        int position,
+        CodeScript script,
+        CancellationToken cancellationToken)
+    {
+        if (text.Length == 0)
+        {
+            return null;
+        }
+
+        int helpPosition = GetHelpPosition(text, position);
+        CodeBlock? block = GetNearestBlock(script, helpPosition);
+        if (block is null)
+        {
+            return null;
+        }
+
+        TextRange element = block.Service.GetElement(
+            helpPosition,
+            cancellationToken: cancellationToken);
+        if (element.Length == 0 || element.Start < 0 || element.End > text.Length)
+        {
+            return null;
+        }
+
+        string elementText = text.Substring(element.Start, element.Length);
+        _ = KustoHelpCatalog.TryGet(elementText, out KustoHelpCatalogEntry? catalogEntry);
+        QuickInfoItem? semanticItem = null;
+        string? semanticDescription = null;
+        if (catalogEntry?.Signature is null)
+        {
+            QuickInfo quickInfo = block.Service.GetQuickInfo(
+                helpPosition,
+                QuickInfoOptions.Default.WithShowDiagnostics(false),
+                cancellationToken);
+            semanticItem = quickInfo.Items.FirstOrDefault(item =>
+                item.Kind is not (QuickInfoKind.Text
+                    or QuickInfoKind.Error
+                    or QuickInfoKind.Literal
+                    or QuickInfoKind.Warning
+                    or QuickInfoKind.Suggestion));
+            semanticDescription = quickInfo.Items
+                .FirstOrDefault(item => item.Kind == QuickInfoKind.Text && !string.IsNullOrWhiteSpace(item.Text))
+                ?.Text;
+        }
+
+        string? signature = semanticItem?.Text;
+
+        if (catalogEntry is null && semanticItem is null)
+        {
+            return null;
+        }
+
+        string title = catalogEntry?.Title ?? elementText;
+        string kind = catalogEntry?.Kind ?? GetHelpKind(semanticItem!.Kind);
+        string description = catalogEntry?.Description
+            ?? semanticDescription
+            ?? GetSemanticDescription(semanticItem!.Kind);
+        return new KustoSyntaxHelp(
+            title,
+            kind,
+            signature ?? catalogEntry?.Signature,
+            description,
+            element.Start,
+            element.Length,
+            catalogEntry?.DocumentationUri);
     }
 
     private static KustoGraphQueryPlan? CreateGraphQueryPlan(
@@ -336,11 +434,63 @@ public sealed class KustoLanguageService : IKustoLanguageService
     private static bool IsQuerySourceStart(CodeBlock block, int caretPosition)
     {
         int localPosition = Math.Clamp(caretPosition - block.Start, 0, block.Length);
-        string prefix = block.Text[..localPosition].Trim();
-        bool containsOnlyIdentifierPrefix = prefix.All(character =>
-            char.IsLetterOrDigit(character) || character == '_');
+        int tokenStart = localPosition;
 
-        return prefix.Length == 0 || containsOnlyIdentifierPrefix;
+        while (tokenStart > 0
+            && (char.IsLetterOrDigit(block.Text[tokenStart - 1]) || block.Text[tokenStart - 1] == '_'))
+        {
+            tokenStart--;
+        }
+
+        int previousPosition = tokenStart - 1;
+
+        while (previousPosition >= 0 && char.IsWhiteSpace(block.Text[previousPosition]))
+        {
+            previousPosition--;
+        }
+
+        return previousPosition < 0 || block.Text[previousPosition] == ';';
+    }
+
+    private static int GetHelpPosition(string text, int position)
+    {
+        int boundedPosition = Math.Min(position, text.Length - 1);
+        bool followsSyntax = position > 0
+            && IsHelpTokenCharacter(text[position - 1])
+            && (position == text.Length || !IsHelpTokenCharacter(text[boundedPosition]));
+        return followsSyntax ? position - 1 : boundedPosition;
+    }
+
+    private static bool IsHelpTokenCharacter(char character)
+    {
+        return char.IsLetterOrDigit(character)
+            || character is '_' or '-' or '=' or '!' or '~' or '<' or '>';
+    }
+
+    private static string GetHelpKind(QuickInfoKind kind)
+    {
+        return kind switch
+        {
+            QuickInfoKind.BuiltInFunction => "Built-in function",
+            QuickInfoKind.DatabaseFunction => "Database function",
+            QuickInfoKind.LocalFunction => "Local function",
+            _ => kind.ToString(),
+        };
+    }
+
+    private static string GetSemanticDescription(QuickInfoKind kind)
+    {
+        return kind switch
+        {
+            QuickInfoKind.Column => "A column available in the current query scope.",
+            QuickInfoKind.Table => "A tabular data source available in the current query scope.",
+            QuickInfoKind.Variable => "A value defined in the current query.",
+            QuickInfoKind.Parameter => "A parameter accepted by the current function or query.",
+            QuickInfoKind.DatabaseFunction => "A stored function in the active database.",
+            QuickInfoKind.LocalFunction => "A function defined in the current query.",
+            QuickInfoKind.BuiltInFunction => "A built-in KQL function.",
+            _ => "A KQL syntax element in the current query.",
+        };
     }
 
     private static bool IsValidAtQuerySourceStart(CompletionKind kind)
@@ -361,41 +511,6 @@ public sealed class KustoLanguageService : IKustoLanguageService
             classifiedRange.Length);
 
         return classification;
-    }
-
-    private static KustoCompletion CreateCompletion(
-        CompletionItem completionItem,
-        bool isQuerySourceStart)
-    {
-        double priority = isQuerySourceStart ? GetQuerySourcePriority(completionItem.Kind) : 0;
-        KustoCompletion completion = new(
-            completionItem.Kind.ToString(),
-            completionItem.DisplayText,
-            completionItem.BeforeText,
-            completionItem.AfterText,
-            priority);
-
-        return completion;
-    }
-
-    private static double GetQuerySourcePriority(CompletionKind kind)
-    {
-        double priority = kind switch
-        {
-            CompletionKind.Table => 1000,
-            CompletionKind.DatabaseFunction => 950,
-            CompletionKind.MaterialiedView => 900,
-            CompletionKind.StoredQueryResult => 850,
-            CompletionKind.LocalFunction => 800,
-            CompletionKind.Variable => 750,
-            CompletionKind.TabularPrefix => 650,
-            CompletionKind.BuiltInFunction => 550,
-            CompletionKind.QueryPrefix => 450,
-            CompletionKind.Keyword => 350,
-            _ => 100,
-        };
-
-        return priority;
     }
 
     private static KustoDiagnostic CreateDiagnostic(Diagnostic diagnostic)

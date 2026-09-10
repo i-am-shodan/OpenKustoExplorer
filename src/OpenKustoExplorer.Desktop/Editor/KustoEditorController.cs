@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
@@ -10,6 +11,7 @@ using AvaloniaEdit;
 using AvaloniaEdit.CodeCompletion;
 using AvaloniaEdit.Document;
 using OpenKustoExplorer.Application.Language;
+using OpenKustoExplorer.Desktop.Appearance;
 using OpenKustoExplorer.Presentation.Workbench;
 
 namespace OpenKustoExplorer.Desktop.Editor;
@@ -24,13 +26,25 @@ internal sealed class KustoEditorController : IDisposable
     private static readonly DataFormat<string> HtmlFormat = DataFormat.CreateStringPlatformFormat("text/html");
     private static readonly DataFormat<string> WindowsHtmlFormat = DataFormat.CreateStringPlatformFormat("HTML Format");
     private readonly KustoExecutionErrorColorizer executionErrorColorizer;
+    private readonly AppearanceSettings appearanceSettings;
     private readonly KustoSyntaxColorizer colorizer;
     private readonly TextEditor editor;
     private readonly MainWindowViewModel viewModel;
     private CancellationTokenSource? analysisCancellationSource;
     private CancellationTokenSource? completionCancellationSource;
+    private CancellationTokenSource? explicitHelpCancellationSource;
+    private CancellationTokenSource? hoverHelpCancellationSource;
     private CompletionWindow? completionWindow;
+    private KustoSyntaxHelp? cachedHelp;
+    private KustoSyntaxHelp? displayedExplicitHelp;
+    private KustoSyntaxHelp? displayedHoverHelp;
+    private KustoSyntaxHelpWindow? helpWindow;
     private IReadOnlyList<KustoClassification> classifications = Array.Empty<KustoClassification>();
+    private Guid cachedHelpDocumentId;
+    private int? explicitHelpRequestPosition;
+    private int? pendingHoverPosition;
+    private string? cachedHelpText;
+    private string? displayedExplicitHelpText;
     private bool isDisposed;
     private bool isSynchronizingDocument;
 
@@ -39,13 +53,19 @@ internal sealed class KustoEditorController : IDisposable
     /// </summary>
     /// <param name="editor">The native AvaloniaEdit query editor.</param>
     /// <param name="viewModel">The workbench presentation model.</param>
-    public KustoEditorController(TextEditor editor, MainWindowViewModel viewModel)
+    /// <param name="appearanceSettings">The persisted desktop appearance and editor settings.</param>
+    public KustoEditorController(
+        TextEditor editor,
+        MainWindowViewModel viewModel,
+        AppearanceSettings appearanceSettings)
     {
         ArgumentNullException.ThrowIfNull(editor);
         ArgumentNullException.ThrowIfNull(viewModel);
+        ArgumentNullException.ThrowIfNull(appearanceSettings);
 
         this.editor = editor;
         this.viewModel = viewModel;
+        this.appearanceSettings = appearanceSettings;
         editor.TextArea.TextView.Margin = new Thickness(5, 0, 0, 0);
         colorizer = new KustoSyntaxColorizer(ResolveBrush);
         executionErrorColorizer = new KustoExecutionErrorColorizer(ResolveBrush);
@@ -56,7 +76,11 @@ internal sealed class KustoEditorController : IDisposable
         editor.TextArea.AddHandler(InputElement.KeyDownEvent, OnPreviewKeyDown, RoutingStrategies.Tunnel);
         editor.TextArea.KeyDown += OnKeyDown;
         editor.TextArea.KeyUp += OnKeyUp;
+        editor.TextArea.TextView.ScrollOffsetChanged += OnTextViewScrollOffsetChanged;
+        editor.TextArea.TextView.PointerExited += OnPointerExited;
+        editor.TextArea.TextView.PointerMoved += OnPointerMoved;
         editor.ActualThemeVariantChanged += OnActualThemeVariantChanged;
+        appearanceSettings.PropertyChanged += OnAppearanceSettingsPropertyChanged;
         viewModel.PropertyChanged += OnViewModelPropertyChanged;
         SynchronizeEditorFromViewModel();
         QueueAnalysis(TimeSpan.Zero);
@@ -73,13 +97,26 @@ internal sealed class KustoEditorController : IDisposable
             editor.TextArea.RemoveHandler(InputElement.KeyDownEvent, OnPreviewKeyDown);
             editor.TextArea.KeyDown -= OnKeyDown;
             editor.TextArea.KeyUp -= OnKeyUp;
+            editor.TextArea.TextView.ScrollOffsetChanged -= OnTextViewScrollOffsetChanged;
+            editor.TextArea.TextView.PointerExited -= OnPointerExited;
+            editor.TextArea.TextView.PointerMoved -= OnPointerMoved;
             editor.ActualThemeVariantChanged -= OnActualThemeVariantChanged;
+            appearanceSettings.PropertyChanged -= OnAppearanceSettingsPropertyChanged;
             viewModel.PropertyChanged -= OnViewModelPropertyChanged;
             editor.TextArea.TextView.LineTransformers.Remove(colorizer);
             editor.TextArea.TextView.LineTransformers.Remove(executionErrorColorizer);
             completionWindow?.Hide();
+            DismissHoverHelp();
+            if (helpWindow is not null)
+            {
+                helpWindow.RefreshRequested -= OnHelpWindowRefreshRequested;
+                helpWindow.ClosePermanently();
+            }
+
             CancelPendingAnalysis();
             CancelPendingCompletion();
+            CancelPendingExplicitHelp();
+            CancelPendingHoverHelp();
         }
     }
 
@@ -142,6 +179,17 @@ internal sealed class KustoEditorController : IDisposable
         if (!isSynchronizingDocument)
         {
             CancelPendingCompletion();
+            bool wasResolvingExplicitHelp = explicitHelpCancellationSource is not null
+                && displayedExplicitHelp is null;
+            CancelPendingExplicitHelp();
+            if (wasResolvingExplicitHelp)
+            {
+                DismissExplicitHelp();
+            }
+
+            CancelPendingHoverHelp();
+            DismissHoverHelp();
+            InvalidateHelpCache();
             viewModel.QueryText = editor.Text ?? string.Empty;
             QueueAnalysis(AnalysisDelay);
         }
@@ -160,6 +208,17 @@ internal sealed class KustoEditorController : IDisposable
         editor.TextArea.TextView.Redraw();
     }
 
+    private void OnAppearanceSettingsPropertyChanged(object? sender, PropertyChangedEventArgs eventArguments)
+    {
+        _ = sender;
+        if (eventArguments.PropertyName == nameof(AppearanceSettings.ShowKqlHoverHelp)
+            && !appearanceSettings.ShowKqlHoverHelp)
+        {
+            CancelPendingHoverHelp();
+            DismissHoverHelp();
+        }
+    }
+
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs eventArguments)
     {
         bool queryTextChanged = eventArguments.PropertyName == nameof(MainWindowViewModel.QueryText);
@@ -172,7 +231,11 @@ internal sealed class KustoEditorController : IDisposable
         if (selectedDocumentChanged)
         {
             CancelPendingCompletion();
+            CancelPendingHoverHelp();
             completionWindow?.Hide();
+            DismissHoverHelp();
+            DismissExplicitHelp();
+            InvalidateHelpCache();
             classifications = Array.Empty<KustoClassification>();
             colorizer.Update(Array.Empty<KustoClassification>());
             executionErrorColorizer.Update(viewModel.QueryErrorHighlight);
@@ -198,6 +261,10 @@ internal sealed class KustoEditorController : IDisposable
 
         if (activeSchemaChanged)
         {
+            CancelPendingHoverHelp();
+            DismissHoverHelp();
+            DismissExplicitHelp();
+            InvalidateHelpCache();
             QueueAnalysis(TimeSpan.Zero);
         }
     }
@@ -221,6 +288,15 @@ internal sealed class KustoEditorController : IDisposable
 
     private void OnPreviewKeyDown(object? sender, KeyEventArgs eventArguments)
     {
+        CancelPendingHoverHelp();
+        DismissHoverHelp();
+
+        if (TryHandleSyntaxHelpShortcut(eventArguments))
+        {
+            eventArguments.Handled = true;
+            return;
+        }
+
         bool hasCopyModifier = eventArguments.KeyModifiers is KeyModifiers.Control or KeyModifiers.Meta;
         bool requestsCopy = hasCopyModifier && eventArguments.Key == Key.C;
 
@@ -229,6 +305,67 @@ internal sealed class KustoEditorController : IDisposable
             eventArguments.Handled = true;
             _ = CopySelectionWithFormattingAsync();
         }
+    }
+
+    private void OnPointerExited(object? sender, PointerEventArgs eventArguments)
+    {
+        _ = sender;
+        _ = eventArguments;
+        CancelPendingHoverHelp();
+        DismissHoverHelp();
+    }
+
+    private void OnTextViewScrollOffsetChanged(object? sender, EventArgs eventArguments)
+    {
+        _ = sender;
+        _ = eventArguments;
+        CancelPendingHoverHelp();
+        DismissHoverHelp();
+    }
+
+    private void OnPointerMoved(object? sender, PointerEventArgs eventArguments)
+    {
+        _ = sender;
+        if (!appearanceSettings.ShowKqlHoverHelp)
+        {
+            return;
+        }
+
+        PointerPointProperties properties = eventArguments
+            .GetCurrentPoint(editor.TextArea.TextView)
+            .Properties;
+        if (properties.IsLeftButtonPressed
+            || properties.IsMiddleButtonPressed
+            || properties.IsRightButtonPressed)
+        {
+            CancelPendingHoverHelp();
+            DismissHoverHelp();
+            return;
+        }
+
+        TextViewPosition? textPosition = editor.TextArea.TextView.GetPosition(
+            eventArguments.GetPosition(editor.TextArea.TextView));
+        if (textPosition is null)
+        {
+            CancelPendingHoverHelp();
+            DismissHoverHelp();
+            return;
+        }
+
+        int position = editor.Document.GetOffset(textPosition.Value.Location);
+        if (displayedHoverHelp is not null
+            && KustoSyntaxHelpInteraction.ContainsPosition(displayedHoverHelp, position, includeEnd: false))
+        {
+            return;
+        }
+
+        if (pendingHoverPosition == position)
+        {
+            return;
+        }
+
+        DismissHoverHelp();
+        QueueHoverHelp(position);
     }
 
     private bool TryHandleExecutionShortcut(KeyEventArgs eventArguments)
@@ -314,6 +451,20 @@ internal sealed class KustoEditorController : IDisposable
             completionCancellationSource.Token);
     }
 
+    private void QueueHoverHelp(int position)
+    {
+        CancelPendingHoverHelp();
+        hoverHelpCancellationSource = new CancellationTokenSource();
+        pendingHoverPosition = position;
+        Guid documentId = viewModel.SelectedDocument?.Id ?? Guid.Empty;
+        string textSnapshot = editor.Text ?? string.Empty;
+        _ = ShowHoverHelpAfterDelayAsync(
+            documentId,
+            textSnapshot,
+            position,
+            hoverHelpCancellationSource.Token);
+    }
+
     private void SynchronizeCaretFromViewModel()
     {
         int caretPosition = Math.Min(viewModel.CaretPosition, editor.Document.TextLength);
@@ -376,6 +527,21 @@ internal sealed class KustoEditorController : IDisposable
         completionCancellationSource = null;
     }
 
+    private void CancelPendingExplicitHelp()
+    {
+        explicitHelpCancellationSource?.Cancel();
+        explicitHelpCancellationSource?.Dispose();
+        explicitHelpCancellationSource = null;
+    }
+
+    private void CancelPendingHoverHelp()
+    {
+        hoverHelpCancellationSource?.Cancel();
+        hoverHelpCancellationSource?.Dispose();
+        hoverHelpCancellationSource = null;
+        pendingHoverPosition = null;
+    }
+
     private async Task AnalyzeAfterDelayAsync(
         TimeSpan delay,
         Guid documentId,
@@ -391,7 +557,7 @@ internal sealed class KustoEditorController : IDisposable
                 cancellationToken).ConfigureAwait(false);
 
             await Dispatcher.UIThread.InvokeAsync(
-                () => ApplyAnalysis(documentId, textSnapshot, analysis),
+                () => ApplyAnalysis(documentId, textSnapshot, caretPosition, analysis),
                 DispatcherPriority.Background,
                 cancellationToken);
         }
@@ -411,6 +577,7 @@ internal sealed class KustoEditorController : IDisposable
     private void ApplyAnalysis(
         Guid documentId,
         string textSnapshot,
+        int caretPosition,
         KustoLanguageAnalysis analysis)
     {
         bool isCurrentDocument = string.Equals(editor.Text, textSnapshot, StringComparison.Ordinal);
@@ -422,6 +589,15 @@ internal sealed class KustoEditorController : IDisposable
             colorizer.Update(analysis.Classifications);
             editor.TextArea.TextView.Redraw();
             viewModel.ApplyAnalysis(analysis);
+
+            if (analysis.SyntaxHelp is not null
+                && KustoSyntaxHelpInteraction.ContainsPosition(
+                    analysis.SyntaxHelp,
+                    caretPosition,
+                    includeEnd: true))
+            {
+                CacheHelp(documentId, textSnapshot, analysis.SyntaxHelp);
+            }
         }
     }
 
@@ -457,6 +633,269 @@ internal sealed class KustoEditorController : IDisposable
         }
     }
 
+    private async Task ShowHoverHelpAfterDelayAsync(
+        Guid documentId,
+        string textSnapshot,
+        int position,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(KustoSyntaxHelpInteraction.HoverDelay, cancellationToken).ConfigureAwait(false);
+            KustoSyntaxHelp? help = await Task.Run(
+                () => viewModel.GetSyntaxHelp(textSnapshot, position, cancellationToken),
+                cancellationToken).ConfigureAwait(false);
+
+            await Dispatcher.UIThread.InvokeAsync(
+                () => ShowHoverHelp(documentId, textSnapshot, position, help),
+                DispatcherPriority.Input,
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            // Pointer movement or a newer document superseded the pending help request.
+        }
+        catch (Exception exception)
+        {
+            await Dispatcher.UIThread.InvokeAsync(
+                () => viewModel.ReportAnalysisFailure(exception.Message),
+                DispatcherPriority.Background,
+                CancellationToken.None);
+        }
+    }
+
+    private async Task ShowExplicitHelpAsync(
+        Guid documentId,
+        string textSnapshot,
+        int position,
+        CancellationTokenSource requestSource)
+    {
+        CancellationToken cancellationToken = requestSource.Token;
+        try
+        {
+            KustoSyntaxHelp? help = await Task.Run(
+                () => viewModel.GetSyntaxHelp(textSnapshot, position, cancellationToken),
+                cancellationToken).ConfigureAwait(false);
+
+            await Dispatcher.UIThread.InvokeAsync(
+                () => CompleteExplicitHelp(documentId, textSnapshot, position, help, requestSource),
+                DispatcherPriority.Input,
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            // A repeated request or a newer document superseded this lookup.
+        }
+        catch (Exception exception)
+        {
+            await Dispatcher.UIThread.InvokeAsync(
+                () =>
+                {
+                    CompleteExplicitHelp(documentId, textSnapshot, position, null, requestSource);
+                    viewModel.ReportAnalysisFailure(exception.Message);
+                },
+                DispatcherPriority.Background,
+                CancellationToken.None);
+        }
+    }
+
+    private void ShowHoverHelp(
+        Guid documentId,
+        string textSnapshot,
+        int requestedPosition,
+        KustoSyntaxHelp? help)
+    {
+        pendingHoverPosition = null;
+        bool canShow = !isDisposed
+            && appearanceSettings.ShowKqlHoverHelp
+            && help is not null
+            && KustoSyntaxHelpInteraction.ContainsPosition(help, requestedPosition, includeEnd: true)
+            && IsCurrentDocument(documentId, textSnapshot);
+        if (!canShow)
+        {
+            return;
+        }
+
+        displayedHoverHelp = help;
+        CacheHelp(documentId, textSnapshot, help!);
+        ToolTip.SetTip(editor, new KustoSyntaxHelpContent(help!, isCompact: true));
+        ToolTip.SetPlacement(editor, PlacementMode.Pointer);
+        ToolTip.SetIsOpen(editor, true);
+    }
+
+    private void CompleteExplicitHelp(
+        Guid documentId,
+        string textSnapshot,
+        int requestedPosition,
+        KustoSyntaxHelp? help,
+        CancellationTokenSource requestSource)
+    {
+        if (!ReferenceEquals(explicitHelpCancellationSource, requestSource))
+        {
+            return;
+        }
+
+        requestSource.Dispose();
+        explicitHelpCancellationSource = null;
+        if (isDisposed || !IsCurrentDocument(documentId, textSnapshot))
+        {
+            return;
+        }
+
+        if (help is not null)
+        {
+            CacheHelp(documentId, textSnapshot, help);
+        }
+
+        bool canUpdateWindow = helpWindow?.IsVisible == true
+            && explicitHelpRequestPosition == requestedPosition
+            && string.Equals(displayedExplicitHelpText, textSnapshot, StringComparison.Ordinal);
+        if (!canUpdateWindow || TopLevel.GetTopLevel(editor) is not Window owner)
+        {
+            return;
+        }
+
+        if (help is null)
+        {
+            helpWindow!.ShowUnavailable(owner);
+        }
+        else
+        {
+            helpWindow!.ShowHelp(help, owner);
+        }
+
+        displayedExplicitHelp = help;
+    }
+
+    private void DismissHoverHelp()
+    {
+        displayedHoverHelp = null;
+        ToolTip.SetIsOpen(editor, false);
+        ToolTip.SetTip(editor, null);
+    }
+
+    private bool TryHandleSyntaxHelpShortcut(KeyEventArgs eventArguments)
+    {
+        if (KustoSyntaxHelpInteraction.IsDismissKey(
+            eventArguments.Key,
+            eventArguments.KeyModifiers)
+            && (helpWindow?.IsVisible == true || explicitHelpCancellationSource is not null))
+        {
+            DismissExplicitHelp();
+            return true;
+        }
+
+        if (!KustoSyntaxHelpInteraction.IsRequestKey(
+            eventArguments.Key,
+            eventArguments.KeyModifiers))
+        {
+            return false;
+        }
+
+        completionWindow?.Hide();
+        CancelPendingHoverHelp();
+        DismissHoverHelp();
+        RequestExplicitHelp();
+        return true;
+    }
+
+    private void RequestExplicitHelp()
+    {
+        CancelPendingExplicitHelp();
+        Guid documentId = viewModel.SelectedDocument?.Id ?? Guid.Empty;
+        string textSnapshot = editor.Text ?? string.Empty;
+        int position = Math.Min(editor.TextArea.Caret.Offset, textSnapshot.Length);
+
+        if (cachedHelp is not null
+            && cachedHelpDocumentId == documentId
+            && string.Equals(cachedHelpText, textSnapshot, StringComparison.Ordinal)
+            && KustoSyntaxHelpInteraction.ContainsPosition(cachedHelp, position, includeEnd: true))
+        {
+            ShowCachedExplicitHelp(documentId, textSnapshot, position, cachedHelp);
+            return;
+        }
+
+        if (TopLevel.GetTopLevel(editor) is not Window owner)
+        {
+            return;
+        }
+
+        helpWindow ??= CreateHelpWindow();
+        helpWindow.ShowLoading(owner);
+        displayedExplicitHelp = null;
+        displayedExplicitHelpText = textSnapshot;
+        explicitHelpRequestPosition = position;
+
+        explicitHelpCancellationSource = new CancellationTokenSource();
+        _ = ShowExplicitHelpAsync(
+            documentId,
+            textSnapshot,
+            position,
+            explicitHelpCancellationSource);
+    }
+
+    private void ShowCachedExplicitHelp(
+        Guid documentId,
+        string textSnapshot,
+        int position,
+        KustoSyntaxHelp help)
+    {
+        if (TopLevel.GetTopLevel(editor) is not Window owner)
+        {
+            return;
+        }
+
+        helpWindow ??= CreateHelpWindow();
+        helpWindow.ShowHelp(help, owner, reveal: true);
+        displayedExplicitHelp = help;
+        displayedExplicitHelpText = textSnapshot;
+        explicitHelpRequestPosition = position;
+        CacheHelp(documentId, textSnapshot, help);
+    }
+
+    private void DismissExplicitHelp()
+    {
+        CancelPendingExplicitHelp();
+        helpWindow?.Dismiss();
+        displayedExplicitHelp = null;
+        displayedExplicitHelpText = null;
+        explicitHelpRequestPosition = null;
+    }
+
+    private KustoSyntaxHelpWindow CreateHelpWindow()
+    {
+        KustoSyntaxHelpWindow window = new();
+        window.RefreshRequested += OnHelpWindowRefreshRequested;
+        return window;
+    }
+
+    private void OnHelpWindowRefreshRequested(object? sender, EventArgs eventArguments)
+    {
+        _ = sender;
+        _ = eventArguments;
+        RequestExplicitHelp();
+    }
+
+    private bool IsCurrentDocument(Guid documentId, string textSnapshot)
+    {
+        return string.Equals(editor.Text, textSnapshot, StringComparison.Ordinal)
+            && viewModel.SelectedDocument?.Id == documentId;
+    }
+
+    private void CacheHelp(Guid documentId, string textSnapshot, KustoSyntaxHelp help)
+    {
+        cachedHelp = help;
+        cachedHelpDocumentId = documentId;
+        cachedHelpText = textSnapshot;
+    }
+
+    private void InvalidateHelpCache()
+    {
+        cachedHelp = null;
+        cachedHelpDocumentId = Guid.Empty;
+        cachedHelpText = null;
+    }
+
     private void ShowCompletionWindow(
         Guid documentId,
         string textSnapshot,
@@ -475,7 +914,23 @@ internal sealed class KustoEditorController : IDisposable
                 StartOffset = analysis.CompletionEditStart,
                 EndOffset = analysis.CompletionEditStart + analysis.CompletionEditLength,
                 CloseWhenCaretAtBeginning = false,
+                Width = 480,
+                MaxWidth = 560,
+                MaxHeight = 390,
+                WindowManagerAddShadowHint = true,
             };
+            newCompletionWindow.Classes.Add("kustoCompletionWindow");
+            newCompletionWindow.CompletionList.Background = ResolveBrush("SurfaceBrush");
+            newCompletionWindow.CompletionList.BorderBrush = ResolveBrush("ControlBoundaryBrush");
+            newCompletionWindow.CompletionList.BorderThickness = new Thickness(1);
+            newCompletionWindow.CompletionList.CornerRadius = new CornerRadius(6);
+            newCompletionWindow.CompletionList.Padding = new Thickness(3);
+            newCompletionWindow.CompletionList.MaxHeight = 390;
+            newCompletionWindow.CompletionList.ListBox.Classes.Add("kustoCompletionList");
+            newCompletionWindow.CompletionList.ListBox.MaxHeight = 380;
+            ScrollViewer.SetHorizontalScrollBarVisibility(
+                newCompletionWindow.CompletionList.ListBox,
+                ScrollBarVisibility.Disabled);
 
             foreach (KustoCompletion completion in analysis.Completions)
             {

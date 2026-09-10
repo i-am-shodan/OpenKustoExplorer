@@ -13,18 +13,21 @@ public sealed class KustoCompletion
     /// <param name="beforeText">The text inserted before the resulting caret position.</param>
     /// <param name="afterText">The text inserted after the resulting caret position.</param>
     /// <param name="priority">The relative selection priority; larger values are preferred.</param>
+    /// <param name="matchText">The text used to match a typed completion prefix.</param>
     public KustoCompletion(
         string kind,
         string displayText,
         string beforeText,
         string afterText,
-        double priority = 0)
+        double priority = 0,
+        string? matchText = null)
     {
         Kind = kind;
         DisplayText = displayText;
         BeforeText = beforeText;
         AfterText = afterText;
         Priority = priority;
+        MatchText = string.IsNullOrWhiteSpace(matchText) ? displayText : matchText;
     }
 
     /// <summary>
@@ -36,6 +39,11 @@ public sealed class KustoCompletion
     /// Gets the text presented in the completion list.
     /// </summary>
     public string DisplayText { get; }
+
+    /// <summary>
+    /// Gets the text used to match a typed completion prefix.
+    /// </summary>
+    public string MatchText { get; }
 
     /// <summary>
     /// Gets the text inserted before the resulting caret position.

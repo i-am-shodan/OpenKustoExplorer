@@ -57,7 +57,7 @@ Copilot never executes a KQL proposal automatically. You review the complete pro
 
 ## Query With Context
 
-- Semantic classification, completion, and live diagnostics powered by `Microsoft.Azure.Kusto.Language`.
+- Semantic classification, completion, live diagnostics, and contextual syntax help powered by `Microsoft.Azure.Kusto.Language`.
 - Multi-query tabs: execution runs the KQL block at or nearest the caret.
 - Independent cluster and database targets per tab, plus tab colors, groups, renaming, search, and autosave.
 - Microsoft sign-in through the system browser; database discovery and schema loading happen lazily.
@@ -76,11 +76,46 @@ Copilot never executes a KQL proposal automatically. You review the complete pro
 
 ## Record An Investigation
 
-Start a named recording from the query toolbar or append to an existing session. While recording, every manual `Run`/`F5` execution from every query tab is retained with its KQL, target, timestamps, outcome, and all materialized result tables. Dashboard refreshes, automations, schema discovery, and internal calls are excluded.
+Recording is an explicit local capture mode for manual query activity. It retains the query and its bounded results; it does not record the screen, keystrokes, dashboard refreshes, automations, schema discovery, or internal application calls.
+
+### Start And Capture
+
+1. In the Query workspace, select **Start recording session** at the bottom of the Explorer pane.
+2. Enter a new session name, or enable **Append to existing session** and choose a previous investigation.
+3. Select **Save and start**, then run queries normally with **Run**, `F5`, or `Shift+Enter`. Recording follows manual executions across every query tab.
+4. Optionally right-click live result cells to mark a value, mark every retained value in a column, or remove a mark. Matching values are highlighted in later results while the session remains active.
+5. Select **Stop recording session** when the capture period is complete. You can append another recording period to the same named session later.
+
+Each execution retains its KQL, source-tab title, cluster and database, start and completion times, duration, outcome, error details, inferred values of interest, and every materialized result table within the capture limits. Failed, canceled, interrupted, capture-failed, and zero-row executions remain visible as investigation history.
+
+| Recording boundary | Limit |
+| --- | --- |
+| Result capture per execution | 500 rows total across all result tables and a 2 MiB estimated payload |
+| Query text per execution | 256 KiB |
+| Local catalog | 100 sessions, 500 executions per session, and a 1 GiB SQLite database |
+
+Executions that reach the row or payload boundary are labeled **result limited** rather than appearing complete.
+
+### Review And Annotate
+
+Open the **Sessions** workspace and select a recorded session, then choose an execution to inspect its read-only KQL and retained result tables. Results are paged in groups of 50 rows. From this workspace you can:
+
+- Rename or delete individual recorded queries, delete an entire session, and export all pertinent values as CSV.
+- Mark historical values or every retained value in a column, and remove individual value marks; exact typed matches are highlighted throughout the session without replacing conditional formatting.
+- Review the **Pertinent values** panel and **Discovery timeline** to see what was inferred from predicates, what you marked manually, and where each value first appeared.
+- Set chain start and end points from a result cell, pertinent value, or timeline item.
+
+### Generate A Follow-Up Query
+
+After selecting start and end values, choose **Generate query**. Open Kusto Explorer searches the recorded executions for a weighted, forward-in-time pivot chain and generates KQL only when table lineage, join keys, target, and schema validation are strong enough. A successful result opens in a new query tab targeted to the recorded cluster and database; it is never executed automatically. If no safe chain can be produced, the dialog explains why and lets you return to the investigation to add evidence.
+
+The Sessions workspace also has its own assistant conversation. **Enable session tools** must be turned on explicitly before the assistant can use bounded, read-only tools against the selected session.
+
+### How Values Become Evidence
 
 - Exact `where Column == literal` and literal `in (...)` predicates automatically identify stable string, GUID, and non-sentinel integer values of interest.
 - Nulls, empty or very short strings, booleans, datetimes, timespans, dynamic values, and floating-point thresholds are not inferred automatically.
-- Mark a result value, every value in its column, or an exact row as pertinent from its context menu. Later exact typed matches are annotated without replacing conditional formatting.
+- Mark a result value or every retained value in its column as pertinent from its context menu. Later exact typed matches are annotated without replacing conditional formatting.
 - The Sessions workspace retains failed, canceled, interrupted, and zero-row queries as investigation evidence.
 - A value declared interesting later can annotate an earlier matching occurrence as **recognized retrospectively**; this does not rewrite its original mark history.
 - Select exact start and end values from recorded result cells or the pertinent-values panel to find a weighted, forward-in-time **inferred pivot chain**. Equal values are correlation evidence, not proof of causation.
@@ -183,6 +218,7 @@ The initial workspace includes a local Help-cluster schema snapshot, so editor i
 | --- | --- |
 | `F5` or `Shift+Enter` | Run the query block at the caret |
 | `Esc` or `Shift+F5` | Cancel the active query |
+| `F1` | Show or refresh modeless help, with official Microsoft Learn links when available |
 | `Ctrl+Space` | Open schema-aware completion |
 | `Ctrl+Enter` | Insert a new line and pipe |
 | `Ctrl+Shift+F` | Search titles and KQL across open tabs |

@@ -1154,7 +1154,10 @@
                     </Grid>
                   </Border>
 
-                  <Grid IsVisible="{Binding HasResultTable}" RowDefinitions="42,*,Auto">
+                    <Grid
+                      x:Name="ResultView"
+                      IsVisible="{Binding HasResultTable}"
+                      RowDefinitions="42,*,Auto">
                     <Grid
                         Grid.Row="0"
                         Margin="12,5"
@@ -4310,24 +4313,41 @@
                 IsCheckedChanged="OnDensityToggleChanged" />
           </Grid>
 
-          <Grid Grid.Row="3" ColumnDefinitions="130,*,110" ColumnSpacing="18">
-            <TextBlock Grid.Column="0" VerticalAlignment="Center" Classes="sectionLabel" Text="TEXT SIZE" />
-            <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
-              <TextBlock FontWeight="SemiBold" Text="Application text" />
-              <TextBlock Classes="muted" FontSize="{DynamicResource TypeCompactSize}" Text="Also changes query editor text" />
+          <Grid Grid.Row="3" ColumnDefinitions="130,*" ColumnSpacing="18">
+            <TextBlock Grid.Column="0" VerticalAlignment="Top" Classes="sectionLabel" Text="EDITOR" />
+            <StackPanel Grid.Column="1" Spacing="9">
+              <Grid ColumnDefinitions="*,110" ColumnSpacing="12">
+                <StackPanel Grid.Column="0" VerticalAlignment="Center" Spacing="2">
+                  <TextBlock FontWeight="SemiBold" Text="Application text" />
+                  <TextBlock Classes="muted" FontSize="{DynamicResource TypeCompactSize}" Text="Also changes query editor text" />
+                </StackPanel>
+                <NumericUpDown
+                    x:Name="SettingsTextSize"
+                    Grid.Column="1"
+                    AutomationProperties.Name="Application text size"
+                    FormatString="0"
+                    HorizontalContentAlignment="Center"
+                    Increment="1"
+                    Maximum="18"
+                    Minimum="11"
+                    TextAlignment="Center"
+                    VerticalContentAlignment="Center"
+                    ValueChanged="OnSettingsTextSizeChanged" />
+              </Grid>
+              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                <StackPanel Grid.Column="0" VerticalAlignment="Center" Spacing="2">
+                  <TextBlock FontWeight="SemiBold" Text="Hover syntax help" />
+                  <TextBlock Classes="muted" FontSize="{DynamicResource TypeCompactSize}" Text="Show KQL help after a one-second hover" />
+                </StackPanel>
+                <ToggleSwitch
+                    x:Name="SettingsKqlHoverHelpToggle"
+                    Grid.Column="1"
+                    AutomationProperties.Name="Show KQL syntax help on hover"
+                    IsCheckedChanged="OnSettingsKqlHoverHelpChanged"
+                    OffContent="{x:Null}"
+                    OnContent="{x:Null}" />
+              </Grid>
             </StackPanel>
-            <NumericUpDown
-                x:Name="SettingsTextSize"
-                Grid.Column="2"
-                AutomationProperties.Name="Application text size"
-                FormatString="0"
-                HorizontalContentAlignment="Center"
-                Increment="1"
-                Maximum="18"
-                Minimum="11"
-                TextAlignment="Center"
-                VerticalContentAlignment="Center"
-                ValueChanged="OnSettingsTextSizeChanged" />
           </Grid>
 
           <Grid Grid.Row="4" ColumnDefinitions="130,*" ColumnSpacing="18">

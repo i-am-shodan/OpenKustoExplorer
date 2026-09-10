@@ -11,6 +11,195 @@ namespace OpenKustoExplorer.Infrastructure.Tests.Language;
 public sealed class KustoLanguageServiceTests
 {
     /// <summary>
+    /// Verifies core query operators receive concise catalog help when SDK quick info is empty.
+    /// </summary>
+    [Fact]
+    public void GetSyntaxHelpDescribesWhereOperator()
+    {
+        const string Query = "StormEvents | where State == \"TX\"";
+        int position = Query.IndexOf("where", StringComparison.Ordinal) + 2;
+        KustoLanguageService languageService = new();
+
+        KustoSyntaxHelp? help = languageService.GetSyntaxHelp(
+            Query,
+            position,
+            CreateDatabaseSchema());
+
+        Assert.NotNull(help);
+        Assert.Equal("where", help.Title);
+        Assert.Equal("Query operator", help.Kind);
+        Assert.Equal("T | where Predicate", help.Signature);
+        Assert.Contains("Filters the input rows", help.Description, StringComparison.Ordinal);
+        Assert.Equal(Query.IndexOf("where", StringComparison.Ordinal), help.Start);
+        Assert.Equal("where".Length, help.Length);
+    }
+
+    /// <summary>
+    /// Verifies catalog help links the project operator to its official Microsoft Learn topic.
+    /// </summary>
+    [Fact]
+    public void GetSyntaxHelpIncludesProjectDocumentation()
+    {
+        const string Query = "StormEvents | project State";
+        int position = Query.IndexOf("project", StringComparison.Ordinal) + 2;
+        KustoLanguageService languageService = new();
+
+        KustoSyntaxHelp? help = languageService.GetSyntaxHelp(
+            Query,
+            position,
+            CreateDatabaseSchema());
+
+        Assert.NotNull(help);
+        Assert.Equal("project", help.Title);
+        Assert.NotNull(help.DocumentationUri);
+        Assert.Equal(Uri.UriSchemeHttps, help.DocumentationUri.Scheme);
+        Assert.Equal("learn.microsoft.com", help.DocumentationUri.Host);
+        Assert.Equal("/en-us/kusto/query/project-operator", help.DocumentationUri.AbsolutePath);
+        Assert.Equal("?view=microsoft-fabric", help.DocumentationUri.Query);
+    }
+
+    /// <summary>
+    /// Verifies built-in function help combines an SDK signature with a concise explanation.
+    /// </summary>
+    [Fact]
+    public void GetSyntaxHelpDescribesBuiltInFunction()
+    {
+        const string Query = "print result = strlen(\"Kusto\")";
+        int position = Query.IndexOf("strlen", StringComparison.Ordinal) + 2;
+        KustoLanguageService languageService = new();
+
+        KustoSyntaxHelp? help = languageService.GetSyntaxHelp(
+            Query,
+            position,
+            CreateDatabaseSchema());
+
+        Assert.NotNull(help);
+        Assert.Equal("strlen", help.Title);
+        Assert.Equal("Scalar function", help.Kind);
+        Assert.Contains("strlen(string): long", help.Signature, StringComparison.Ordinal);
+        Assert.Contains("number of characters", help.Description, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Verifies SDK quick info supplies bound schema help when no catalog entry exists.
+    /// </summary>
+    [Fact]
+    public void GetSyntaxHelpDescribesBoundColumn()
+    {
+        const string Query = "StormEvents | project State";
+        int position = Query.IndexOf("State", StringComparison.Ordinal) + 2;
+        KustoLanguageService languageService = new();
+
+        KustoSyntaxHelp? help = languageService.GetSyntaxHelp(
+            Query,
+            position,
+            CreateDatabaseSchema());
+
+        Assert.NotNull(help);
+        Assert.Equal("State", help.Title);
+        Assert.Equal("Column", help.Kind);
+        Assert.Contains("State", help.Signature, StringComparison.Ordinal);
+        Assert.Contains("current query scope", help.Description, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Verifies a caret immediately after a token resolves help for that token.
+    /// </summary>
+    [Fact]
+    public void GetSyntaxHelpAtTokenEndUsesPrecedingSyntax()
+    {
+        const string Query = "StormEvents | summarize count()";
+        int position = Query.IndexOf("summarize", StringComparison.Ordinal) + "summarize".Length;
+        KustoLanguageService languageService = new();
+
+        KustoSyntaxHelp? help = languageService.GetSyntaxHelp(
+            Query,
+            position,
+            CreateDatabaseSchema());
+
+        Assert.NotNull(help);
+        Assert.Equal("summarize", help.Title);
+        Assert.Contains("Groups rows", help.Description, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Verifies a caret between a function name and its opening parenthesis resolves the function.
+    /// </summary>
+    [Fact]
+    public void GetSyntaxHelpAtFunctionEndUsesFunctionName()
+    {
+        const string Query = "print result = strlen(\"Kusto\")";
+        int position = Query.IndexOf("strlen", StringComparison.Ordinal) + "strlen".Length;
+        KustoLanguageService languageService = new();
+
+        KustoSyntaxHelp? help = languageService.GetSyntaxHelp(
+            Query,
+            position,
+            CreateDatabaseSchema());
+
+        Assert.NotNull(help);
+        Assert.Equal("strlen", help.Title);
+    }
+
+    /// <summary>
+    /// Verifies literal values do not produce generic syntax help with no actionable explanation.
+    /// </summary>
+    [Fact]
+    public void GetSyntaxHelpIgnoresLiteralValue()
+    {
+        const string Query = "print result = \"Kusto\"";
+        int position = Query.IndexOf("Kusto", StringComparison.Ordinal) + 2;
+        KustoLanguageService languageService = new();
+
+        KustoSyntaxHelp? help = languageService.GetSyntaxHelp(
+            Query,
+            position,
+            CreateDatabaseSchema());
+
+        Assert.Null(help);
+    }
+
+    /// <summary>
+    /// Verifies symbolic comparisons receive the same contextual help as word operators.
+    /// </summary>
+    [Fact]
+    public void GetSyntaxHelpDescribesSymbolicOperator()
+    {
+        const string Query = "StormEvents | where State == \"TX\"";
+        int position = Query.IndexOf("==", StringComparison.Ordinal);
+        KustoLanguageService languageService = new();
+
+        KustoSyntaxHelp? help = languageService.GetSyntaxHelp(
+            Query,
+            position,
+            CreateDatabaseSchema());
+
+        Assert.NotNull(help);
+        Assert.Equal("==", help.Title);
+        Assert.Equal("Predicate operator", help.Kind);
+        Assert.Contains("equal", help.Description, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Verifies normal editor analysis warms contextual help for immediate F1 display.
+    /// </summary>
+    [Fact]
+    public void AnalyzeIncludesSyntaxHelpAtCaret()
+    {
+        const string Query = "StormEvents | summarize count() by State";
+        int position = Query.IndexOf("summarize", StringComparison.Ordinal) + 2;
+        KustoLanguageService languageService = new();
+
+        KustoLanguageAnalysis analysis = languageService.Analyze(
+            Query,
+            position,
+            CreateDatabaseSchema());
+
+        Assert.NotNull(analysis.SyntaxHelp);
+        Assert.Equal("summarize", analysis.SyntaxHelp.Title);
+    }
+
+    /// <summary>
     /// Verifies that the active database tables appear at the start of a document.
     /// </summary>
     [Fact]
@@ -65,6 +254,110 @@ public sealed class KustoLanguageServiceTests
         Assert.Contains(
             analysis.Completions,
             completion => completion.DisplayText.Equals("State", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Verifies that common pipeline continuations lead the completion list.
+    /// </summary>
+    [Fact]
+    public void AnalyzeAfterPipeRanksCommonOperatorsFirst()
+    {
+        const string query = "StormEvents\n| ";
+        KustoLanguageService languageService = new();
+
+        KustoLanguageAnalysis analysis = languageService.Analyze(query, query.Length, CreateDatabaseSchema());
+
+        Assert.Equal("where", analysis.Completions[0].DisplayText);
+        Assert.Contains(
+            analysis.Completions.Take(5),
+            completion => completion.DisplayText.Equals("project", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Verifies that symbols in the current query outrank the generic function catalog.
+    /// </summary>
+    [Fact]
+    public void AnalyzeInScalarExpressionRanksInScopeSymbolsBeforeBuiltInFunctions()
+    {
+        const string query = "let threshold = 10;\nStormEvents\n| where DamageProperty > ";
+        KustoLanguageService languageService = new();
+
+        KustoLanguageAnalysis analysis = languageService.Analyze(query, query.Length, CreateDatabaseSchema());
+        int thresholdIndex = FindCompletionIndex(analysis, "threshold");
+        int stateIndex = FindCompletionIndex(analysis, "State");
+        int builtInFunctionIndex = analysis.Completions
+            .Select((completion, index) => (completion, index))
+            .First(pair => pair.completion.Kind.Equals("BuiltInFunction", StringComparison.Ordinal))
+            .index;
+
+        Assert.True(thresholdIndex >= 0);
+        Assert.True(stateIndex >= 0);
+        Assert.True(thresholdIndex < builtInFunctionIndex);
+        Assert.True(stateIndex < builtInFunctionIndex);
+    }
+
+    /// <summary>
+    /// Verifies that a tabular variable is preferred when starting a query after declarations.
+    /// </summary>
+    [Fact]
+    public void AnalyzeAfterLetDeclarationRanksLocalTableFirst()
+    {
+        const string query = "let recentStorms = StormEvents | take 10;\n";
+        KustoLanguageService languageService = new();
+
+        KustoLanguageAnalysis analysis = languageService.Analyze(query, query.Length, CreateDatabaseSchema());
+
+        Assert.Equal("recentStorms", analysis.Completions[0].DisplayText);
+    }
+
+    /// <summary>
+    /// Verifies that an exact typed operator outranks longer prefix matches.
+    /// </summary>
+    [Fact]
+    public void AnalyzeTypedOperatorPrefixRanksExactMatchFirst()
+    {
+        const string query = "StormEvents\n| project";
+        KustoLanguageService languageService = new();
+
+        KustoLanguageAnalysis analysis = languageService.Analyze(query, query.Length, CreateDatabaseSchema());
+
+        Assert.Equal("project", analysis.Completions[0].DisplayText);
+    }
+
+    /// <summary>
+    /// Verifies that aggregate functions lead while composing a summarize expression.
+    /// </summary>
+    [Fact]
+    public void AnalyzeAfterSummarizeRanksAggregateFunctionsBeforeGenericFunctions()
+    {
+        const string query = "StormEvents\n| summarize ";
+        KustoLanguageService languageService = new();
+
+        KustoLanguageAnalysis analysis = languageService.Analyze(query, query.Length, CreateDatabaseSchema());
+        int aggregateFunctionIndex = analysis.Completions
+            .Select((completion, index) => (completion, index))
+            .First(pair => pair.completion.Kind.Equals("AggregateFunction", StringComparison.Ordinal))
+            .index;
+        int builtInFunctionIndex = analysis.Completions
+            .Select((completion, index) => (completion, index))
+            .First(pair => pair.completion.Kind.Equals("BuiltInFunction", StringComparison.Ordinal))
+            .index;
+
+        Assert.True(aggregateFunctionIndex < builtInFunctionIndex);
+    }
+
+    /// <summary>
+    /// Verifies that the previous pipeline stage influences the next operator selection.
+    /// </summary>
+    [Fact]
+    public void AnalyzeAfterProjectUsesCorpusTransitionRanking()
+    {
+        const string query = "StormEvents\n| project State\n| ";
+        KustoLanguageService languageService = new();
+
+        KustoLanguageAnalysis analysis = languageService.Analyze(query, query.Length, CreateDatabaseSchema());
+
+        Assert.Equal("extend", analysis.Completions[0].DisplayText);
     }
 
     /// <summary>
@@ -454,6 +747,16 @@ public sealed class KustoLanguageServiceTests
             && classification.Kind.Equals(expectedKind, StringComparison.Ordinal);
 
         return isMatch;
+    }
+
+    private static int FindCompletionIndex(KustoLanguageAnalysis analysis, string displayText)
+    {
+        return analysis.Completions
+            .Select((completion, index) => (completion, index))
+            .Where(pair => pair.completion.DisplayText.Equals(displayText, StringComparison.Ordinal))
+            .Select(pair => pair.index)
+            .DefaultIfEmpty(-1)
+            .First();
     }
 
     private static KustoDatabaseSchema CreateDatabaseSchema()

@@ -33,6 +33,20 @@ public interface IKustoLanguageService
     public KustoVisualization? GetVisualizationAtPosition(string text, int caretPosition);
 
     /// <summary>
+    /// Gets contextual help for the KQL syntax element at a document position.
+    /// </summary>
+    /// <param name="text">The complete KQL document text.</param>
+    /// <param name="position">The zero-based document position.</param>
+    /// <param name="databaseSchema">The active cluster and database schema.</param>
+    /// <param name="cancellationToken">A token that cancels parsing and semantic analysis.</param>
+    /// <returns>Contextual syntax help, or <see langword="null"/> when no help is available.</returns>
+    public KustoSyntaxHelp? GetSyntaxHelp(
+        string text,
+        int position,
+        KustoDatabaseSchema databaseSchema,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Analyzes KQL source text using the supplied active database schema.
     /// </summary>
     /// <param name="text">The complete KQL document text.</param>
