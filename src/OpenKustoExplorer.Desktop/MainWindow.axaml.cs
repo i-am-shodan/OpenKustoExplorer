@@ -96,6 +96,8 @@ public sealed partial class MainWindow : Window, IDisposable
     private TextBox? copilotPrompt;
     private TextBlock? densityDescription;
     private ToggleSwitch? densityToggle;
+    private Slider? textZoomSlider;
+    private TextBlock? textZoomValue;
     private Button? dashboardButton;
     private ItemsControl? dashboardCanvas;
     private Control? dashboardInteractionControl;
@@ -148,9 +150,12 @@ public sealed partial class MainWindow : Window, IDisposable
     private TextBox? settingsOpenAIEndpoint;
     private TextBox? settingsOpenAIModel;
     private StackPanel? settingsOpenAIOptions;
+    private Slider? settingsResultTextZoomSlider;
+    private TextBlock? settingsResultTextZoomValue;
     private Button? settingsButton;
     private RadioButton? settingsSystemThemeOption;
-    private NumericUpDown? settingsTextSize;
+    private Slider? settingsTextZoomSlider;
+    private TextBlock? settingsTextZoomValue;
     private bool suppressSettingsAIProviderChange;
     private bool suppressSettingsAzureOpenAIAuthenticationChange;
     private bool suppressSettingsCopilotDefaultModelChange;
@@ -171,6 +176,8 @@ public sealed partial class MainWindow : Window, IDisposable
     private ScrollViewer? resultRowsScrollViewer;
     private ScrollViewer? resultScrollViewer;
     private TabControl? resultTabs;
+    private Slider? resultTextZoomSlider;
+    private TextBlock? resultTextZoomValue;
     private ScrollBar? resultVerticalScrollBar;
     private Grid? resultView;
     private ListBox? resultsList;
@@ -1131,7 +1138,7 @@ public sealed partial class MainWindow : Window, IDisposable
             _ = eventArguments;
             settingsDialog.IsVisible = true;
             UpdateCopilotDefaultControls();
-            settingsTextSize?.Focus();
+            settingsTextZoomSlider?.Focus();
 
             if (DataContext is MainWindowViewModel viewModel && !viewModel.Copilot.IsSignedIn)
             {
@@ -1288,11 +1295,25 @@ public sealed partial class MainWindow : Window, IDisposable
         }
     }
 
-    private void OnSettingsTextSizeChanged(object? sender, NumericUpDownValueChangedEventArgs eventArguments)
+    private void OnTextZoomChanged(object? sender, RangeBaseValueChangedEventArgs eventArguments)
     {
-        if (appearanceSettings is not null && eventArguments.NewValue is decimal value)
+        _ = eventArguments;
+        if (appearanceSettings is not null && sender is Slider slider)
         {
-            appearanceSettings.TextSize = (double)value;
+            appearanceSettings.TextZoomPercentage = (int)Math.Round(
+                slider.Value,
+                MidpointRounding.AwayFromZero);
+        }
+    }
+
+    private void OnResultTextZoomChanged(object? sender, RangeBaseValueChangedEventArgs eventArguments)
+    {
+        _ = eventArguments;
+        if (appearanceSettings is not null && sender is Slider slider)
+        {
+            appearanceSettings.ResultTextZoomPercentage = (int)Math.Round(
+                slider.Value,
+                MidpointRounding.AwayFromZero);
         }
     }
 
@@ -2375,6 +2396,8 @@ public sealed partial class MainWindow : Window, IDisposable
         resultHorizontalScrollBar = FindRequiredControl<ScrollBar>("ResultHorizontalScrollBar");
         resultScrollViewer = FindRequiredControl<ScrollViewer>("ResultScrollViewer");
         resultTabs = FindRequiredControl<TabControl>("ResultTabs");
+        resultTextZoomSlider = FindRequiredControl<Slider>("ResultTextZoomSlider");
+        resultTextZoomValue = FindRequiredControl<TextBlock>("ResultTextZoomValue");
         resultVerticalScrollBar = FindRequiredControl<ScrollBar>("ResultVerticalScrollBar");
         resultView = FindRequiredControl<Grid>("ResultView");
         resultView.AddHandler(
@@ -2414,11 +2437,16 @@ public sealed partial class MainWindow : Window, IDisposable
         settingsOpenAIEndpoint = FindRequiredControl<TextBox>("SettingsOpenAIEndpoint");
         settingsOpenAIModel = FindRequiredControl<TextBox>("SettingsOpenAIModel");
         settingsOpenAIOptions = FindRequiredControl<StackPanel>("SettingsOpenAIOptions");
+        settingsResultTextZoomSlider = FindRequiredControl<Slider>("SettingsResultTextZoomSlider");
+        settingsResultTextZoomValue = FindRequiredControl<TextBlock>("SettingsResultTextZoomValue");
         settingsSystemThemeOption = FindRequiredControl<RadioButton>("SettingsSystemThemeOption");
-        settingsTextSize = FindRequiredControl<NumericUpDown>("SettingsTextSize");
+        settingsTextZoomSlider = FindRequiredControl<Slider>("SettingsTextZoomSlider");
+        settingsTextZoomValue = FindRequiredControl<TextBlock>("SettingsTextZoomValue");
         signedInUsersList = FindRequiredControl<ItemsControl>("SignedInUsersList");
         systemThemeOption = FindRequiredControl<RadioButton>("SystemThemeOption");
         tabSearchBox = FindRequiredControl<TextBox>("TabSearchBox");
+        textZoomSlider = FindRequiredControl<Slider>("TextZoomSlider");
+        textZoomValue = FindRequiredControl<TextBlock>("TextZoomValue");
         visualizationSurface = FindRequiredControl<Grid>("VisualizationSurface");
     }
 
@@ -2868,6 +2896,8 @@ public sealed partial class MainWindow : Window, IDisposable
             UpdateDensityControls(appearanceSettings.Density);
             UpdateCopilotDefaultControls();
             UpdateHighContrastNotice(appearanceSettings.IsHighContrast);
+            UpdateResultTextZoomControls(appearanceSettings.ResultTextZoomPercentage);
+            UpdateTextZoomControls(appearanceSettings.TextZoomPercentage);
             UpdateThemeControls(appearanceSettings.ThemePreference);
 
             if (settingsKqlHoverHelpToggle is not null)
@@ -2894,6 +2924,54 @@ public sealed partial class MainWindow : Window, IDisposable
             densityDescription.Text = density == WorkbenchDensity.Comfortable
                 ? "Larger controls and rows"
                 : "Compact controls and rows";
+        }
+    }
+
+    private void UpdateTextZoomControls(int textZoomPercentage)
+    {
+        if (textZoomSlider is not null)
+        {
+            textZoomSlider.Value = textZoomPercentage;
+        }
+
+        if (settingsTextZoomSlider is not null)
+        {
+            settingsTextZoomSlider.Value = textZoomPercentage;
+        }
+
+        string valueText = $"{textZoomPercentage}%";
+        if (textZoomValue is not null)
+        {
+            textZoomValue.Text = valueText;
+        }
+
+        if (settingsTextZoomValue is not null)
+        {
+            settingsTextZoomValue.Text = valueText;
+        }
+    }
+
+    private void UpdateResultTextZoomControls(int textZoomPercentage)
+    {
+        if (resultTextZoomSlider is not null)
+        {
+            resultTextZoomSlider.Value = textZoomPercentage;
+        }
+
+        if (settingsResultTextZoomSlider is not null)
+        {
+            settingsResultTextZoomSlider.Value = textZoomPercentage;
+        }
+
+        string valueText = $"{textZoomPercentage}%";
+        if (resultTextZoomValue is not null)
+        {
+            resultTextZoomValue.Text = valueText;
+        }
+
+        if (settingsResultTextZoomValue is not null)
+        {
+            settingsResultTextZoomValue.Text = valueText;
         }
     }
 
@@ -3029,11 +3107,6 @@ public sealed partial class MainWindow : Window, IDisposable
         if (settingsDarkThemeOption is not null)
         {
             settingsDarkThemeOption.IsChecked = themePreference == ThemePreference.Dark;
-        }
-
-        if (settingsTextSize is not null && appearanceSettings is not null)
-        {
-            settingsTextSize.Value = (decimal)appearanceSettings.TextSize;
         }
     }
 

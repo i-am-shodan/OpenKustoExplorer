@@ -62,12 +62,13 @@ public sealed class KustoQueryService : IKustoCatalogService, IKustoGraphQuerySe
         ObjectDisposedException.ThrowIf(isDisposed, this);
         cancellationToken.ThrowIfCancellationRequested();
 
+        bool isManagementCommand = IsManagementCommand(request.QueryText);
         KustoQueryResult result = await ExecuteRestAsync(
             request.ClusterUri,
-            "/v1/rest/query",
+            isManagementCommand ? "/v1/rest/mgmt" : "/v1/rest/query",
             request.DatabaseName,
             request.QueryText,
-            "Query",
+            isManagementCommand ? "Command" : "Query",
             cancellationToken).ConfigureAwait(false);
 
         return result;
@@ -295,6 +296,17 @@ public sealed class KustoQueryService : IKustoCatalogService, IKustoGraphQuerySe
                 httpClient.Dispose();
             }
         }
+    }
+
+    /// <summary>
+    /// Determines whether query text represents a dot-prefixed Kusto management command.
+    /// </summary>
+    /// <param name="queryText">The KQL text to classify.</param>
+    /// <returns><see langword="true"/> when the first non-whitespace character is a dot.</returns>
+    internal static bool IsManagementCommand(string queryText)
+    {
+        ReadOnlySpan<char> trimmedQuery = queryText.AsSpan().TrimStart();
+        return !trimmedQuery.IsEmpty && trimmedQuery[0] == '.';
     }
 
     private static HttpRequestMessage CreateRestRequest(

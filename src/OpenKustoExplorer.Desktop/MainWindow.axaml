@@ -333,6 +333,48 @@
                         Height="1"
                         Margin="0,4"
                         Background="{DynamicResource DecorativeDividerBrush}" />
+                    <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="12" RowSpacing="4">
+                      <TextBlock FontWeight="SemiBold" Text="Interface text" />
+                      <TextBlock
+                        x:Name="TextZoomValue"
+                        Grid.Column="1"
+                        Classes="tertiary"
+                        FontSize="{DynamicResource TypeCompactSize}"
+                        Text="100%" />
+                      <Slider
+                        x:Name="TextZoomSlider"
+                        Grid.Row="1"
+                        Grid.ColumnSpan="2"
+                        AutomationProperties.Name="Interface text zoom"
+                        IsSnapToTickEnabled="True"
+                        Maximum="140"
+                        Minimum="85"
+                        TickFrequency="5"
+                        ValueChanged="OnTextZoomChanged" />
+                    </Grid>
+                    <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="12" RowSpacing="4">
+                      <TextBlock FontWeight="SemiBold" Text="Result table text" />
+                      <TextBlock
+                        x:Name="ResultTextZoomValue"
+                        Grid.Column="1"
+                        Classes="tertiary"
+                        FontSize="{DynamicResource TypeCompactSize}"
+                        Text="100%" />
+                      <Slider
+                        x:Name="ResultTextZoomSlider"
+                        Grid.Row="1"
+                        Grid.ColumnSpan="2"
+                        AutomationProperties.Name="Result table text zoom"
+                        IsSnapToTickEnabled="True"
+                        Maximum="250"
+                        Minimum="85"
+                        TickFrequency="5"
+                        ValueChanged="OnResultTextZoomChanged" />
+                    </Grid>
+                    <Border
+                      Height="1"
+                      Margin="0,4"
+                      Background="{DynamicResource DecorativeDividerBrush}" />
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
                       <StackPanel Grid.Column="0" Spacing="2">
                         <TextBlock FontWeight="SemiBold" Text="Comfortable density" />
@@ -683,7 +725,7 @@
           </Border>
         </SplitView.Pane>
 
-        <Grid RowDefinitions="Auto,38,Auto,*,4,280">
+        <Grid RowDefinitions="Auto,38,Auto,55*,4,45*">
           <Border
               Grid.Row="0"
               Background="{DynamicResource TabBarSurfaceBrush}"
@@ -1217,7 +1259,7 @@
                           AutomationProperties.Name="Query result data grid"
                             MinWidth="{Binding ResultTableMinimumWidth}"
                             HorizontalAlignment="Stretch"
-                            RowDefinitions="42,*">
+                            RowDefinitions="Auto,*">
                         <ItemsControl
                           Grid.Row="0"
                           AutomationProperties.ControlTypeOverride="Header"
@@ -1252,14 +1294,14 @@
                                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="3">
                                       <StackPanel Grid.Column="0" VerticalAlignment="Center" Spacing="0">
                                         <TextBlock
-                                            FontSize="{DynamicResource TypeCompactSize}"
+                                            FontSize="{DynamicResource ResultHeaderTextSize}"
                                             FontWeight="SemiBold"
                                             Text="{Binding Name}"
                                             TextTrimming="CharacterEllipsis" />
                                         <TextBlock
                                             Classes="tertiary"
                                             FontFamily="Cascadia Code, JetBrains Mono, Noto Sans Mono, monospace"
-                                            FontSize="{DynamicResource TypeMetadataSize}"
+                                            FontSize="{DynamicResource ResultMetadataTextSize}"
                                             Text="{Binding TypeName}"
                                             TextTrimming="CharacterEllipsis" />
                                       </StackPanel>
@@ -1405,7 +1447,7 @@
                                               AutomationProperties.Name="{Binding AutomationText}"
                                               AutomationProperties.HelpText="{Binding RecordingAnnotationText}"
                                               FontFamily="Cascadia Code, JetBrains Mono, Noto Sans Mono, monospace"
-                                              FontSize="{DynamicResource TypeSmallSize}"
+                                              FontSize="{DynamicResource ResultCellTextSize}"
                                               Text="{Binding Text}"
                                               TextTrimming="CharacterEllipsis"
                                               ToolTip.Tip="{Binding Text}" />
@@ -4316,24 +4358,46 @@
           <Grid Grid.Row="3" ColumnDefinitions="130,*" ColumnSpacing="18">
             <TextBlock Grid.Column="0" VerticalAlignment="Top" Classes="sectionLabel" Text="EDITOR" />
             <StackPanel Grid.Column="1" Spacing="9">
-              <Grid ColumnDefinitions="*,110" ColumnSpacing="12">
-                <StackPanel Grid.Column="0" VerticalAlignment="Center" Spacing="2">
+              <StackPanel Spacing="4">
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
                   <TextBlock FontWeight="SemiBold" Text="Application text" />
-                  <TextBlock Classes="muted" FontSize="{DynamicResource TypeCompactSize}" Text="Also changes query editor text" />
-                </StackPanel>
-                <NumericUpDown
-                    x:Name="SettingsTextSize"
-                    Grid.Column="1"
-                    AutomationProperties.Name="Application text size"
-                    FormatString="0"
-                    HorizontalContentAlignment="Center"
-                    Increment="1"
-                    Maximum="18"
-                    Minimum="11"
-                    TextAlignment="Center"
-                    VerticalContentAlignment="Center"
-                    ValueChanged="OnSettingsTextSizeChanged" />
-              </Grid>
+                  <TextBlock
+                      x:Name="SettingsTextZoomValue"
+                      Grid.Column="1"
+                      Classes="tertiary"
+                      FontSize="{DynamicResource TypeCompactSize}"
+                      Text="100%" />
+                </Grid>
+                <TextBlock Classes="muted" FontSize="{DynamicResource TypeCompactSize}" Text="Also changes query editor text" />
+                <Slider
+                    x:Name="SettingsTextZoomSlider"
+                    AutomationProperties.Name="Application text zoom"
+                    IsSnapToTickEnabled="True"
+                    Maximum="140"
+                    Minimum="85"
+                    TickFrequency="5"
+                    ValueChanged="OnTextZoomChanged" />
+              </StackPanel>
+              <StackPanel Spacing="4">
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                  <TextBlock FontWeight="SemiBold" Text="Result table text" />
+                  <TextBlock
+                        x:Name="SettingsResultTextZoomValue"
+                        Grid.Column="1"
+                        Classes="tertiary"
+                        FontSize="{DynamicResource TypeCompactSize}"
+                        Text="100%" />
+                </Grid>
+                <TextBlock Classes="muted" FontSize="{DynamicResource TypeCompactSize}" Text="Changes column headers and cell values" />
+                <Slider
+                    x:Name="SettingsResultTextZoomSlider"
+                    AutomationProperties.Name="Result table text zoom"
+                    IsSnapToTickEnabled="True"
+                    Maximum="250"
+                    Minimum="85"
+                    TickFrequency="5"
+                    ValueChanged="OnResultTextZoomChanged" />
+              </StackPanel>
               <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
                 <StackPanel Grid.Column="0" VerticalAlignment="Center" Spacing="2">
                   <TextBlock FontWeight="SemiBold" Text="Hover syntax help" />

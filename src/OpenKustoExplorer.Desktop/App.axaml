@@ -21,6 +21,9 @@
       <x:Double x:Key="TypeMetricSize">18</x:Double>
       <x:Double x:Key="TypeDisplaySize">20</x:Double>
       <x:Double x:Key="QueryEditorTextSize">14</x:Double>
+      <x:Double x:Key="ResultCellTextSize">10</x:Double>
+      <x:Double x:Key="ResultHeaderTextSize">11</x:Double>
+      <x:Double x:Key="ResultMetadataTextSize">9</x:Double>
       <x:Double x:Key="ControlHeightCompact">32</x:Double>
       <x:Double x:Key="ControlHeightComfortable">40</x:Double>
       <x:Double x:Key="TreeRowHeightCompact">28</x:Double>

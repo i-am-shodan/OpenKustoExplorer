@@ -503,6 +503,22 @@ public sealed class KustoLanguageServiceTests
     }
 
     /// <summary>
+    /// Verifies that a dot-prefixed management command is selected for execution.
+    /// </summary>
+    [Fact]
+    public void GetQueryAtPositionSelectsManagementCommand()
+    {
+        const string Command = ".show tables";
+        KustoLanguageService languageService = new();
+
+        KustoQuerySelection? selection = languageService.GetQueryAtPosition(Command, Command.Length);
+
+        Assert.NotNull(selection);
+        Assert.Equal(Command, selection.Text);
+        Assert.Equal(0, selection.Start);
+    }
+
+    /// <summary>
     /// Verifies a terminal make-graph expression is exported into named node and edge tables.
     /// </summary>
     [Fact]

@@ -12,16 +12,23 @@ namespace OpenKustoExplorer.Desktop.Appearance;
 internal sealed class AppearanceSettings : IKustoAIProviderConfiguration, INotifyPropertyChanged, IDisposable
 {
     /// <summary>
-    /// Gets the largest supported application base text size.
+    /// Gets the largest supported application text zoom percentage.
     /// </summary>
-    internal const double MaximumTextSize = 18;
+    internal const int MaximumTextZoomPercentage = 140;
 
     /// <summary>
-    /// Gets the smallest supported application base text size.
+    /// Gets the largest supported result-table text zoom percentage.
     /// </summary>
-    internal const double MinimumTextSize = 11;
+    internal const int MaximumResultTextZoomPercentage = 250;
+
+    /// <summary>
+    /// Gets the smallest supported application text zoom percentage.
+    /// </summary>
+    internal const int MinimumTextZoomPercentage = 85;
 
     private const double DefaultTextSize = 13;
+    private const int DefaultTextZoomPercentage = 100;
+    private const int TextZoomStep = 5;
     private const string DefaultAzureOpenAIApiKeyEnvironmentVariable = "AZURE_OPENAI_API_KEY";
     private const string DefaultOpenAIApiKeyEnvironmentVariable = "OPENAI_API_KEY";
     private const string DefaultOpenAIModel = "gpt-4.1-mini";
@@ -43,11 +50,12 @@ internal sealed class AppearanceSettings : IKustoAIProviderConfiguration, INotif
     private bool isDisposed;
     private bool isHighContrast;
     private IPlatformSettings? platformSettings;
+    private int resultTextZoomPercentage = DefaultTextZoomPercentage;
     private bool showKqlHoverHelp = true;
     private string openAIApiKeyEnvironmentVariable = DefaultOpenAIApiKeyEnvironmentVariable;
     private string openAIEndpoint = string.Empty;
     private string openAIModel = DefaultOpenAIModel;
-    private double textSize = DefaultTextSize;
+    private int textZoomPercentage = DefaultTextZoomPercentage;
     private ThemePreference themePreference = ThemePreference.System;
 
     /// <summary>
@@ -318,22 +326,40 @@ internal sealed class AppearanceSettings : IKustoAIProviderConfiguration, INotif
     public bool CanEnableAzureMcpByDefault => CopilotShareResultDataByDefault;
 
     /// <summary>
-    /// Gets or sets the application base text size in device-independent pixels.
+    /// Gets or sets the application text zoom percentage.
     /// </summary>
-    public double TextSize
+    public int TextZoomPercentage
     {
-        get => textSize;
+        get => textZoomPercentage;
         set
         {
-            double boundedValue = Math.Round(
-                Math.Clamp(value, MinimumTextSize, MaximumTextSize),
-                MidpointRounding.AwayFromZero);
+            int boundedValue = NormalizeTextZoomPercentage(value, MaximumTextZoomPercentage);
 
-            if (Math.Abs(textSize - boundedValue) > double.Epsilon)
+            if (textZoomPercentage != boundedValue)
             {
-                textSize = boundedValue;
+                textZoomPercentage = boundedValue;
                 ApplyTextSize();
-                OnPropertyChanged(nameof(TextSize));
+                OnPropertyChanged(nameof(TextZoomPercentage));
+                Save();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gets or sets the result-table text zoom percentage.
+    /// </summary>
+    public int ResultTextZoomPercentage
+    {
+        get => resultTextZoomPercentage;
+        set
+        {
+            int boundedValue = NormalizeTextZoomPercentage(value, MaximumResultTextZoomPercentage);
+
+            if (resultTextZoomPercentage != boundedValue)
+            {
+                resultTextZoomPercentage = boundedValue;
+                ApplyResultTextSize();
+                OnPropertyChanged(nameof(ResultTextZoomPercentage));
                 Save();
             }
         }
@@ -380,6 +406,7 @@ internal sealed class AppearanceSettings : IKustoAIProviderConfiguration, INotif
         platformSettings = application.PlatformSettings;
         ApplyThemePreference();
         ApplyTextSize();
+        ApplyResultTextSize();
 
         if (platformSettings is not null)
         {
@@ -433,20 +460,42 @@ internal sealed class AppearanceSettings : IKustoAIProviderConfiguration, INotif
         return value;
     }
 
-    private static double ReadTextSize(JsonElement root)
+    private static int ReadTextZoomPercentage(JsonElement root)
     {
-        double value = DefaultTextSize;
+        int value = DefaultTextZoomPercentage;
 
-        if (root.TryGetProperty("textSize", out JsonElement element)
-            && element.TryGetDouble(out double candidate)
-            && double.IsFinite(candidate))
+        if (root.TryGetProperty("textZoomPercentage", out JsonElement zoomElement)
+            && zoomElement.TryGetInt32(out int zoomPercentage))
         {
-            value = Math.Round(
-                Math.Clamp(candidate, MinimumTextSize, MaximumTextSize),
+            value = zoomPercentage;
+        }
+        else if (root.TryGetProperty("textSize", out JsonElement textSizeElement)
+            && textSizeElement.TryGetDouble(out double textSize)
+            && double.IsFinite(textSize))
+        {
+            value = (int)Math.Round(
+                (textSize / DefaultTextSize) * DefaultTextZoomPercentage,
                 MidpointRounding.AwayFromZero);
         }
 
-        return value;
+        return NormalizeTextZoomPercentage(value, MaximumTextZoomPercentage);
+    }
+
+    private static int ReadResultTextZoomPercentage(JsonElement root)
+    {
+        int value = root.TryGetProperty("resultTextZoomPercentage", out JsonElement element)
+            && element.TryGetInt32(out int percentage)
+                ? percentage
+                : DefaultTextZoomPercentage;
+        return NormalizeTextZoomPercentage(value, MaximumResultTextZoomPercentage);
+    }
+
+    private static int NormalizeTextZoomPercentage(int value, int maximumPercentage)
+    {
+        return Math.Clamp(
+            (int)Math.Round((double)value / TextZoomStep, MidpointRounding.AwayFromZero) * TextZoomStep,
+            MinimumTextZoomPercentage,
+            maximumPercentage);
     }
 
     private static bool ReadBoolean(JsonElement root, string propertyName, bool defaultValue)
@@ -503,19 +552,30 @@ internal sealed class AppearanceSettings : IKustoAIProviderConfiguration, INotif
     {
         if (application is not null)
         {
-            application.Resources["TypeBadgeSize"] = Math.Max(7, TextSize - 6);
-            application.Resources["TypeMicroSize"] = Math.Max(8, TextSize - 5);
-            application.Resources["TypeMetadataSize"] = Math.Max(9, TextSize - 4);
-            application.Resources["TypeSmallSize"] = Math.Max(10, TextSize - 3);
-            application.Resources["TypeCompactSize"] = Math.Max(11, TextSize - 2);
-            application.Resources["TypeCaptionSize"] = Math.Max(10, TextSize - 1);
-            application.Resources["TypeBodySize"] = TextSize;
-            application.Resources["TypeEmphasisSize"] = TextSize + 1;
-            application.Resources["TypeSubheadingSize"] = TextSize + 2;
-            application.Resources["TypeTitleSize"] = TextSize + 3;
-            application.Resources["TypeMetricSize"] = TextSize + 5;
-            application.Resources["TypeDisplaySize"] = TextSize + 7;
-            application.Resources["QueryEditorTextSize"] = TextSize + 1;
+            double textSize = DefaultTextSize * TextZoomPercentage / DefaultTextZoomPercentage;
+            application.Resources["TypeBadgeSize"] = Math.Max(7, textSize - 6);
+            application.Resources["TypeMicroSize"] = Math.Max(8, textSize - 5);
+            application.Resources["TypeMetadataSize"] = Math.Max(9, textSize - 4);
+            application.Resources["TypeSmallSize"] = Math.Max(10, textSize - 3);
+            application.Resources["TypeCompactSize"] = Math.Max(11, textSize - 2);
+            application.Resources["TypeCaptionSize"] = Math.Max(10, textSize - 1);
+            application.Resources["TypeBodySize"] = textSize;
+            application.Resources["TypeEmphasisSize"] = textSize + 1;
+            application.Resources["TypeSubheadingSize"] = textSize + 2;
+            application.Resources["TypeTitleSize"] = textSize + 3;
+            application.Resources["TypeMetricSize"] = textSize + 5;
+            application.Resources["TypeDisplaySize"] = textSize + 7;
+            application.Resources["QueryEditorTextSize"] = textSize + 1;
+        }
+    }
+
+    private void ApplyResultTextSize()
+    {
+        if (application is not null)
+        {
+            application.Resources["ResultCellTextSize"] = 10 * ResultTextZoomPercentage / 100d;
+            application.Resources["ResultHeaderTextSize"] = 11 * ResultTextZoomPercentage / 100d;
+            application.Resources["ResultMetadataTextSize"] = 9 * ResultTextZoomPercentage / 100d;
         }
     }
 
@@ -534,7 +594,8 @@ internal sealed class AppearanceSettings : IKustoAIProviderConfiguration, INotif
                 {
                     themePreference = ReadEnum(root, "theme", ThemePreference.System);
                     density = ReadEnum(root, "density", WorkbenchDensity.Compact);
-                    textSize = ReadTextSize(root);
+                    textZoomPercentage = ReadTextZoomPercentage(root);
+                    resultTextZoomPercentage = ReadResultTextZoomPercentage(root);
                     copilotDefaultModel = ReadCopilotDefaultModel(root);
                     providerKind = ReadEnum(root, "aiProvider", KustoAIProviderKind.GitHubCopilot);
                     azureOpenAIEndpoint = ReadString(root, "azureOpenAIEndpoint", string.Empty);
@@ -604,7 +665,8 @@ internal sealed class AppearanceSettings : IKustoAIProviderConfiguration, INotif
                 writer.WriteNumber("version", SettingsVersion);
                 writer.WriteString("theme", ThemePreference.ToString());
                 writer.WriteString("density", Density.ToString());
-                writer.WriteNumber("textSize", TextSize);
+                writer.WriteNumber("textZoomPercentage", TextZoomPercentage);
+                writer.WriteNumber("resultTextZoomPercentage", ResultTextZoomPercentage);
                 writer.WriteString("aiProvider", ProviderKind.ToString());
                 writer.WriteString("azureOpenAIEndpoint", AzureOpenAIEndpoint);
                 writer.WriteString("azureOpenAIDeployment", AzureOpenAIDeployment);
