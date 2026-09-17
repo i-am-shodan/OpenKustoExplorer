@@ -98,7 +98,7 @@ jobs:
       - name: Verify embedded desktop version
         shell: pwsh
         run: |
-          $assemblyPath = 'src/OpenKustoExplorer.Desktop/bin/Release/net10.0/OpenKustoExplorer.Desktop.dll'
+          $assemblyPath = 'src/OpenKustoExplorer.Desktop/bin/Release/net10.0/OpenKustoExplorer.dll'
           $actual = [Reflection.AssemblyName]::GetAssemblyName((Resolve-Path $assemblyPath)).Version.ToString(3)
           $expected = '${{ needs.version.outputs.version }}'
           if ($actual -ne $expected) {

@@ -17,6 +17,7 @@
   </ItemGroup>
 
   <PropertyGroup>
+    <AssemblyName>OpenKustoExplorer</AssemblyName>
     <ApplicationIcon>Assets\OpenKustoExplorer.ico</ApplicationIcon>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <OutputType>WinExe</OutputType>

@@ -19,6 +19,6 @@ public sealed class PresentationDependencyTests
             .ToArray();
 
         Assert.DoesNotContain("OpenKustoExplorer.Infrastructure", referencedAssemblyNames);
-        Assert.DoesNotContain("OpenKustoExplorer.Desktop", referencedAssemblyNames);
+        Assert.DoesNotContain("OpenKustoExplorer", referencedAssemblyNames);
     }
 }

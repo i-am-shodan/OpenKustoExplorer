@@ -6,7 +6,7 @@
   <Application.Resources>
     <ResourceDictionary>
       <ResourceDictionary.MergedDictionaries>
-        <ResourceInclude Source="avares://OpenKustoExplorer.Desktop/Themes/Colors.Signal.axaml" />
+        <ResourceInclude Source="avares://OpenKustoExplorer/Themes/Colors.Signal.axaml" />
       </ResourceDictionary.MergedDictionaries>
       <x:Double x:Key="TypeBadgeSize">7</x:Double>
       <x:Double x:Key="TypeMicroSize">8</x:Double>
