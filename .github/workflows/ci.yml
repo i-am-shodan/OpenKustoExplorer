@@ -302,32 +302,85 @@ jobs:
           fi
 
           if gh release view "${tag}" >/dev/null 2>&1; then
-            echo "Release ${tag} already exists; verifying its source and assets."
+            release_is_draft="$(gh release view "${tag}" --json isDraft --jq '.isDraft')"
+            echo "Release ${tag} already exists; draft=${release_is_draft}."
           elif [[ -n "${existing_commit}" ]]; then
-            gh release create "${tag}" "${files[@]}" --verify-tag --generate-notes --latest=false
+            gh release create "${tag}" --verify-tag --generate-notes --latest=false --draft
+            release_is_draft=true
           else
-            gh release create "${tag}" "${files[@]}" --target "${RELEASE_SHA}" --generate-notes --latest=false
+            gh release create "${tag}" --target "${RELEASE_SHA}" --generate-notes --latest=false --draft
+            release_is_draft=true
           fi
 
-          remote_assets="$(
+          get_remote_assets() {
             gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
               --jq '.assets[] | [.name, (.size | tostring), .state, (.digest // "")] | @tsv'
-          )"
-          for file in "${files[@]}"; do
+          }
+
+          asset_is_complete() {
+            local file="$1"
+            local file_name file_size file_hash file_digest
             file_name="$(basename "${file}")"
-            matched=false
+            file_size="$(stat --format='%s' "${file}")"
+            read -r file_hash _ < <(sha256sum "${file}")
+            file_digest="sha256:${file_hash}"
+
             while IFS=$'\t' read -r asset_name asset_size asset_state asset_digest; do
-              if [[ "${asset_name}" == "${file_name}" && "${asset_size}" -gt 0 && "${asset_state}" == uploaded && "${asset_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-                matched=true
-                break
+              if [[ "${asset_name}" == "${file_name}" \
+                && "${asset_size}" == "${file_size}" \
+                && "${asset_state}" == uploaded \
+                && "${asset_digest}" == "${file_digest}" ]]; then
+                return 0
               fi
             done <<< "${remote_assets}"
 
-            if [[ "${matched}" != true ]]; then
-              echo "Release ${tag} is missing a complete, SHA-256-digested ${file_name} asset." >&2
+            return 1
+          }
+
+          upload_asset() {
+            local file="$1"
+            local file_name attempt
+            file_name="$(basename "${file}")"
+
+            for attempt in 1 2 3; do
+              echo "Uploading ${file_name} (attempt ${attempt}/3)."
+              if gh release upload "${tag}" "${file}" --clobber; then
+                return 0
+              fi
+
+              if [[ "${attempt}" -lt 3 ]]; then
+                sleep "$((attempt * 15))"
+              fi
+            done
+
+            echo "Failed to upload ${file_name} after 3 attempts." >&2
+            return 1
+          }
+
+          remote_assets="$(get_remote_assets)"
+          if [[ "${release_is_draft}" == true ]]; then
+            for file in "${files[@]}"; do
+              if asset_is_complete "${file}"; then
+                echo "$(basename "${file}") is already complete; skipping upload."
+                continue
+              fi
+
+              upload_asset "${file}"
+              remote_assets="$(get_remote_assets)"
+            done
+          fi
+
+          remote_assets="$(get_remote_assets)"
+          for file in "${files[@]}"; do
+            if ! asset_is_complete "${file}"; then
+              echo "Release ${tag} is missing a complete asset matching $(basename "${file}")." >&2
               exit 1
             fi
           done
+
+          if [[ "${release_is_draft}" == true ]]; then
+            gh release edit "${tag}" --draft=false --latest=false
+          fi
 
           git fetch --force --tags origin
           tagged_commit="$(git rev-parse --verify "refs/tags/${tag}^{commit}")"
