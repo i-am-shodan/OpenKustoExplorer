@@ -219,6 +219,7 @@ jobs:
           set -euo pipefail
           version='${{ needs.version.outputs.version }}'
           rm -rf artifacts/archive-check
+          mkdir -p artifacts/archive-check/binaries artifacts/archive-check/symbols
           unzip -q "artifacts/release/OpenKustoExplorer-${version}-${{ matrix.rid }}.zip" -d artifacts/archive-check/binaries
           unzip -q "artifacts/release/OpenKustoExplorer-${version}-${{ matrix.rid }}-symbols.zip" -d artifacts/archive-check/symbols
           test -s artifacts/archive-check/binaries/OpenKustoExplorer
