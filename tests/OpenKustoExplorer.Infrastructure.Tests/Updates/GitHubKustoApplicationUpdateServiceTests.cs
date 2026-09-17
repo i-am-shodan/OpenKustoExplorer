@@ -127,6 +127,8 @@ public sealed class GitHubKustoApplicationUpdateServiceTests
             UserAgent = request.Headers.UserAgent.ToString();
             Accept = request.Headers.Accept.Single().MediaType;
             ApiVersion = Assert.Single(request.Headers.GetValues("X-GitHub-Api-Version"));
+
+            // codeql[cs/local-not-disposed] Ownership transfers to HttpClient and the service under test disposes the response.
             return Task.FromResult(new HttpResponseMessage(statusCode)
             {
                 Content = new StringContent(responseBody),

@@ -645,7 +645,7 @@ public sealed class SqliteKustoRecordedSessionStoreTests
     public async Task PauseRecordingDiscardsExecutionsAndAllowsResume()
     {
         string directoryPath = CreateTemporaryDirectory();
-        string filePath = Path.Combine(directoryPath, "recorded-sessions.db");
+        string filePath = Path.Join(directoryPath, "recorded-sessions.db");
         DateTimeOffset startedAtUtc = new(2026, 9, 16, 12, 0, 0, TimeSpan.Zero);
 
         try

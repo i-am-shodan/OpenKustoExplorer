@@ -483,7 +483,7 @@ public sealed class KustoRecordingWorkspaceViewModelTests
     public async Task PauseDiscardsInFlightExecutionAndResumeStartsNewPeriod()
     {
         string directoryPath = CreateTemporaryDirectory();
-        string filePath = Path.Combine(directoryPath, "recorded-sessions.db");
+        string filePath = Path.Join(directoryPath, "recorded-sessions.db");
 
         try
         {

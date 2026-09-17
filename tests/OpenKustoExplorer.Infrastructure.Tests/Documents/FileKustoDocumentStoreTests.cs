@@ -140,7 +140,7 @@ public sealed class FileKustoDocumentStoreTests
     public void LoadAcceptsVersionTwoWorkspaceWithObsoleteAnalysisMetadata()
     {
         string directoryPath = CreateTemporaryDirectory();
-        string filePath = Path.Combine(directoryPath, "documents.json");
+        string filePath = Path.Join(directoryPath, "documents.json");
         Guid documentId = Guid.NewGuid();
         string json = $$"""
                         {

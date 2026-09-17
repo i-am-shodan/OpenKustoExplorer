@@ -189,7 +189,7 @@ public sealed class FileKustoAutomationStoreTests
     public void LoadAcceptsVersionTwoWithoutWebhook()
     {
         string directoryPath = CreateTemporaryDirectory();
-        string filePath = Path.Combine(directoryPath, "automations.json");
+        string filePath = Path.Join(directoryPath, "automations.json");
         DateTimeOffset utcNow = new(2026, 9, 16, 10, 0, 0, TimeSpan.Zero);
         KustoAutomation automation = new(
             Guid.NewGuid(),

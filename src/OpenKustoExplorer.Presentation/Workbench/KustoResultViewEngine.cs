@@ -47,6 +47,8 @@ internal static class KustoResultViewEngine
             KustoResultValueComparer comparer = new(sortColumn.TypeName);
             Func<KustoResultRowViewModel, string> keySelector = row =>
                 row.Cells[sortColumn.ColumnIndex].Text;
+
+            // codeql[cs/missed-ternary-operator] Initial and subsequent sort keys require different LINQ operators.
             if (orderedRows is null)
             {
                 orderedRows = sortColumn.SortDirection == KustoResultSortDirection.Ascending

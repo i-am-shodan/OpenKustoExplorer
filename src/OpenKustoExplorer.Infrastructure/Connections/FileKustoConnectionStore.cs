@@ -47,7 +47,7 @@ public sealed class FileKustoConnectionStore : IKustoConnectionStore
     private static string GetDefaultFilePath()
     {
         string localApplicationData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        string defaultFilePath = Path.Combine(localApplicationData, "OpenKustoExplorer", "connections.json");
+        string defaultFilePath = Path.Join(localApplicationData, "OpenKustoExplorer", "connections.json");
         return defaultFilePath;
     }
 }

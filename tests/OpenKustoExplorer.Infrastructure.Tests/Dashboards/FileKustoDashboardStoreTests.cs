@@ -113,8 +113,8 @@ public sealed class FileKustoDashboardStoreTests
     [Fact]
     public void LoadVersionOneDefaultsToLast24Hours()
     {
-        string directoryPath = Path.Combine(Path.GetTempPath(), $"OpenKustoExplorer-{Guid.NewGuid():N}");
-        string filePath = Path.Combine(directoryPath, "dashboards.json");
+        string directoryPath = Path.Join(Path.GetTempPath(), $"OpenKustoExplorer-{Guid.NewGuid():N}");
+        string filePath = Path.Join(directoryPath, "dashboards.json");
         Guid dashboardId = Guid.NewGuid();
 
         try
@@ -146,7 +146,7 @@ public sealed class FileKustoDashboardStoreTests
     {
         string json = $$"""{"version":2,"dashboards":[{"id":"{{Guid.NewGuid()}}","title":"Invalid","backgroundColor":"#FFFFFF","widgets":[]}]}""";
         using MemoryStream stream = new(System.Text.Encoding.UTF8.GetBytes(json));
-        FileKustoDashboardStore store = new(Path.Combine(Path.GetTempPath(), $"unused-{Guid.NewGuid():N}.json"));
+        FileKustoDashboardStore store = new(Path.Join(Path.GetTempPath(), $"unused-{Guid.NewGuid():N}.json"));
 
         InvalidDataException exception = Assert.Throws<InvalidDataException>(() => store.Import(stream));
 
