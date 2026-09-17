@@ -47,20 +47,9 @@ internal static class KustoResultViewEngine
             KustoResultValueComparer comparer = new(sortColumn.TypeName);
             Func<KustoResultRowViewModel, string> keySelector = row =>
                 row.Cells[sortColumn.ColumnIndex].Text;
-
-            // codeql[cs/missed-ternary-operator] Initial and subsequent sort keys require different LINQ operators.
-            if (orderedRows is null)
-            {
-                orderedRows = sortColumn.SortDirection == KustoResultSortDirection.Ascending
-                    ? rows.OrderBy(keySelector, comparer)
-                    : rows.OrderByDescending(keySelector, comparer);
-            }
-            else
-            {
-                orderedRows = sortColumn.SortDirection == KustoResultSortDirection.Ascending
-                    ? orderedRows.ThenBy(keySelector, comparer)
-                    : orderedRows.ThenByDescending(keySelector, comparer);
-            }
+            orderedRows = orderedRows is null
+                ? OrderRows(rows, keySelector, comparer, sortColumn.SortDirection)
+                : ThenOrderRows(orderedRows, keySelector, comparer, sortColumn.SortDirection);
         }
 
         if (orderedRows is not null)
@@ -69,6 +58,28 @@ internal static class KustoResultViewEngine
         }
 
         return Array.AsReadOnly(rows.ToArray());
+    }
+
+    private static IOrderedEnumerable<KustoResultRowViewModel> OrderRows(
+        IEnumerable<KustoResultRowViewModel> rows,
+        Func<KustoResultRowViewModel, string> keySelector,
+        IComparer<string> comparer,
+        KustoResultSortDirection direction)
+    {
+        return direction == KustoResultSortDirection.Ascending
+            ? rows.OrderBy(keySelector, comparer)
+            : rows.OrderByDescending(keySelector, comparer);
+    }
+
+    private static IOrderedEnumerable<KustoResultRowViewModel> ThenOrderRows(
+        IOrderedEnumerable<KustoResultRowViewModel> rows,
+        Func<KustoResultRowViewModel, string> keySelector,
+        IComparer<string> comparer,
+        KustoResultSortDirection direction)
+    {
+        return direction == KustoResultSortDirection.Ascending
+            ? rows.ThenBy(keySelector, comparer)
+            : rows.ThenByDescending(keySelector, comparer);
     }
 
     private static bool MatchesFilter(string value, KustoResultColumnViewModel column)
