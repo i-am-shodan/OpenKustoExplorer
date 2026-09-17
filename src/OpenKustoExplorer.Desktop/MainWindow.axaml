@@ -513,7 +513,7 @@
                               <Separator />
                               <MenuItem Header="Remove cluster" Command="{Binding RemoveCommand}">
                                 <MenuItem.Icon>
-                                  <LucideIcon Kind="Trash2" Size="14" />
+                                  <LucideIcon Kind="Trash" Size="14" />
                                 </MenuItem.Icon>
                               </MenuItem>
                             </ContextMenu>
@@ -558,7 +558,7 @@
                               Classes="treeAction"
                               Command="{Binding RemoveCommand}"
                               ToolTip.Tip="Remove cluster">
-                            <LucideIcon Kind="Trash2" Size="13" />
+                            <LucideIcon Kind="Trash" Size="13" />
                           </Button>
                         </Grid>
                       </TreeDataTemplate>
@@ -1902,7 +1902,7 @@
                 Classes="treeAction"
                 Command="{Binding Dashboard.OpenDeleteDashboardCommand}"
                 ToolTip.Tip="Delete dashboard">
-              <LucideIcon Kind="Trash2" Size="14" />
+              <LucideIcon Kind="Trash" Size="14" />
             </Button>
             <Button
                 Grid.Column="6"
@@ -2019,7 +2019,7 @@
                         </MenuItem>
                         <Separator />
                         <MenuItem Header="Delete..." Click="OnDashboardWidgetDeleteClick">
-                          <MenuItem.Icon><LucideIcon Kind="Trash2" Size="13" /></MenuItem.Icon>
+                          <MenuItem.Icon><LucideIcon Kind="Trash" Size="13" /></MenuItem.Icon>
                         </MenuItem>
                       </ContextMenu>
                     </Border.ContextMenu>
@@ -2049,7 +2049,7 @@
                           <LucideIcon Kind="Pencil" Size="12" />
                         </Button>
                         <Button Grid.Column="3" AutomationProperties.Name="Delete widget" Classes="treeAction" Click="OnDashboardWidgetDeleteClick" ToolTip.Tip="Delete widget">
-                          <LucideIcon Kind="Trash2" Size="12" />
+                          <LucideIcon Kind="Trash" Size="12" />
                         </Button>
                       </Grid>
                       <Border Grid.Row="1" Background="{Binding AccentColor}" />
@@ -2257,7 +2257,7 @@
                   <LucideIcon Kind="Zap" Size="15" />
                 </Button>
                 <Button Grid.Column="4" AutomationProperties.Name="Delete selected automation" Classes="command" VerticalAlignment="Center" Command="{Binding SelectedAutomation.DeleteCommand}" ToolTip.Tip="Delete automation">
-                  <LucideIcon Kind="Trash2" Size="15" />
+                  <LucideIcon Kind="Trash" Size="15" />
                 </Button>
               </Grid>
             </Border>
@@ -2546,7 +2546,7 @@
                 VerticalAlignment="Center"
                 IsVisible="{Binding !Recording.HasSessions}"
                 Spacing="7">
-              <LucideIcon HorizontalAlignment="Center" Kind="History" Size="26" Foreground="{DynamicResource TextTertiaryBrush}" />
+              <LucideIcon HorizontalAlignment="Center" Kind="ClockArrowLeft" Size="26" Foreground="{DynamicResource TextTertiaryBrush}" />
               <TextBlock FontWeight="SemiBold" Text="No recorded sessions" />
             </StackPanel>
             <Button
@@ -2557,7 +2557,7 @@
                 Command="{Binding Recording.OpenDeleteSessionCommand}"
                 IsEnabled="{Binding Recording.CanDeleteSelectedSession}">
               <StackPanel Orientation="Horizontal" Spacing="6">
-                <LucideIcon Kind="Trash2" Size="13" />
+                <LucideIcon Kind="Trash" Size="13" />
                 <TextBlock Text="Delete session" />
               </StackPanel>
             </Button>
@@ -2794,7 +2794,7 @@
                 Command="{Binding Recording.OpenDeleteExecutionCommand}"
                 IsEnabled="{Binding Recording.CanDeleteSelectedExecution}"
                 ToolTip.Tip="Delete recorded query">
-              <LucideIcon Kind="Trash2" Size="14" />
+              <LucideIcon Kind="Trash" Size="14" />
             </Button>
             <Button
               Grid.Column="3"
@@ -3283,7 +3283,7 @@
                 Classes="treeAction"
                 Command="{Binding Graph.OpenDeleteGraphCommand}"
                 ToolTip.Tip="Delete graph">
-              <LucideIcon Kind="Trash2" Size="14" />
+              <LucideIcon Kind="Trash" Size="14" />
             </Button>
             <Button
                 Grid.Column="8"
@@ -4061,7 +4061,7 @@
                 Classes="treeAction"
                 Command="{Binding Copilot.ClearCommand}"
                 ToolTip.Tip="Clear conversation">
-              <LucideIcon Kind="Trash2" Size="13" />
+              <LucideIcon Kind="Trash" Size="13" />
             </Button>
             <Button
               Grid.Column="3"
@@ -5437,7 +5437,7 @@
                     <Grid MinHeight="36" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="9">
                       <Border Grid.Column="0" Width="18" Height="18" VerticalAlignment="Center" Background="{Binding ColorHex}" CornerRadius="3" />
                       <TextBlock Grid.Column="1" VerticalAlignment="Center" FontSize="{DynamicResource TypeCompactSize}" Text="{Binding Summary}" TextTrimming="CharacterEllipsis" />
-                      <Button Grid.Column="2" AutomationProperties.Name="{Binding Summary, StringFormat='Remove rule: {0}'}" Classes="treeAction" Command="{Binding RemoveCommand}" ToolTip.Tip="Remove rule"><LucideIcon Kind="Trash2" Size="13" /></Button>
+                      <Button Grid.Column="2" AutomationProperties.Name="{Binding Summary, StringFormat='Remove rule: {0}'}" Classes="treeAction" Command="{Binding RemoveCommand}" ToolTip.Tip="Remove rule"><LucideIcon Kind="Trash" Size="13" /></Button>
                     </Grid>
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>
