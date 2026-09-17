@@ -209,13 +209,15 @@ public sealed class MainWindowViewModelTests
         viewModel.Copilot.Prompt = "Review the tab";
         await viewModel.Copilot.SendCommand.ExecuteAsync(null);
 
-        Assert.Equal(Document, copilotService.Context.QueryText);
+        KustoCopilotContext firstContext = Assert.IsType<KustoCopilotContext>(copilotService.Context);
+        Assert.Equal(Document, firstContext.QueryText);
 
         viewModel.Copilot.ShareTabContent = false;
         viewModel.Copilot.Prompt = "Answer without tab content";
         await viewModel.Copilot.SendCommand.ExecuteAsync(null);
 
-        Assert.Empty(copilotService.Context.QueryText);
+        KustoCopilotContext secondContext = Assert.IsType<KustoCopilotContext>(copilotService.Context);
+        Assert.Empty(secondContext.QueryText);
     }
 
     /// <summary>
@@ -543,8 +545,10 @@ public sealed class MainWindowViewModelTests
 
         viewModel.Copilot.Prompt = "Use available context";
         await viewModel.Copilot.SendCommand.ExecuteAsync(null);
-        Assert.Empty(copilotService.Context.SharedDataText);
-        Assert.False(copilotService.Options!.EnableAzureMcp);
+        KustoCopilotContext privateContext = Assert.IsType<KustoCopilotContext>(copilotService.Context);
+        KustoCopilotOptions privateOptions = Assert.IsType<KustoCopilotOptions>(copilotService.Options);
+        Assert.Empty(privateContext.SharedDataText);
+        Assert.False(privateOptions.EnableAzureMcp);
 
         await viewModel.Copilot.RefreshModelsCommand.ExecuteAsync(null);
         viewModel.Copilot.SelectedModel = Assert.Single(
@@ -556,12 +560,14 @@ public sealed class MainWindowViewModelTests
         viewModel.Copilot.Prompt = "Use the shared result";
         await viewModel.Copilot.SendCommand.ExecuteAsync(null);
 
-        Assert.Contains("SecretValue", copilotService.Context.SharedDataText, StringComparison.Ordinal);
-        Assert.Contains("bounded-result-value", copilotService.Context.SharedDataText, StringComparison.Ordinal);
-        Assert.Equal("gpt-test", copilotService.Options.ModelId);
-        Assert.True(copilotService.Options.EnableAzureMcp);
-        Assert.True(copilotService.Options.EnableMicrosoftLearnMcp);
-        Assert.False(copilotService.Options.ShareRecordedSessionData);
+        KustoCopilotContext sharedContext = Assert.IsType<KustoCopilotContext>(copilotService.Context);
+        KustoCopilotOptions sharedOptions = Assert.IsType<KustoCopilotOptions>(copilotService.Options);
+        Assert.Contains("SecretValue", sharedContext.SharedDataText, StringComparison.Ordinal);
+        Assert.Contains("bounded-result-value", sharedContext.SharedDataText, StringComparison.Ordinal);
+        Assert.Equal("gpt-test", sharedOptions.ModelId);
+        Assert.True(sharedOptions.EnableAzureMcp);
+        Assert.True(sharedOptions.EnableMicrosoftLearnMcp);
+        Assert.False(sharedOptions.ShareRecordedSessionData);
 
         viewModel.Copilot.ShareResultData = false;
         Assert.False(viewModel.Copilot.EnableAzureMcp);
