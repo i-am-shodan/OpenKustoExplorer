@@ -311,6 +311,53 @@ public sealed class SqliteKustoRecordedSessionStore :
     }
 
     /// <inheritdoc />
+    public async Task PauseRecordingAsync(
+        Guid periodId,
+        DateTimeOffset pausedAtUtc,
+        IReadOnlyCollection<Guid> discardedExecutionIds,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfEqual(periodId, Guid.Empty);
+        ArgumentNullException.ThrowIfNull(discardedExecutionIds);
+        Guid[] executionIds = discardedExecutionIds.Distinct().ToArray();
+        if (executionIds.Any(executionId => executionId == Guid.Empty))
+        {
+            throw new ArgumentException("Discarded execution identifiers cannot be empty.", nameof(discardedExecutionIds));
+        }
+
+        await ExecuteWriteAsync(
+            async (connection, transaction) =>
+            {
+                Guid sessionId = ReadOpenPeriodSessionId(connection, transaction, periodId);
+                foreach (Guid executionId in executionIds)
+                {
+                    using SqliteCommand deleteCommand = connection.CreateCommand();
+                    deleteCommand.Transaction = transaction;
+                    deleteCommand.CommandText = "DELETE FROM recorded_executions WHERE id = $id AND period_id = $periodId;";
+                    deleteCommand.Parameters.AddWithValue("$id", FormatGuid(executionId));
+                    deleteCommand.Parameters.AddWithValue("$periodId", FormatGuid(periodId));
+                    await deleteCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                }
+
+                using SqliteCommand pauseCommand = connection.CreateCommand();
+                pauseCommand.Transaction = transaction;
+                pauseCommand.CommandText = """
+                    UPDATE recording_periods
+                    SET stopped_at_utc = $paused
+                    WHERE id = $periodId AND stopped_at_utc IS NULL;
+                    UPDATE recorded_sessions
+                    SET last_updated_at_utc = $paused
+                    WHERE id = $sessionId;
+                    """;
+                pauseCommand.Parameters.AddWithValue("$periodId", FormatGuid(periodId));
+                pauseCommand.Parameters.AddWithValue("$sessionId", FormatGuid(sessionId));
+                pauseCommand.Parameters.AddWithValue("$paused", FormatTimestamp(pausedAtUtc));
+                await pauseCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            },
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
     public async Task<Guid> BeginExecutionAsync(
         KustoRecordedExecutionStart execution,
         CancellationToken cancellationToken = default)

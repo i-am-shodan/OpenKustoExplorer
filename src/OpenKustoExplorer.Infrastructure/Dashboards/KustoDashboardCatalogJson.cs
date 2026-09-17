@@ -10,7 +10,8 @@ namespace OpenKustoExplorer.Infrastructure.Dashboards;
 /// </summary>
 internal static class KustoDashboardCatalogJson
 {
-    private const int CurrentVersion = 1;
+    private const int CurrentVersion = 2;
+    private const int MinimumSupportedVersion = 1;
 
     /// <summary>
     /// Reads a dashboard catalog from UTF-8 JSON.
@@ -24,7 +25,7 @@ internal static class KustoDashboardCatalogJson
         JsonElement root = document.RootElement;
         int version = root.GetProperty("version").GetInt32();
 
-        if (version != CurrentVersion)
+        if (version is < MinimumSupportedVersion or > CurrentVersion)
         {
             throw new InvalidDataException($"Unsupported dashboard catalog version {version}.");
         }
@@ -32,7 +33,7 @@ internal static class KustoDashboardCatalogJson
         List<KustoDashboard> dashboards = [];
         foreach (JsonElement dashboardElement in root.GetProperty("dashboards").EnumerateArray())
         {
-            dashboards.Add(ReadDashboard(dashboardElement));
+            dashboards.Add(ReadDashboard(dashboardElement, version));
         }
 
         return new KustoDashboardCatalog(dashboards);
@@ -62,7 +63,7 @@ internal static class KustoDashboardCatalogJson
         writer.WriteEndObject();
     }
 
-    private static KustoDashboard ReadDashboard(JsonElement element)
+    private static KustoDashboard ReadDashboard(JsonElement element, int version)
     {
         List<KustoDashboardWidget> widgets = [];
         foreach (JsonElement widgetElement in element.GetProperty("widgets").EnumerateArray())
@@ -74,7 +75,39 @@ internal static class KustoDashboardCatalogJson
             element.GetProperty("id").GetGuid(),
             GetRequiredString(element, "title"),
             GetRequiredString(element, "backgroundColor"),
-            widgets);
+            widgets,
+            ReadTimeRange(element, version));
+    }
+
+    private static KustoDashboardTimeRange ReadTimeRange(JsonElement dashboardElement, int version)
+    {
+        if (version == 1)
+        {
+            return KustoDashboardTimeRange.Last24Hours;
+        }
+
+        if (!dashboardElement.TryGetProperty("timeRange", out JsonElement element)
+            || element.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidDataException("Dashboard catalog version 2 requires a timeRange object.");
+        }
+
+        string kindText = GetRequiredString(element, "kind");
+        if (!Enum.TryParse(kindText, true, out KustoDashboardTimeRangeKind kind)
+            || !Enum.IsDefined(kind))
+        {
+            throw new InvalidDataException($"Unsupported dashboard time range kind {kindText}.");
+        }
+
+        return kind switch
+        {
+            KustoDashboardTimeRangeKind.Relative => KustoDashboardTimeRange.CreateRelative(
+                TimeSpan.FromSeconds(element.GetProperty("durationSeconds").GetDouble())),
+            KustoDashboardTimeRangeKind.Absolute => KustoDashboardTimeRange.CreateAbsolute(
+                element.GetProperty("startUtc").GetDateTimeOffset(),
+                element.GetProperty("endUtc").GetDateTimeOffset()),
+            _ => throw new InvalidDataException($"Unsupported dashboard time range kind {kindText}."),
+        };
     }
 
     private static KustoDashboardWidget ReadWidget(JsonElement element)
@@ -123,6 +156,7 @@ internal static class KustoDashboardCatalogJson
         writer.WriteString("id", dashboard.Id);
         writer.WriteString("title", dashboard.Title);
         writer.WriteString("backgroundColor", dashboard.BackgroundColor);
+        WriteTimeRange(writer, dashboard.TimeRange);
         writer.WritePropertyName("widgets");
         writer.WriteStartArray();
 
@@ -132,6 +166,25 @@ internal static class KustoDashboardCatalogJson
         }
 
         writer.WriteEndArray();
+        writer.WriteEndObject();
+    }
+
+    private static void WriteTimeRange(Utf8JsonWriter writer, KustoDashboardTimeRange timeRange)
+    {
+        writer.WritePropertyName("timeRange");
+        writer.WriteStartObject();
+        writer.WriteString("kind", timeRange.Kind.ToString());
+
+        if (timeRange.Kind == KustoDashboardTimeRangeKind.Relative)
+        {
+            writer.WriteNumber("durationSeconds", timeRange.RelativeDuration!.Value.TotalSeconds);
+        }
+        else
+        {
+            writer.WriteString("startUtc", timeRange.StartUtc!.Value);
+            writer.WriteString("endUtc", timeRange.EndUtc!.Value);
+        }
+
         writer.WriteEndObject();
     }
 

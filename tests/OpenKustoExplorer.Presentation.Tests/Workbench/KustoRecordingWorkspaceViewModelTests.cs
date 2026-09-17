@@ -476,6 +476,88 @@ public sealed class KustoRecordingWorkspaceViewModelTests
     }
 
     /// <summary>
+    /// Verifies pause discards in-flight capture, blocks new capture, and resumes the same named session.
+    /// </summary>
+    /// <returns>A task that completes after resumed capture is persisted.</returns>
+    [Fact]
+    public async Task PauseDiscardsInFlightExecutionAndResumeStartsNewPeriod()
+    {
+        string directoryPath = CreateTemporaryDirectory();
+        string filePath = Path.Join(directoryPath, "recorded-sessions.db");
+
+        try
+        {
+            using SqliteKustoRecordedSessionStore store = new(filePath);
+            KustoRecordingWorkspaceViewModel viewModel = CreateViewModel(store);
+            await viewModel.OpenRecordingCommand.ExecuteAsync(null);
+            viewModel.NewSessionName = "Paused investigation";
+            await viewModel.StartRecordingCommand.ExecuteAsync(null);
+            Guid discardedExecutionId = Assert.IsType<Guid>(await viewModel.BeginExecutionAsync(
+                Guid.NewGuid(),
+                "Discarded query",
+                new KustoQueryRequest(
+                    new Uri("https://mock.kusto.example/"),
+                    "SyntheticSecurity",
+                    "OutboundBrowsing | take 1"),
+                CreateSchema(),
+                DateTimeOffset.UtcNow));
+
+            await viewModel.PauseRecordingCommand.ExecuteAsync(null);
+
+            Assert.False(viewModel.IsRecording);
+            Assert.True(viewModel.IsPaused);
+            Assert.True(viewModel.HasActiveRecording);
+            Assert.False(await viewModel.CompleteExecutionAsync(
+                discardedExecutionId,
+                new KustoRecordedExecutionCompletion(
+                    KustoRecordedExecutionStatus.Succeeded,
+                    DateTimeOffset.UtcNow,
+                    new KustoQueryResult([CreateResultTable()], TimeSpan.Zero),
+                    null)));
+            Assert.Null(await viewModel.BeginExecutionAsync(
+                Guid.NewGuid(),
+                "Paused query",
+                new KustoQueryRequest(
+                    new Uri("https://mock.kusto.example/"),
+                    "SyntheticSecurity",
+                    "OutboundBrowsing | take 1"),
+                CreateSchema(),
+                DateTimeOffset.UtcNow));
+
+            await viewModel.ResumeRecordingCommand.ExecuteAsync(null);
+
+            Assert.True(viewModel.IsRecording);
+            Assert.False(viewModel.IsPaused);
+            Guid retainedExecutionId = Assert.IsType<Guid>(await viewModel.BeginExecutionAsync(
+                Guid.NewGuid(),
+                "Retained query",
+                new KustoQueryRequest(
+                    new Uri("https://mock.kusto.example/"),
+                    "SyntheticSecurity",
+                    "OutboundBrowsing | take 1"),
+                CreateSchema(),
+                DateTimeOffset.UtcNow));
+            Assert.True(await viewModel.CompleteExecutionAsync(
+                retainedExecutionId,
+                new KustoRecordedExecutionCompletion(
+                    KustoRecordedExecutionStatus.Succeeded,
+                    DateTimeOffset.UtcNow,
+                    new KustoQueryResult([CreateResultTable()], TimeSpan.Zero),
+                    null)));
+            await viewModel.StopRecordingCommand.ExecuteAsync(null);
+
+            KustoRecordedSession session = Assert.IsType<KustoRecordedSession>(
+                await store.GetSessionAsync(viewModel.SelectedSessionSummary!.Id));
+            Assert.Equal(2, session.Periods.Count);
+            Assert.Equal(retainedExecutionId, Assert.Single(session.Executions).Id);
+        }
+        finally
+        {
+            DeleteTemporaryDirectory(directoryPath);
+        }
+    }
+
+    /// <summary>
     /// Verifies that setting a chain endpoint does not move the user away from the selected query result.
     /// </summary>
     /// <returns>A task that completes after the endpoint is persisted.</returns>

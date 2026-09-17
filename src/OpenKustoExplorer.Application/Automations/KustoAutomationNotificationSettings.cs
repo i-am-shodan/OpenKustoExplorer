@@ -33,6 +33,7 @@ public sealed class KustoAutomationNotificationSettings
     /// <param name="runApplicationEnabled">Whether a configured application is launched.</param>
     /// <param name="applicationPath">The optional application executable path.</param>
     /// <param name="applicationArguments">The optional application arguments.</param>
+    /// <param name="webhook">The optional webhook channel settings.</param>
     public KustoAutomationNotificationSettings(
         bool notifyWhenRowCountChanges,
         KustoAutomationRowCountComparison rowCountComparison,
@@ -48,7 +49,8 @@ public sealed class KustoAutomationNotificationSettings
         string messageTemplate,
         bool runApplicationEnabled = false,
         string? applicationPath = null,
-        string? applicationArguments = null)
+        string? applicationArguments = null,
+        KustoAutomationWebhookSettings? webhook = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(rowCountValue);
         ArgumentOutOfRangeException.ThrowIfLessThan(smtpPort, 1);
@@ -61,17 +63,32 @@ public sealed class KustoAutomationNotificationSettings
             throw new ArgumentOutOfRangeException(nameof(rowCountComparison));
         }
 
-        if (emailEnabled
-            && (string.IsNullOrWhiteSpace(emailRecipient)
-                || string.IsNullOrWhiteSpace(emailSender)
-                || string.IsNullOrWhiteSpace(smtpHost)))
+        if (emailEnabled && string.IsNullOrWhiteSpace(emailRecipient))
         {
-            throw new ArgumentException("Email notifications require recipient, sender, and SMTP host values.");
+            throw new ArgumentException(
+                "Email notifications require recipient, sender, and SMTP host values.",
+                nameof(emailRecipient));
+        }
+
+        if (emailEnabled && string.IsNullOrWhiteSpace(emailSender))
+        {
+            throw new ArgumentException(
+                "Email notifications require recipient, sender, and SMTP host values.",
+                nameof(emailSender));
+        }
+
+        if (emailEnabled && string.IsNullOrWhiteSpace(smtpHost))
+        {
+            throw new ArgumentException(
+                "Email notifications require recipient, sender, and SMTP host values.",
+                nameof(smtpHost));
         }
 
         if (runApplicationEnabled && string.IsNullOrWhiteSpace(applicationPath))
         {
-            throw new ArgumentException("Application actions require an executable path.");
+            throw new ArgumentException(
+                "Application actions require an executable path.",
+                nameof(applicationPath));
         }
 
         NotifyWhenRowCountChanges = notifyWhenRowCountChanges;
@@ -89,6 +106,7 @@ public sealed class KustoAutomationNotificationSettings
         RunApplicationEnabled = runApplicationEnabled;
         ApplicationPath = NormalizeOptionalText(applicationPath);
         ApplicationArguments = NormalizeOptionalText(applicationArguments);
+        Webhook = webhook;
     }
 
     /// <summary>
@@ -184,9 +202,17 @@ public sealed class KustoAutomationNotificationSettings
     public string? ApplicationArguments { get; }
 
     /// <summary>
+    /// Gets the optional webhook channel settings.
+    /// </summary>
+    public KustoAutomationWebhookSettings? Webhook { get; }
+
+    /// <summary>
     /// Gets a value indicating whether at least one notification or application action is enabled.
     /// </summary>
-    public bool HasEnabledChannel => DesktopEnabled || EmailEnabled || RunApplicationEnabled;
+    public bool HasEnabledChannel => DesktopEnabled
+        || EmailEnabled
+        || RunApplicationEnabled
+        || Webhook is not null;
 
     private static string? NormalizeOptionalText(string? value)
     {

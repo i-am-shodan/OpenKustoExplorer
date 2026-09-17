@@ -27,6 +27,23 @@ public static class KustoResultDataExporter
         KustoResultExportFormat format)
     {
         ArgumentNullException.ThrowIfNull(table);
+        return CreateFile(table, table.Rows, format);
+    }
+
+    /// <summary>
+    /// Creates a file export for an ordered projection of result rows.
+    /// </summary>
+    /// <param name="table">The materialized result table.</param>
+    /// <param name="rows">The rows to include in export order.</param>
+    /// <param name="format">The requested export format.</param>
+    /// <returns>The generated export file.</returns>
+    public static KustoResultExportFile CreateFile(
+        KustoResultTable table,
+        IReadOnlyList<KustoResultRow> rows,
+        KustoResultExportFormat format)
+    {
+        ArgumentNullException.ThrowIfNull(table);
+        ArgumentNullException.ThrowIfNull(rows);
 
         string baseName = SanitizeFileName(table.Name);
         KustoResultExportFile export = format switch
@@ -34,15 +51,19 @@ public static class KustoResultDataExporter
             KustoResultExportFormat.Csv => new KustoResultExportFile(
                 $"{baseName}.csv",
                 "text/csv",
-                Utf8WithoutBom.GetBytes(CreateDelimitedText(table, table.Rows, ','))),
+                Utf8WithoutBom.GetBytes(CreateDelimitedText(table, rows, ','))),
             KustoResultExportFormat.Excel => new KustoResultExportFile(
                 $"{baseName}.xlsx",
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                CreateExcelWorkbook(table)),
+                CreateExcelWorkbook(table, rows)),
             KustoResultExportFormat.Json => new KustoResultExportFile(
                 $"{baseName}.json",
                 "application/json",
-                CreateJson(table)),
+                CreateJson(table, rows)),
+            KustoResultExportFormat.KqlScript => new KustoResultExportFile(
+                $"{baseName}.kql",
+                "text/plain",
+                Utf8WithoutBom.GetBytes(CreateKqlDatatable(table, rows))),
             _ => throw new ArgumentOutOfRangeException(nameof(format), format, "Unsupported result export format."),
         };
 
@@ -214,20 +235,33 @@ public static class KustoResultDataExporter
         return requiresQuotes ? $"\"{value.Replace("\"", "\"\"", StringComparison.Ordinal)}\"" : value;
     }
 
-    private static byte[] CreateJson(KustoResultTable table)
+    private static byte[] CreateJson(KustoResultTable table, IReadOnlyList<KustoResultRow> rows)
     {
         using MemoryStream stream = new();
         using (Utf8JsonWriter writer = new(stream, new JsonWriterOptions { Indented = true }))
         {
             writer.WriteStartArray();
 
-            foreach (KustoResultRow row in table.Rows)
+            foreach (KustoResultRow row in rows)
             {
                 writer.WriteStartObject();
 
                 for (int index = 0; index < table.Columns.Count; index++)
                 {
-                    writer.WriteString(table.Columns[index].Name, row.Values[index]);
+                    writer.WritePropertyName(table.Columns[index].Name);
+                    KustoResultValue value = row.ResultValues[index];
+                    if (value.IsNull)
+                    {
+                        writer.WriteNullValue();
+                    }
+                    else if (value.RawJson is not null)
+                    {
+                        writer.WriteRawValue(value.RawJson);
+                    }
+                    else
+                    {
+                        writer.WriteStringValue(value.DisplayText);
+                    }
                 }
 
                 writer.WriteEndObject();
@@ -239,7 +273,9 @@ public static class KustoResultDataExporter
         return stream.ToArray();
     }
 
-    private static byte[] CreateExcelWorkbook(KustoResultTable table)
+    private static byte[] CreateExcelWorkbook(
+        KustoResultTable table,
+        IReadOnlyList<KustoResultRow> rows)
     {
         using MemoryStream stream = new();
         using (ZipArchive archive = new(stream, ZipArchiveMode.Create, leaveOpen: true))
@@ -249,7 +285,7 @@ public static class KustoResultDataExporter
             WriteXmlEntry(archive, "xl/workbook.xml", WriteWorkbook);
             WriteXmlEntry(archive, "xl/_rels/workbook.xml.rels", WriteWorkbookRelationships);
             WriteXmlEntry(archive, "xl/styles.xml", WriteStyles);
-            WriteXmlEntry(archive, "xl/worksheets/sheet1.xml", writer => WriteWorksheet(writer, table));
+            WriteXmlEntry(archive, "xl/worksheets/sheet1.xml", writer => WriteWorksheet(writer, table, rows));
         }
 
         return stream.ToArray();
@@ -441,7 +477,10 @@ public static class KustoResultDataExporter
         writer.WriteEndElement();
     }
 
-    private static void WriteWorksheet(XmlWriter writer, KustoResultTable table)
+    private static void WriteWorksheet(
+        XmlWriter writer,
+        KustoResultTable table,
+        IReadOnlyList<KustoResultRow> rows)
     {
         const string Namespace = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
         writer.WriteStartDocument();
@@ -449,9 +488,9 @@ public static class KustoResultDataExporter
         writer.WriteStartElement("sheetData");
         WriteWorksheetRow(writer, 1, table.Columns.Select(column => column.Name), header: true);
 
-        for (int index = 0; index < table.Rows.Count; index++)
+        for (int index = 0; index < rows.Count; index++)
         {
-            WriteWorksheetRow(writer, index + 2, table.Rows[index].Values, header: false);
+            WriteWorksheetRow(writer, index + 2, rows[index].Values, header: false);
         }
 
         writer.WriteEndElement();

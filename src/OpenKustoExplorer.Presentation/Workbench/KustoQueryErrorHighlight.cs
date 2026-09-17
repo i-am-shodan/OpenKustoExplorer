@@ -18,9 +18,9 @@ public sealed class KustoQueryErrorHighlight
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(length);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(lineNumber);
 
-        if (columnNumber is not null)
+        if (columnNumber is not null && columnNumber.Value <= 0)
         {
-            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(columnNumber.Value);
+            throw new ArgumentOutOfRangeException(nameof(columnNumber));
         }
 
         Start = start;

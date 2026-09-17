@@ -10,8 +10,59 @@ permissions:
   contents: read
 
 jobs:
+  audit:
+    name: NuGet audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.302
+
+      - name: Restore and audit all dependencies
+        run: dotnet restore OpenKustoExplorer.slnx -p:AuditPipeline=true
+
+  version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+
+    steps:
+      - name: Check out repository and tags
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Test release version scripts
+        shell: pwsh
+        run: ./scripts/Test-ReleaseVersionScripts.ps1
+
+      - name: Resolve build version
+        id: resolve
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF -eq 'refs/heads/main') {
+            $version = @(& ./scripts/Resolve-ReleaseVersion.ps1)
+          }
+          else {
+            $version = @(& ./scripts/Resolve-ReleaseVersion.ps1 -VersionFloorOnly)
+          }
+
+          if ($version.Count -ne 1 -or $version[0] -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+            throw "Release version resolution returned an invalid result: $($version -join ', ')"
+          }
+
+          "version=$($version[0])" >> $env:GITHUB_OUTPUT
+          "Build version: $($version[0])" >> $env:GITHUB_STEP_SUMMARY
+
   quality:
     name: Quality (${{ matrix.os }})
+    needs: [audit, version]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -33,7 +84,7 @@ jobs:
 
       - name: Install Linux Native AOT prerequisites
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install --yes clang zlib1g-dev
+        run: sudo apt-get update && sudo apt-get install --yes clang unzip zip zlib1g-dev
 
       - name: Restore
         run: dotnet restore OpenKustoExplorer.slnx
@@ -42,13 +93,23 @@ jobs:
         run: dotnet format OpenKustoExplorer.slnx --verify-no-changes --no-restore
 
       - name: Build without warnings
-        run: dotnet build OpenKustoExplorer.slnx --configuration Release --no-restore -warnaserror
+        run: dotnet build OpenKustoExplorer.slnx --configuration Release --no-restore -warnaserror -p:Version=${{ needs.version.outputs.version }}
+
+      - name: Verify embedded desktop version
+        shell: pwsh
+        run: |
+          $assemblyPath = 'src/OpenKustoExplorer.Desktop/bin/Release/net10.0/OpenKustoExplorer.Desktop.dll'
+          $actual = [Reflection.AssemblyName]::GetAssemblyName((Resolve-Path $assemblyPath)).Version.ToString(3)
+          $expected = '${{ needs.version.outputs.version }}'
+          if ($actual -ne $expected) {
+            throw "Desktop assembly version $actual does not match resolved release version $expected."
+          }
 
       - name: Run tests
         run: dotnet test OpenKustoExplorer.slnx --configuration Release --no-build --no-restore --logger "console;verbosity=minimal"
 
       - name: Publish Native AOT smoke harness
-        run: dotnet publish tests/OpenKustoExplorer.AotSmoke/OpenKustoExplorer.AotSmoke.csproj --configuration Release --runtime ${{ matrix.rid }} --output artifacts/aot-smoke -warnaserror
+        run: dotnet publish tests/OpenKustoExplorer.AotSmoke/OpenKustoExplorer.AotSmoke.csproj --configuration Release --runtime ${{ matrix.rid }} --output artifacts/aot-smoke -warnaserror -p:Version=${{ needs.version.outputs.version }}
 
       - name: Run Windows Native AOT smoke harness
         if: runner.os == 'Windows'
@@ -60,7 +121,7 @@ jobs:
         run: ./artifacts/aot-smoke/OpenKustoExplorer.AotSmoke
 
       - name: Publish desktop Native AOT bundle
-        run: dotnet publish src/OpenKustoExplorer.Desktop/OpenKustoExplorer.Desktop.csproj --configuration Release --runtime ${{ matrix.rid }} --output artifacts/desktop -warnaserror
+        run: dotnet publish src/OpenKustoExplorer.Desktop/OpenKustoExplorer.Desktop.csproj --configuration Release --runtime ${{ matrix.rid }} --output artifacts/desktop -warnaserror -p:Version=${{ needs.version.outputs.version }}
 
       - name: Upload desktop bundle
         uses: actions/upload-artifact@v7
@@ -84,3 +145,202 @@ jobs:
             artifacts/desktop/**/*.xml
           if-no-files-found: error
           compression-level: 9
+
+      - name: Stage release files
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        run: |
+          $publishRoot = (Resolve-Path 'artifacts/desktop').Path
+          $binaryRoot = Join-Path $PWD 'artifacts/release-staging/binaries'
+          $symbolRoot = Join-Path $PWD 'artifacts/release-staging/symbols'
+          Remove-Item (Join-Path $PWD 'artifacts/release-staging') -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $binaryRoot, $symbolRoot, 'artifacts/release' | Out-Null
+          $binaryCount = 0
+          $symbolCount = 0
+
+          foreach ($file in Get-ChildItem $publishRoot -Recurse -File) {
+            $relativePath = [IO.Path]::GetRelativePath($publishRoot, $file.FullName)
+            $isSymbol = $file.Extension -in '.pdb', '.dbg', '.xml'
+            $targetRoot = $isSymbol ? $symbolRoot : $binaryRoot
+            $targetPath = Join-Path $targetRoot $relativePath
+            New-Item -ItemType Directory -Path (Split-Path -Parent $targetPath) -Force | Out-Null
+            Copy-Item -LiteralPath $file.FullName -Destination $targetPath
+            if ($isSymbol) {
+              $symbolCount++
+            }
+            else {
+              $binaryCount++
+            }
+          }
+
+          if ($binaryCount -eq 0 -or $symbolCount -eq 0) {
+            throw "Release staging requires binary and symbol files; found $binaryCount binaries and $symbolCount symbols."
+          }
+
+      - name: Package Windows release archives
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = '${{ needs.version.outputs.version }}'
+          Compress-Archive -Path 'artifacts/release-staging/binaries/*' -DestinationPath "artifacts/release/OpenKustoExplorer-$version-${{ matrix.rid }}.zip"
+          Compress-Archive -Path 'artifacts/release-staging/symbols/*' -DestinationPath "artifacts/release/OpenKustoExplorer-$version-${{ matrix.rid }}-symbols.zip"
+
+      - name: Verify Windows release archives
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = '${{ needs.version.outputs.version }}'
+          $checkRoot = Join-Path $PWD 'artifacts/archive-check'
+          Expand-Archive "artifacts/release/OpenKustoExplorer-$version-${{ matrix.rid }}.zip" -DestinationPath (Join-Path $checkRoot 'binaries')
+          Expand-Archive "artifacts/release/OpenKustoExplorer-$version-${{ matrix.rid }}-symbols.zip" -DestinationPath (Join-Path $checkRoot 'symbols')
+          $application = Join-Path $checkRoot 'binaries/OpenKustoExplorer.exe'
+          if (-not (Test-Path -LiteralPath $application -PathType Leaf) -or (Get-Item $application).Length -eq 0) {
+            throw 'The Windows release archive does not contain a non-empty OpenKustoExplorer.exe.'
+          }
+
+          if (@(Get-ChildItem (Join-Path $checkRoot 'symbols') -Recurse -File).Count -eq 0) {
+            throw 'The Windows symbols archive is empty.'
+          }
+
+      - name: Package Linux release archives
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version='${{ needs.version.outputs.version }}'
+          chmod +x artifacts/release-staging/binaries/OpenKustoExplorer
+          (cd artifacts/release-staging/binaries && zip -q -r "../../release/OpenKustoExplorer-${version}-${{ matrix.rid }}.zip" .)
+          (cd artifacts/release-staging/symbols && zip -q -r "../../release/OpenKustoExplorer-${version}-${{ matrix.rid }}-symbols.zip" .)
+
+      - name: Verify Linux release archives
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version='${{ needs.version.outputs.version }}'
+          rm -rf artifacts/archive-check
+          unzip -q "artifacts/release/OpenKustoExplorer-${version}-${{ matrix.rid }}.zip" -d artifacts/archive-check/binaries
+          unzip -q "artifacts/release/OpenKustoExplorer-${version}-${{ matrix.rid }}-symbols.zip" -d artifacts/archive-check/symbols
+          test -s artifacts/archive-check/binaries/OpenKustoExplorer
+          test -x artifacts/archive-check/binaries/OpenKustoExplorer
+          test -n "$(find artifacts/archive-check/symbols -type f -print -quit)"
+
+      - name: Upload release packages
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-packages-${{ matrix.rid }}
+          path: artifacts/release/*.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  release:
+    name: Create GitHub release
+    needs: [version, quality]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: main-release
+      cancel-in-progress: false
+
+    steps:
+      - name: Check out repository and tags
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Download release packages
+        uses: actions/download-artifact@v8
+        with:
+          pattern: release-packages-*
+          path: artifacts/release
+          merge-multiple: true
+
+      - name: Verify release packages
+        shell: pwsh
+        run: |
+          $version = '${{ needs.version.outputs.version }}'
+          $expected = @(
+            "OpenKustoExplorer-$version-win-x64.zip",
+            "OpenKustoExplorer-$version-win-x64-symbols.zip",
+            "OpenKustoExplorer-$version-linux-x64.zip",
+            "OpenKustoExplorer-$version-linux-x64-symbols.zip"
+          )
+
+          foreach ($fileName in $expected) {
+            $path = Join-Path 'artifacts/release' $fileName
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or (Get-Item $path).Length -eq 0) {
+              throw "Required release package '$fileName' is missing or empty."
+            }
+          }
+
+      - name: Create release and source tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.sha }}
+          RELEASE_VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag="v${RELEASE_VERSION}"
+          files=(
+            "artifacts/release/OpenKustoExplorer-${RELEASE_VERSION}-win-x64.zip"
+            "artifacts/release/OpenKustoExplorer-${RELEASE_VERSION}-win-x64-symbols.zip"
+            "artifacts/release/OpenKustoExplorer-${RELEASE_VERSION}-linux-x64.zip"
+            "artifacts/release/OpenKustoExplorer-${RELEASE_VERSION}-linux-x64-symbols.zip"
+          )
+
+          git fetch --force --tags origin
+          existing_commit="$(git rev-parse --verify "refs/tags/${tag}^{commit}" 2>/dev/null || true)"
+          if [[ -n "${existing_commit}" && "${existing_commit}" != "${RELEASE_SHA}" ]]; then
+            echo "Tag ${tag} points to ${existing_commit}, not ${RELEASE_SHA}." >&2
+            exit 1
+          fi
+
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            echo "Release ${tag} already exists; verifying its source and assets."
+          elif [[ -n "${existing_commit}" ]]; then
+            gh release create "${tag}" "${files[@]}" --verify-tag --generate-notes --latest=false
+          else
+            gh release create "${tag}" "${files[@]}" --target "${RELEASE_SHA}" --generate-notes --latest=false
+          fi
+
+          remote_assets="$(
+            gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
+              --jq '.assets[] | [.name, (.size | tostring), .state, (.digest // "")] | @tsv'
+          )"
+          for file in "${files[@]}"; do
+            file_name="$(basename "${file}")"
+            matched=false
+            while IFS=$'\t' read -r asset_name asset_size asset_state asset_digest; do
+              if [[ "${asset_name}" == "${file_name}" && "${asset_size}" -gt 0 && "${asset_state}" == uploaded && "${asset_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                matched=true
+                break
+              fi
+            done <<< "${remote_assets}"
+
+            if [[ "${matched}" != true ]]; then
+              echo "Release ${tag} is missing a complete, SHA-256-digested ${file_name} asset." >&2
+              exit 1
+            fi
+          done
+
+          git fetch --force --tags origin
+          tagged_commit="$(git rev-parse --verify "refs/tags/${tag}^{commit}")"
+          if [[ "${tagged_commit}" != "${RELEASE_SHA}" ]]; then
+            echo "Created tag ${tag} points to ${tagged_commit}, not ${RELEASE_SHA}." >&2
+            exit 1
+          fi
+
+          latest_tag="$(
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+              --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name' |
+              grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' |
+              sort -V |
+              tail -n 1
+          )"
+          gh release edit "${latest_tag}" --latest
+          echo "Released ${tag} from ${RELEASE_SHA}." >> "${GITHUB_STEP_SUMMARY}"

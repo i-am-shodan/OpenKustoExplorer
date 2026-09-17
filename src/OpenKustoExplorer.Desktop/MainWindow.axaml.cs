@@ -25,6 +25,7 @@ using OpenKustoExplorer.Application.Diagnostics;
 using OpenKustoExplorer.Application.Execution;
 using OpenKustoExplorer.Application.Graphs;
 using OpenKustoExplorer.Application.Sessions;
+using OpenKustoExplorer.Application.Updates;
 using OpenKustoExplorer.Desktop.Appearance;
 using OpenKustoExplorer.Desktop.Controls;
 using OpenKustoExplorer.Desktop.Editor;
@@ -83,8 +84,10 @@ public sealed partial class MainWindow : Window, IDisposable
 
     private readonly CancellationTokenSource automationCancellationSource = new();
     private readonly ObservableCollection<SignedInUserAvatarViewModel> signedInUsers = [];
+    private readonly CancellationTokenSource updateCancellationSource = new();
     private Button? appearanceButton;
     private AppearanceSettings? appearanceSettings;
+    private KustoApplicationUpdate? availableUpdate;
     private Button? automationButton;
     private AutomationNotificationDispatcher? automationNotificationDispatcher;
     private Grid? automationVisualizationSurface;
@@ -186,6 +189,9 @@ public sealed partial class MainWindow : Window, IDisposable
     private ItemsControl? signedInUsersList;
     private RadioButton? systemThemeOption;
     private TextBox? tabSearchBox;
+    private Button? updateButton;
+    private int updateCheckStarted;
+    private IKustoApplicationUpdateService? updateService;
     private Grid? visualizationSurface;
 
     /// <summary>
@@ -205,19 +211,23 @@ public sealed partial class MainWindow : Window, IDisposable
     /// <param name="viewModel">The workbench presentation model.</param>
     /// <param name="appearanceSettings">The desktop appearance settings.</param>
     /// <param name="identityService">The process-lifetime signed-in account service.</param>
+    /// <param name="updateService">The official application release checker.</param>
     /// <exception cref="ArgumentNullException"><paramref name="viewModel"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentNullException"><paramref name="appearanceSettings"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentNullException"><paramref name="identityService"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="updateService"/> is <see langword="null"/>.</exception>
     /// <exception cref="InvalidOperationException">The compiled editor control cannot be located.</exception>
     internal MainWindow(
         MainWindowViewModel viewModel,
         AppearanceSettings appearanceSettings,
-        IKustoIdentityService identityService)
+        IKustoIdentityService identityService,
+        IKustoApplicationUpdateService updateService)
         : this()
     {
         ArgumentNullException.ThrowIfNull(viewModel);
         ArgumentNullException.ThrowIfNull(appearanceSettings);
         ArgumentNullException.ThrowIfNull(identityService);
+        ArgumentNullException.ThrowIfNull(updateService);
 
         DataContext = viewModel;
         InitializeInteractiveControls();
@@ -227,6 +237,7 @@ public sealed partial class MainWindow : Window, IDisposable
         this.appearanceSettings = appearanceSettings;
         viewModel.ApplyCopilotDefaults(CreateCopilotDefaults(appearanceSettings));
         this.identityService = identityService;
+        this.updateService = updateService;
         signedInUsersList!.ItemsSource = signedInUsers;
         identityService.SignedInUsersChanged += OnSignedInUsersChanged;
         QueueSignedInUsersRefresh();
@@ -254,6 +265,7 @@ public sealed partial class MainWindow : Window, IDisposable
             automationTimer?.Stop();
             automationTimer = null;
             automationCancellationSource.Cancel();
+            updateCancellationSource.Cancel();
             identityRefreshCancellationSource?.Cancel();
             identityRefreshCancellationSource?.Dispose();
             identityRefreshCancellationSource = null;
@@ -265,6 +277,7 @@ public sealed partial class MainWindow : Window, IDisposable
                 viewModel.AutomationNotificationRequested -= OnAutomationNotificationRequested;
             }
 
+            automationNotificationDispatcher?.Dispose();
             automationNotificationDispatcher = null;
 
             if (appearanceSettings is not null)
@@ -278,6 +291,8 @@ public sealed partial class MainWindow : Window, IDisposable
                 identityService = null;
             }
 
+            updateService = null;
+
             foreach (SignedInUserAvatarViewModel user in signedInUsers)
             {
                 user.Dispose();
@@ -286,6 +301,7 @@ public sealed partial class MainWindow : Window, IDisposable
             signedInUsers.Clear();
 
             automationCancellationSource.Dispose();
+            updateCancellationSource.Dispose();
         }
     }
 
@@ -383,6 +399,8 @@ public sealed partial class MainWindow : Window, IDisposable
         {
             _ = RunAutomationTickAsync(viewModel);
         }
+
+        _ = CheckForUpdateAsync();
     }
 
     private static void CancelActiveExecution(MainWindowViewModel viewModel)
@@ -470,6 +488,80 @@ public sealed partial class MainWindow : Window, IDisposable
             AutomationProperties.SetName(item, row.AutomationText);
             AutomationProperties.SetControlTypeOverride(item, AutomationControlType.DataItem);
         }
+    }
+
+    private async Task CheckForUpdateAsync()
+    {
+        IKustoApplicationUpdateService? service = updateService;
+        if (service is null || Interlocked.Exchange(ref updateCheckStarted, 1) != 0)
+        {
+            return;
+        }
+
+        try
+        {
+            Version? currentVersion = typeof(MainWindow).Assembly.GetName().Version;
+            if (currentVersion is null)
+            {
+                return;
+            }
+
+            KustoApplicationUpdate? update = await service.CheckForUpdateAsync(
+                currentVersion,
+                updateCancellationSource.Token).ConfigureAwait(true);
+            if (update is not null && !updateCancellationSource.IsCancellationRequested)
+            {
+                availableUpdate = update;
+                if (updateButton is not null)
+                {
+                    AutomationProperties.SetName(updateButton, $"Update to {update.TagName}");
+                    ToolTip.SetTip(updateButton, $"{update.TagName} is available. Open the official GitHub release.");
+                    updateButton.IsVisible = true;
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Update discovery is optional and must never interfere with startup or shutdown.
+        }
+        catch (HttpRequestException)
+        {
+            // Offline and GitHub API failures leave the optional update action hidden.
+        }
+        catch (IOException)
+        {
+            // Response stream failures leave the optional update action hidden.
+        }
+        catch (InvalidDataException)
+        {
+            // Ignore an unexpected release response instead of interrupting the workbench.
+        }
+        catch (JsonException)
+        {
+            // Ignore malformed remote JSON instead of interrupting the workbench.
+        }
+    }
+
+    private void OnOpenUpdateClick(object? sender, RoutedEventArgs eventArguments)
+    {
+        if (availableUpdate is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _ = Process.Start(new ProcessStartInfo(availableUpdate.ReleasePageUri.AbsoluteUri)
+            {
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception exception) when (exception is Win32Exception or InvalidOperationException)
+        {
+            ReportDesktopStatus($"Unable to open the update page: {exception.Message}");
+        }
+
+        eventArguments.Handled = true;
     }
 
     private void OnAppearancePropertyChanged(object? sender, PropertyChangedEventArgs eventArguments)
@@ -2447,6 +2539,7 @@ public sealed partial class MainWindow : Window, IDisposable
         tabSearchBox = FindRequiredControl<TextBox>("TabSearchBox");
         textZoomSlider = FindRequiredControl<Slider>("TextZoomSlider");
         textZoomValue = FindRequiredControl<TextBlock>("TextZoomValue");
+        updateButton = FindRequiredControl<Button>("UpdateButton");
         visualizationSurface = FindRequiredControl<Grid>("VisualizationSurface");
     }
 

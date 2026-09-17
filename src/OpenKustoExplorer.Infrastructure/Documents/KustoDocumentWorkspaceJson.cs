@@ -9,7 +9,8 @@ namespace OpenKustoExplorer.Infrastructure.Documents;
 /// </summary>
 internal static class KustoDocumentWorkspaceJson
 {
-    private const int CurrentVersion = 1;
+    private const int CurrentVersion = 2;
+    private const int MinimumSupportedVersion = 1;
 
     /// <summary>
     /// Reads a document workspace from JSON.
@@ -23,7 +24,7 @@ internal static class KustoDocumentWorkspaceJson
         using JsonDocument document = JsonDocument.Parse(stream);
         JsonElement root = document.RootElement;
         int version = root.GetProperty("version").GetInt32();
-        if (version != CurrentVersion)
+        if (version is < MinimumSupportedVersion or > CurrentVersion)
         {
             throw new InvalidDataException($"Unsupported document workspace version {version}.");
         }

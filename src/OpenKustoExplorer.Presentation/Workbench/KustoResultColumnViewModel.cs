@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using OpenKustoExplorer.Application.Execution;
 
@@ -35,6 +36,7 @@ public sealed class KustoResultColumnViewModel : ObservableObject
     private string filterText = string.Empty;
     private KustoResultFilterOption selectedFilterOption = AvailableFilterOptions[2];
     private KustoResultSortDirection sortDirection;
+    private int? sortPriority;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="KustoResultColumnViewModel"/> class.
@@ -150,7 +152,9 @@ public sealed class KustoResultColumnViewModel : ObservableObject
     /// <summary>
     /// Gets the accessible sort action name.
     /// </summary>
-    public string SortAutomationName => $"Sort by {Name}";
+    public string SortAutomationName => IsSortActive
+        ? $"Sort by {Name}, {SortDirection.ToString().ToLowerInvariant()}, priority {SortPriority:N0}"
+        : $"Sort by {Name}";
 
     /// <summary>
     /// Gets the accessible filter action name.
@@ -177,9 +181,29 @@ public sealed class KustoResultColumnViewModel : ObservableObject
                 OnPropertyChanged(nameof(IsSortActive));
                 OnPropertyChanged(nameof(IsSortAscending));
                 OnPropertyChanged(nameof(IsSortDescending));
+                OnPropertyChanged(nameof(SortAutomationName));
             }
         }
     }
+
+    /// <summary>
+    /// Gets the one-based priority in the active ordered sort set.
+    /// </summary>
+    public int? SortPriority
+    {
+        get => sortPriority;
+        private set
+        {
+            if (SetProperty(ref sortPriority, value))
+            {
+                OnPropertyChanged(nameof(SortPriorityText));
+                OnPropertyChanged(nameof(SortAutomationName));
+            }
+        }
+    }
+
+    /// <summary>Gets the compact active sort priority.</summary>
+    public string SortPriorityText => SortPriority?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
 
     /// <summary>
     /// Gets a value indicating whether this column controls result sorting.
@@ -247,19 +271,38 @@ public sealed class KustoResultColumnViewModel : ObservableObject
     internal void ClearSort()
     {
         SortDirection = KustoResultSortDirection.None;
+        SortPriority = null;
     }
 
     /// <summary>
     /// Advances this column through ascending, descending, and server ordering.
     /// </summary>
-    internal void CycleSort()
+    /// <param name="priority">The one-based priority assigned when sorting becomes active.</param>
+    internal void CycleSort(int priority)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(priority);
         SortDirection = SortDirection switch
         {
             KustoResultSortDirection.None => KustoResultSortDirection.Ascending,
             KustoResultSortDirection.Ascending => KustoResultSortDirection.Descending,
             _ => KustoResultSortDirection.None,
         };
+        SortPriority = IsSortActive ? priority : null;
+    }
+
+    /// <summary>
+    /// Updates this active sort's one-based priority.
+    /// </summary>
+    /// <param name="priority">The new one-based priority.</param>
+    internal void SetSortPriority(int priority)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(priority);
+        if (!IsSortActive)
+        {
+            throw new InvalidOperationException("An inactive result sort cannot have a priority.");
+        }
+
+        SortPriority = priority;
     }
 
     private static int GetMaximumLineLength(string text)

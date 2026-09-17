@@ -19,4 +19,9 @@ public enum KustoResultExportFormat
     /// UTF-8 JSON array.
     /// </summary>
     Json,
+
+    /// <summary>
+    /// Runnable UTF-8 KQL datatable script.
+    /// </summary>
+    KqlScript,
 }

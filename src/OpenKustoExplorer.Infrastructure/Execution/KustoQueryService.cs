@@ -32,7 +32,7 @@ public sealed class KustoQueryService : IKustoCatalogService, IKustoGraphQuerySe
     private readonly Dictionary<string, IPublicClientApplication> publicClientApplications = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, KustoSignedInUser> signedInUsers = new(StringComparer.OrdinalIgnoreCase);
     private readonly HttpClient httpClient;
-    private readonly object synchronizationRoot = new();
+    private readonly Lock synchronizationRoot = new();
     private bool isDisposed;
 
     /// <summary>

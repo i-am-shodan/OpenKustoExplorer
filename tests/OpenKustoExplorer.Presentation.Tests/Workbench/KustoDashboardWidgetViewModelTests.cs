@@ -54,7 +54,11 @@ public sealed class KustoDashboardWidgetViewModelTests
         await viewModel.RefreshIfDueAsync(startedAtUtc.AddMinutes(1));
 
         Assert.Equal(1, queryService.ExecuteCount);
-        Assert.Equal(definition.QueryText, queryService.Request?.QueryText);
+        Assert.Equal(
+            "let _startTime = datetime(2026-01-01T03:04:05.0000000Z);\n"
+            + "let _endTime = datetime(2026-01-02T03:04:05.0000000Z);\n"
+            + definition.QueryText,
+            queryService.Request?.QueryText);
         Assert.Equal(2, viewModel.ResultColumns.Count);
         Assert.Equal(2, viewModel.ResultRows.Count);
         Assert.NotNull(viewModel.Visualization);
@@ -113,6 +117,95 @@ public sealed class KustoDashboardWidgetViewModelTests
         Assert.Equal(cachedAtUtc.AddMinutes(2), viewModel.CreateDefinition().CachedAtUtc);
     }
 
+    /// <summary>
+    /// Verifies the owning dashboard range is used by an individual widget refresh.
+    /// </summary>
+    /// <returns>A task representing the asynchronous unit test.</returns>
+    [Fact]
+    public async Task IndividualRefreshUsesOwningDashboardRange()
+    {
+        StubKustoQueryService queryService = new()
+        {
+            Result = new KustoQueryResult([], TimeSpan.Zero),
+        };
+        KustoDashboardWidget definition = new(
+            Guid.NewGuid(),
+            "Errors",
+            new Uri("https://adx.contoso.com"),
+            "Telemetry",
+            "Errors | where Timestamp between (_startTime.._endTime)",
+            TimeSpan.FromMinutes(2),
+            KustoDashboardWidgetDisplayMode.Table,
+            KustoVisualizationKind.Table,
+            new KustoDashboardWidgetLayout(0, 0, 12, 8),
+            "#FFFFFF",
+            "#202124",
+            "#1769AA");
+        using KustoDashboardWidgetViewModel viewModel = new(
+            definition,
+            queryService,
+            timeRangeResolver: utcNow => KustoDashboardTimeRange
+                .CreateRelative(TimeSpan.FromHours(6))
+                .Resolve(utcNow));
+        DateTimeOffset utcNow = new(2026, 9, 16, 18, 0, 0, TimeSpan.Zero);
+
+        await viewModel.RefreshAsync(utcNow);
+
+        Assert.Equal(
+            "let _startTime = datetime(2026-09-16T12:00:00.0000000Z);\n"
+            + "let _endTime = datetime(2026-09-16T18:00:00.0000000Z);\n"
+            + definition.QueryText,
+            queryService.Request?.QueryText);
+        Assert.Equal(definition.QueryText, viewModel.QueryText);
+    }
+
+    /// <summary>
+    /// Verifies a late superseded refresh cannot overwrite a newer result.
+    /// </summary>
+    /// <returns>A task representing the asynchronous unit test.</returns>
+    [Fact]
+    public async Task SupersededRefreshCannotApplyLateResult()
+    {
+        ControlledKustoQueryService queryService = new();
+        KustoDashboardWidget definition = new(
+            Guid.NewGuid(),
+            "Services",
+            new Uri("https://adx.contoso.com"),
+            "Telemetry",
+            "Services | take 1",
+            TimeSpan.FromMinutes(2),
+            KustoDashboardWidgetDisplayMode.Table,
+            KustoVisualizationKind.Table,
+            new KustoDashboardWidgetLayout(0, 0, 12, 8),
+            "#FFFFFF",
+            "#202124",
+            "#1769AA");
+        using KustoDashboardWidgetViewModel viewModel = new(definition, queryService);
+        DateTimeOffset firstTime = new(2026, 9, 16, 10, 0, 0, TimeSpan.Zero);
+        DateTimeOffset secondTime = firstTime.AddMinutes(1);
+
+        Task firstRefresh = viewModel.RefreshAsync(firstTime);
+        Task secondRefresh = viewModel.RefreshAsync(secondTime);
+        Assert.Equal(2, queryService.Completions.Count);
+        queryService.Completions[1].SetResult(CreateSingleValueResult("New"));
+        await secondRefresh;
+        queryService.Completions[0].SetResult(CreateSingleValueResult("Old"));
+        await firstRefresh;
+
+        Assert.Equal("New", Assert.Single(viewModel.ResultRows).Cells[0].Text);
+        Assert.Equal(secondTime, viewModel.LastRefreshedAtUtc);
+        Assert.Equal(secondTime, viewModel.CreateDefinition().CachedAtUtc);
+    }
+
+    private static KustoQueryResult CreateSingleValueResult(string value)
+    {
+        KustoResultTable table = new(
+            "Results",
+            [new KustoResultColumn("Value", "string")],
+            [new KustoResultRow([value])]);
+        return new KustoQueryResult([table], TimeSpan.Zero);
+    }
+
     private sealed class StubKustoQueryService : IKustoQueryService
     {
         public int ExecuteCount { get; private set; }
@@ -128,6 +221,21 @@ public sealed class KustoDashboardWidgetViewModelTests
             ExecuteCount++;
             Request = request;
             return Task.FromResult(Result);
+        }
+    }
+
+    private sealed class ControlledKustoQueryService : IKustoQueryService
+    {
+        public List<TaskCompletionSource<KustoQueryResult>> Completions { get; } = [];
+
+        public Task<KustoQueryResult> ExecuteAsync(
+            KustoQueryRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            TaskCompletionSource<KustoQueryResult> completion = new(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            Completions.Add(completion);
+            return completion.Task;
         }
     }
 }

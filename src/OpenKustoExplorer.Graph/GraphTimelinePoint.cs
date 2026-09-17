@@ -29,7 +29,10 @@ public sealed class GraphTimelinePoint
 
         if (ingestionId.HasValue != sourceKind.HasValue)
         {
-            throw new ArgumentException("Timeline ingestion identity and source kind must either both be set or both be absent.");
+            string parameterName = ingestionId.HasValue ? nameof(sourceKind) : nameof(ingestionId);
+            throw new ArgumentException(
+                "Timeline ingestion identity and source kind must either both be set or both be absent.",
+                parameterName);
         }
 
         if (sourceKind is not null && !Enum.IsDefined(sourceKind.Value))

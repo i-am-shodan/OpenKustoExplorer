@@ -44,7 +44,7 @@ public sealed class FileKustoDocumentStoreTests
                                 "error",
                                 KustoConditionalFormatTarget.Row,
                                 "#FECACA"),
-                        ]),
+                            ]),
                     new KustoDocument(
                         secondId,
                         "Monitor",
@@ -126,6 +126,55 @@ public sealed class FileKustoDocumentStoreTests
             Assert.Null(restored.GroupName);
             Assert.True(restored.UseAlternatingRows);
             Assert.Empty(restored.ConditionalFormattingRules);
+        }
+        finally
+        {
+            Directory.Delete(directoryPath, true);
+        }
+    }
+
+    /// <summary>
+    /// Verifies version-two workspaces retain their query tabs while obsolete analysis metadata is ignored.
+    /// </summary>
+    [Fact]
+    public void LoadAcceptsVersionTwoWorkspaceWithObsoleteAnalysisMetadata()
+    {
+        string directoryPath = CreateTemporaryDirectory();
+        string filePath = Path.Join(directoryPath, "documents.json");
+        Guid documentId = Guid.NewGuid();
+        string json = $$"""
+                        {
+                            "version": 2,
+                            "selectedDocumentId": "{{documentId}}",
+                            "documents": [
+                                {
+                                    "id": "{{documentId}}",
+                                    "title": "Existing analysis",
+                                    "text": "StormEvents | count",
+                                    "caretPosition": 4,
+                                    "clusterUri": null,
+                                    "databaseName": null,
+                                    "resultAnalysis": {
+                                        "mode": "Grouped",
+                                        "calculatedColumns": [],
+                                        "groupColumnNames": ["State"],
+                                        "aggregates": []
+                                    }
+                                }
+                            ]
+                        }
+                        """;
+
+        try
+        {
+            File.WriteAllText(filePath, json);
+            FileKustoDocumentStore store = new(filePath);
+
+            KustoDocument restored = Assert.Single(store.Load().Documents);
+
+            Assert.Equal(documentId, restored.Id);
+            Assert.Equal("Existing analysis", restored.Title);
+            Assert.Equal("StormEvents | count", restored.Text);
         }
         finally
         {

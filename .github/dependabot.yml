@@ -1,0 +1,56 @@
+version: 2
+
+updates:
+  - package-ecosystem: nuget
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: deps
+      include: scope
+    groups:
+      avalonia-minor-patch:
+        patterns:
+          - "Avalonia*"
+        update-types:
+          - minor
+          - patch
+      microsoft-extensions-minor-patch:
+        patterns:
+          - "Microsoft.Extensions.*"
+        update-types:
+          - minor
+          - patch
+      test-analysis-minor-patch:
+        patterns:
+          - coverlet.collector
+          - Microsoft.NET.Test.Sdk
+          - SonarAnalyzer.CSharp
+          - StyleCop.Analyzers
+          - "xunit*"
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: tuesday
+      time: "05:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci
+      include: scope
+    groups:
+      actions-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch

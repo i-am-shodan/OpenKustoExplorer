@@ -38,6 +38,12 @@ public sealed class KustoAutomationNotificationEditorViewModel : ObservableObjec
     private bool smtpUseSsl = true;
     private string subjectTemplate = KustoAutomationNotificationSettings.DefaultSubjectTemplate;
     private KustoAutomationViewModel? target;
+    private bool webhookEnabled;
+    private KustoAutomationWebhookEndpointSource webhookEndpointSource =
+        KustoAutomationWebhookEndpointSource.EnvironmentVariable;
+
+    private string webhookEnvironmentVariableName = string.Empty;
+    private string webhookStoredUrl = string.Empty;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="KustoAutomationNotificationEditorViewModel"/> class.
@@ -197,6 +203,90 @@ public sealed class KustoAutomationNotificationEditorViewModel : ObservableObjec
     public bool ShowEmailSettings => EmailEnabled;
 
     /// <summary>
+    /// Gets or sets a value indicating whether webhook delivery is enabled.
+    /// </summary>
+    public bool WebhookEnabled
+    {
+        get => webhookEnabled;
+        set
+        {
+            if (SetProperty(ref webhookEnabled, value))
+            {
+                OnPropertyChanged(nameof(ShowWebhookSettings));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gets a value indicating whether webhook endpoint settings are shown.
+    /// </summary>
+    public bool ShowWebhookSettings => WebhookEnabled;
+
+    /// <summary>
+    /// Gets or sets how the webhook endpoint is resolved.
+    /// </summary>
+    public KustoAutomationWebhookEndpointSource WebhookEndpointSource
+    {
+        get => webhookEndpointSource;
+        set
+        {
+            if (SetProperty(ref webhookEndpointSource, value))
+            {
+                OnPropertyChanged(nameof(WebhookUsesStoredUrl));
+                OnPropertyChanged(nameof(WebhookUsesEnvironmentVariable));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the webhook uses a stored URL.
+    /// </summary>
+    public bool WebhookUsesStoredUrl
+    {
+        get => WebhookEndpointSource == KustoAutomationWebhookEndpointSource.StoredUrl;
+        set
+        {
+            if (value)
+            {
+                WebhookEndpointSource = KustoAutomationWebhookEndpointSource.StoredUrl;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the webhook uses an environment variable.
+    /// </summary>
+    public bool WebhookUsesEnvironmentVariable
+    {
+        get => WebhookEndpointSource == KustoAutomationWebhookEndpointSource.EnvironmentVariable;
+        set
+        {
+            if (value)
+            {
+                WebhookEndpointSource = KustoAutomationWebhookEndpointSource.EnvironmentVariable;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gets or sets the stored webhook URL draft.
+    /// </summary>
+    public string WebhookStoredUrl
+    {
+        get => webhookStoredUrl;
+        set => SetProperty(ref webhookStoredUrl, value ?? string.Empty);
+    }
+
+    /// <summary>
+    /// Gets or sets the webhook environment-variable name draft.
+    /// </summary>
+    public string WebhookEnvironmentVariableName
+    {
+        get => webhookEnvironmentVariableName;
+        set => SetProperty(ref webhookEnvironmentVariableName, value ?? string.Empty);
+    }
+
+    /// <summary>
     /// Gets or sets the email recipient.
     /// </summary>
     public string EmailRecipient
@@ -302,6 +392,11 @@ public sealed class KustoAutomationNotificationEditorViewModel : ObservableObjec
         SmtpHost = settings.SmtpHost ?? string.Empty;
         SmtpPort = settings.SmtpPort;
         SmtpUseSsl = settings.SmtpUseSsl;
+        WebhookEndpointSource = settings.Webhook?.EndpointSource
+            ?? KustoAutomationWebhookEndpointSource.EnvironmentVariable;
+        WebhookStoredUrl = settings.Webhook?.StoredUrl?.AbsoluteUri ?? string.Empty;
+        WebhookEnvironmentVariableName = settings.Webhook?.EnvironmentVariableName ?? string.Empty;
+        WebhookEnabled = settings.Webhook is not null;
         SubjectTemplate = settings.SubjectTemplate;
         MessageTemplate = settings.MessageTemplate;
         ErrorText = string.Empty;
@@ -329,6 +424,7 @@ public sealed class KustoAutomationNotificationEditorViewModel : ObservableObjec
 
         if (target is not null && string.IsNullOrEmpty(ErrorText))
         {
+            KustoAutomationWebhookSettings? webhook = CreateWebhookSettings();
             KustoAutomationNotificationSettings settings = new(
                 NotifyWhenRowCountChanges,
                 RowCountComparison,
@@ -344,7 +440,8 @@ public sealed class KustoAutomationNotificationEditorViewModel : ObservableObjec
                 MessageTemplate,
                 RunApplicationEnabled,
                 ApplicationPath,
-                ApplicationArguments);
+                ApplicationArguments,
+                webhook);
             KustoAutomationViewModel automation = target;
             automation.SetNotificationSettings(settings);
             savedAction(automation);
@@ -355,7 +452,7 @@ public sealed class KustoAutomationNotificationEditorViewModel : ObservableObjec
     private string Validate()
     {
         string error = string.Empty;
-        bool hasChannel = DesktopEnabled || EmailEnabled || RunApplicationEnabled;
+        bool hasChannel = DesktopEnabled || EmailEnabled || RunApplicationEnabled || WebhookEnabled;
         bool hasCriterion = NotifyWhenRowCountChanges || HasRowCountComparison;
 
         if (hasChannel && !hasCriterion)
@@ -374,16 +471,63 @@ public sealed class KustoAutomationNotificationEditorViewModel : ObservableObjec
         {
             error = "Enter both a subject and message template.";
         }
-        else if (EmailEnabled && !IsValidEmailConfiguration())
+        else
         {
-            error = "Email requires valid recipient and sender addresses plus an SMTP host.";
-        }
-        else if (RunApplicationEnabled && string.IsNullOrWhiteSpace(ApplicationPath))
-        {
-            error = "Run application requires an executable path.";
+            error = ValidateChannelConfigurations();
         }
 
         return error;
+    }
+
+    private string ValidateChannelConfigurations()
+    {
+        if (EmailEnabled && !IsValidEmailConfiguration())
+        {
+            return "Email requires valid recipient and sender addresses plus an SMTP host.";
+        }
+
+        if (RunApplicationEnabled && string.IsNullOrWhiteSpace(ApplicationPath))
+        {
+            return "Run application requires an executable path.";
+        }
+
+        if (WebhookEnabled && !IsValidWebhookConfiguration())
+        {
+            return WebhookUsesStoredUrl
+                ? "Webhook requires an absolute HTTPS URL without user information."
+                : "Webhook requires a valid environment-variable name.";
+        }
+
+        return string.Empty;
+    }
+
+    private KustoAutomationWebhookSettings? CreateWebhookSettings()
+    {
+        if (!WebhookEnabled)
+        {
+            return null;
+        }
+
+        return WebhookUsesStoredUrl
+            ? new KustoAutomationWebhookSettings(
+                KustoAutomationWebhookEndpointSource.StoredUrl,
+                new Uri(WebhookStoredUrl.Trim(), UriKind.Absolute))
+            : new KustoAutomationWebhookSettings(
+                KustoAutomationWebhookEndpointSource.EnvironmentVariable,
+                environmentVariableName: WebhookEnvironmentVariableName);
+    }
+
+    private bool IsValidWebhookConfiguration()
+    {
+        if (WebhookUsesStoredUrl)
+        {
+            return Uri.TryCreate(WebhookStoredUrl.Trim(), UriKind.Absolute, out Uri? endpoint)
+                && endpoint.Scheme == Uri.UriSchemeHttps
+                && string.IsNullOrEmpty(endpoint.UserInfo);
+        }
+
+        string variableName = WebhookEnvironmentVariableName.Trim();
+        return variableName.Length > 0 && !variableName.Contains('=');
     }
 
     private bool IsValidEmailConfiguration()

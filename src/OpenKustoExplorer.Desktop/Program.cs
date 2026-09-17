@@ -10,6 +10,7 @@ using OpenKustoExplorer.Application.Execution;
 using OpenKustoExplorer.Application.Graphs;
 using OpenKustoExplorer.Application.Language;
 using OpenKustoExplorer.Application.Sessions;
+using OpenKustoExplorer.Application.Updates;
 using OpenKustoExplorer.Desktop.Appearance;
 using OpenKustoExplorer.Graph;
 using OpenKustoExplorer.Graph.Query;
@@ -22,6 +23,7 @@ using OpenKustoExplorer.Infrastructure.Execution;
 using OpenKustoExplorer.Infrastructure.Graph;
 using OpenKustoExplorer.Infrastructure.Language;
 using OpenKustoExplorer.Infrastructure.Sessions;
+using OpenKustoExplorer.Infrastructure.Updates;
 using OpenKustoExplorer.Presentation.Workbench;
 
 namespace OpenKustoExplorer.Desktop;
@@ -142,12 +144,14 @@ internal static class Program
                 serviceProvider.GetRequiredService<IKustoRecordedRelationPlanner>(),
                 serviceProvider.GetRequiredService<IKustoRecordedChainQueryGenerator>()));
         services.AddSingleton<IKustoLanguageService, KustoLanguageService>();
+        services.AddSingleton<IKustoApplicationUpdateService, GitHubKustoApplicationUpdateService>();
         services.AddSingleton<MainWindowViewModel>();
         services.AddSingleton(serviceProvider =>
             new MainWindow(
                 serviceProvider.GetRequiredService<MainWindowViewModel>(),
                 serviceProvider.GetRequiredService<AppearanceSettings>(),
-                serviceProvider.GetRequiredService<IKustoIdentityService>()));
+                serviceProvider.GetRequiredService<IKustoIdentityService>(),
+                serviceProvider.GetRequiredService<IKustoApplicationUpdateService>()));
 
         return services;
     }

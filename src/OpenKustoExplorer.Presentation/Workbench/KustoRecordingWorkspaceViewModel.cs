@@ -15,6 +15,8 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
 {
     private readonly HashSet<KustoRecordedValueIdentity> activeInterests = [];
     private readonly HashSet<string> activeManualInterestValues = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<Guid> discardedExecutionIds = [];
+    private readonly Dictionary<Guid, Guid> pendingExecutionPeriods = [];
     private readonly IKustoRecordedChainQueryGenerator? chainGenerator;
     private readonly IKustoRecordedChainSearcher? chainSearcher;
     private readonly IKustoPredicateInterestExtractor? interestExtractor;
@@ -84,10 +86,12 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
         this.chainGenerator = chainGenerator;
         this.timeProvider = timeProvider ?? TimeProvider.System;
         Sessions = new ObservableCollection<KustoRecordedSessionSummaryViewModel>();
-        OpenRecordingCommand = new AsyncRelayCommand(OpenRecordingAsync, () => IsAvailable && !IsRecording);
+        OpenRecordingCommand = new AsyncRelayCommand(OpenRecordingAsync, () => IsAvailable && !HasActiveRecording);
         CloseRecordingCommand = new RelayCommand(CloseRecordingDialog);
         StartRecordingCommand = new AsyncRelayCommand(StartRecordingAsync, () => CanStartRecording);
-        StopRecordingCommand = new AsyncRelayCommand(StopRecordingAsync, () => IsRecording);
+        PauseRecordingCommand = new AsyncRelayCommand(PauseRecordingAsync, () => IsRecording);
+        ResumeRecordingCommand = new AsyncRelayCommand(ResumeRecordingAsync, () => IsPaused);
+        StopRecordingCommand = new AsyncRelayCommand(StopRecordingAsync, () => HasActiveRecording);
         RefreshCommand = new AsyncRelayCommand(RefreshAsync, () => IsAvailable && !IsLoading);
         CancelDatabaseRecoveryCommand = new RelayCommand(CancelDatabaseRecovery);
         ResetDatabaseCommand = new AsyncRelayCommand(ResetDatabaseAsync, () => CanResetDatabase);
@@ -140,13 +144,30 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
     /// <summary>Gets a value indicating whether a session is actively recording.</summary>
     public bool IsRecording => activePeriod is not null;
 
+    /// <summary>Gets a value indicating whether a recording session is active but capture is paused.</summary>
+    public bool IsPaused => HasActiveRecording && activePeriod is null;
+
+    /// <summary>Gets a value indicating whether a recording session is active or paused.</summary>
+    public bool HasActiveRecording => activeSessionId is not null;
+
     /// <summary>Gets the active session name.</summary>
     public string ActiveSessionName => activeSessionName;
 
     /// <summary>Gets an accessible active-recording description.</summary>
-    public string RecordingAutomationText => IsRecording
-        ? $"Recording session {ActiveSessionName}"
-        : "Query recording stopped";
+    public string RecordingAutomationText
+    {
+        get
+        {
+            if (IsRecording)
+            {
+                return $"Recording session {ActiveSessionName}";
+            }
+
+            return IsPaused
+                ? $"Recording session {ActiveSessionName} paused"
+                : "Query recording stopped";
+        }
+    }
 
     /// <summary>Gets a value indicating whether the start-recording dialog is visible.</summary>
     public bool IsRecordingDialogOpen
@@ -203,7 +224,7 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
     /// <summary>Gets a value indicating whether recording can start.</summary>
     public bool CanStartRecording => IsAvailable
         && IsRecordingDialogOpen
-        && !IsRecording
+        && !HasActiveRecording
         && (IsAppendMode ? SelectedAppendSession is not null : !string.IsNullOrWhiteSpace(NewSessionName));
 
     /// <summary>Gets the latest recording validation or persistence error.</summary>
@@ -516,6 +537,12 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
     /// <summary>Gets the command that creates or appends and begins recording.</summary>
     public IAsyncRelayCommand StartRecordingCommand { get; }
 
+    /// <summary>Gets the command that pauses capture in the active recording session.</summary>
+    public IAsyncRelayCommand PauseRecordingCommand { get; }
+
+    /// <summary>Gets the command that resumes capture in the paused recording session.</summary>
+    public IAsyncRelayCommand ResumeRecordingCommand { get; }
+
     /// <summary>Gets the command that stops active recording.</summary>
     public IAsyncRelayCommand StopRecordingCommand { get; }
 
@@ -579,6 +606,8 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
     /// <summary>Gets the command that clears both selected chain endpoints.</summary>
     public IAsyncRelayCommand ClearChainEndpointsCommand { get; }
 
+    private SemaphoreSlim RecordingOperationGate { get; } = new(1, 1);
+
     /// <summary>
     /// Begins recording one manual query when a recording period is active.
     /// </summary>
@@ -597,35 +626,49 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
         DateTimeOffset startedAtUtc,
         CancellationToken cancellationToken = default)
     {
-        if (activePeriod is null || store is null || interestExtractor is null || relationExtractor is null)
+        if (store is null || interestExtractor is null || relationExtractor is null)
         {
             return null;
         }
 
-        IReadOnlyList<KustoPredicateInterest> interests = interestExtractor.Extract(
-            request.QueryText,
-            databaseSchema,
-            cancellationToken);
-        KustoRecordedRelationDescriptor? relation = relationExtractor.Extract(
-            request.QueryText,
-            databaseSchema,
-            cancellationToken);
-        Guid executionId = await store.BeginExecutionAsync(
-            new KustoRecordedExecutionStart(
-                activePeriod.Id,
-                documentId,
-                documentTitle,
-                request,
-                startedAtUtc,
-                interests,
-                relation),
-            cancellationToken);
-        foreach (KustoPredicateInterest interest in interests)
+        await RecordingOperationGate.WaitAsync(cancellationToken);
+        try
         {
-            activeInterests.Add(new KustoRecordedValueIdentity(interest.TypeName, interest.Value, false));
-        }
+            if (activePeriod is null)
+            {
+                return null;
+            }
 
-        return executionId;
+            IReadOnlyList<KustoPredicateInterest> interests = interestExtractor.Extract(
+                request.QueryText,
+                databaseSchema,
+                cancellationToken);
+            KustoRecordedRelationDescriptor? relation = relationExtractor.Extract(
+                request.QueryText,
+                databaseSchema,
+                cancellationToken);
+            Guid executionId = await store.BeginExecutionAsync(
+                new KustoRecordedExecutionStart(
+                    activePeriod.Id,
+                    documentId,
+                    documentTitle,
+                    request,
+                    startedAtUtc,
+                    interests,
+                    relation),
+                cancellationToken);
+            pendingExecutionPeriods.Add(executionId, activePeriod.Id);
+            foreach (KustoPredicateInterest interest in interests)
+            {
+                activeInterests.Add(new KustoRecordedValueIdentity(interest.TypeName, interest.Value, false));
+            }
+
+            return executionId;
+        }
+        finally
+        {
+            RecordingOperationGate.Release();
+        }
     }
 
     /// <summary>
@@ -633,14 +676,32 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
     /// </summary>
     /// <param name="executionId">The optional recorded execution identifier.</param>
     /// <param name="completion">The final execution state.</param>
-    /// <returns>A task that completes after persistence.</returns>
-    public async Task CompleteExecutionAsync(Guid? executionId, KustoRecordedExecutionCompletion completion)
+    /// <returns><see langword="true"/> when the execution was retained; otherwise, <see langword="false"/>.</returns>
+    public async Task<bool> CompleteExecutionAsync(Guid? executionId, KustoRecordedExecutionCompletion completion)
     {
         ArgumentNullException.ThrowIfNull(completion);
-        if (executionId is Guid recordedExecutionId && store is not null)
+        if (executionId is not Guid recordedExecutionId || store is null)
         {
+            return false;
+        }
+
+        await RecordingOperationGate.WaitAsync();
+        try
+        {
+            if (discardedExecutionIds.Remove(recordedExecutionId))
+            {
+                pendingExecutionPeriods.Remove(recordedExecutionId);
+                return false;
+            }
+
             await store.CompleteExecutionAsync(recordedExecutionId, completion);
+            pendingExecutionPeriods.Remove(recordedExecutionId);
             await ReloadActiveValueInterestsAsync(CancellationToken.None);
+            return true;
+        }
+        finally
+        {
+            RecordingOperationGate.Release();
         }
     }
 
@@ -1054,7 +1115,7 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
 
     private bool CanAddChainEvidence()
     {
-        return IsAvailable && !IsRecording && SelectedSessionSummary is not null;
+        return IsAvailable && !HasActiveRecording && SelectedSessionSummary is not null;
     }
 
     private void OpenChainEvidenceRecording()
@@ -1088,6 +1149,7 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
             return;
         }
 
+        await RecordingOperationGate.WaitAsync(cancellationToken);
         try
         {
             activePeriod = IsAppendMode
@@ -1121,16 +1183,120 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
         {
             RecordingErrorText = exception.Message;
         }
+        finally
+        {
+            RecordingOperationGate.Release();
+        }
+    }
+
+    private async Task PauseRecordingAsync(CancellationToken cancellationToken)
+    {
+        if (store is null)
+        {
+            return;
+        }
+
+        await RecordingOperationGate.WaitAsync(cancellationToken);
+        try
+        {
+            KustoRecordingPeriod period = activePeriod
+                ?? throw new InvalidOperationException("No recording is active.");
+            Guid[] executionIds = pendingExecutionPeriods
+                .Where(entry => entry.Value == period.Id)
+                .Select(entry => entry.Key)
+                .ToArray();
+            foreach (Guid executionId in executionIds)
+            {
+                discardedExecutionIds.Add(executionId);
+            }
+
+            try
+            {
+                await store.PauseRecordingAsync(
+                    period.Id,
+                    timeProvider.GetUtcNow(),
+                    executionIds,
+                    cancellationToken);
+            }
+            catch
+            {
+                foreach (Guid executionId in executionIds)
+                {
+                    discardedExecutionIds.Remove(executionId);
+                }
+
+                throw;
+            }
+
+            activePeriod = null;
+            RecordingErrorText = string.Empty;
+            ActiveInterestsChanged?.Invoke(this, EventArgs.Empty);
+            NotifyRecordingStateChanged();
+            await RefreshAsync(cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            RecordingErrorText = exception.Message;
+        }
+        finally
+        {
+            RecordingOperationGate.Release();
+        }
+    }
+
+    private async Task ResumeRecordingAsync(CancellationToken cancellationToken)
+    {
+        if (store is null || activeSessionId is not Guid sessionId)
+        {
+            return;
+        }
+
+        await RecordingOperationGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (!IsPaused)
+            {
+                return;
+            }
+
+            activePeriod = await store.AppendSessionAsync(
+                sessionId,
+                timeProvider.GetUtcNow(),
+                cancellationToken);
+            await ReloadActiveInterestsAsync(cancellationToken);
+            RecordingErrorText = string.Empty;
+            ActiveInterestsChanged?.Invoke(this, EventArgs.Empty);
+            NotifyRecordingStateChanged();
+            await RefreshAsync(cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            RecordingErrorText = exception.Message;
+        }
+        finally
+        {
+            RecordingOperationGate.Release();
+        }
     }
 
     private async Task StopRecordingAsync(CancellationToken cancellationToken)
     {
-        if (activePeriod is not null && store is not null)
+        if (store is null || !HasActiveRecording)
         {
-            await store.StopRecordingAsync(
-                activePeriod.Id,
-                timeProvider.GetUtcNow(),
-                cancellationToken);
+            return;
+        }
+
+        await RecordingOperationGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (activePeriod is not null)
+            {
+                await store.StopRecordingAsync(
+                    activePeriod.Id,
+                    timeProvider.GetUtcNow(),
+                    cancellationToken);
+            }
+
             activePeriod = null;
             activeSessionId = null;
             activeSessionName = string.Empty;
@@ -1139,6 +1305,14 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
             ActiveInterestsChanged?.Invoke(this, EventArgs.Empty);
             NotifyRecordingStateChanged();
             await RefreshAsync(cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            RecordingErrorText = exception.Message;
+        }
+        finally
+        {
+            RecordingOperationGate.Release();
         }
     }
 
@@ -1615,10 +1789,14 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
     private void NotifyRecordingStateChanged()
     {
         OnPropertyChanged(nameof(IsRecording));
+        OnPropertyChanged(nameof(IsPaused));
+        OnPropertyChanged(nameof(HasActiveRecording));
         OnPropertyChanged(nameof(ActiveSessionName));
         OnPropertyChanged(nameof(RecordingAutomationText));
         OnPropertyChanged(nameof(CanDeleteSelectedSession));
         OpenRecordingCommand.NotifyCanExecuteChanged();
+        PauseRecordingCommand.NotifyCanExecuteChanged();
+        ResumeRecordingCommand.NotifyCanExecuteChanged();
         StopRecordingCommand.NotifyCanExecuteChanged();
         OpenDeleteSessionCommand.NotifyCanExecuteChanged();
         DeleteSessionCommand.NotifyCanExecuteChanged();

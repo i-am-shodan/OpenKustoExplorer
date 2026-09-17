@@ -26,7 +26,11 @@ public sealed class GraphQueryRequest
         int maximumRelationshipCount = 2_000)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(queryText);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(queryText.Length, MaximumQueryTextLength);
+        if (queryText.Length > MaximumQueryTextLength)
+        {
+            throw new ArgumentOutOfRangeException(nameof(queryText));
+        }
+
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumRowCount);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(maximumRowCount, 1_000);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumEntityCount);

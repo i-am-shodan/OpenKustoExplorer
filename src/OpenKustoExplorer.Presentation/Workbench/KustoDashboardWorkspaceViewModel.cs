@@ -16,20 +16,31 @@ public sealed class KustoDashboardWorkspaceViewModel : ObservableObject, IDispos
     private const int DefaultWidgetColumnSpan = 16;
     private const int DefaultWidgetRowSpan = 11;
     private readonly IKustoDashboardStore dashboardStore;
+    private readonly TimeZoneInfo localTimeZone;
     private readonly IKustoQueryService queryService;
+    private readonly TimeProvider timeProvider;
+    private DateTimeOffset? customTimeRangeEndDate;
+    private TimeSpan? customTimeRangeEndTime;
+    private string customTimeRangeErrorText = string.Empty;
+    private DateTimeOffset? customTimeRangeStartDate;
+    private TimeSpan? customTimeRangeStartTime;
     private KustoDashboardViewModel? dashboardBeingEdited;
     private string dashboardEditorBackgroundColor = DefaultDashboardBackground;
     private string dashboardEditorErrorText = string.Empty;
     private string dashboardEditorTitle = string.Empty;
     private bool isDisposed;
+    private bool isCustomTimeRangeOpen;
     private bool isDashboardEditorOpen;
     private bool isDeleteDashboardOpen;
     private bool isDeleteWidgetOpen;
     private bool isRefreshing;
+    private bool isSynchronizingTimeRangeOption;
+    private int refreshGeneration;
     private bool isWidgetEditorOpen;
     private KustoDashboardViewModel? dashboardContainingEditedWidget;
     private KustoDashboardViewModel? selectedDashboard;
     private KustoDashboardRefreshOptionViewModel selectedRefreshOption;
+    private KustoDashboardTimeRangeOptionViewModel selectedTimeRangeOption;
     private KustoDashboardVisualizationOptionViewModel selectedVisualizationOption;
     private KustoDashboardWidgetViewModel? widgetBeingEdited;
     private KustoDashboardWidgetViewModel? widgetPendingDeletion;
@@ -48,22 +59,37 @@ public sealed class KustoDashboardWorkspaceViewModel : ObservableObject, IDispos
     /// </summary>
     /// <param name="dashboardStore">The durable dashboard store.</param>
     /// <param name="queryService">The Kusto query service.</param>
+    /// <param name="timeProvider">The optional clock used for range changes.</param>
+    /// <param name="localTimeZone">The optional time zone used by the custom editor.</param>
     public KustoDashboardWorkspaceViewModel(
         IKustoDashboardStore dashboardStore,
-        IKustoQueryService queryService)
+        IKustoQueryService queryService,
+        TimeProvider? timeProvider = null,
+        TimeZoneInfo? localTimeZone = null)
     {
         ArgumentNullException.ThrowIfNull(dashboardStore);
         ArgumentNullException.ThrowIfNull(queryService);
         this.dashboardStore = dashboardStore;
         this.queryService = queryService;
+        this.timeProvider = timeProvider ?? TimeProvider.System;
+        this.localTimeZone = localTimeZone ?? TimeZoneInfo.Local;
         RefreshOptions = CreateRefreshOptions();
+        TimeRangeOptions = CreateTimeRangeOptions();
         VisualizationOptions = CreateVisualizationOptions();
         Themes = CreateThemes();
         selectedRefreshOption = RefreshOptions[2];
+        selectedTimeRangeOption = TimeRangeOptions[3];
         selectedVisualizationOption = VisualizationOptions[0];
         Dashboards = new ObservableCollection<KustoDashboardViewModel>(
             dashboardStore.Load().Dashboards.Select(CreateDashboardViewModel));
         RefreshCommand = new AsyncRelayCommand(RefreshSelectedFromCommandAsync);
+        ApplyTimeRangeSelectionCommand = new AsyncRelayCommand(
+            ApplyTimeRangeSelectionAsync,
+            AsyncRelayCommandOptions.AllowConcurrentExecutions);
+        CloseCustomTimeRangeCommand = new RelayCommand(CloseCustomTimeRange);
+        SaveCustomTimeRangeCommand = new AsyncRelayCommand(
+            SaveCustomTimeRangeAsync,
+            () => CanSaveCustomTimeRange);
         OpenCreateDashboardCommand = new RelayCommand(OpenCreateDashboard);
         OpenEditDashboardCommand = new RelayCommand(OpenEditDashboard, () => SelectedDashboard is not null);
         CloseDashboardEditorCommand = new RelayCommand(CloseDashboardEditor);
@@ -104,6 +130,7 @@ public sealed class KustoDashboardWorkspaceViewModel : ObservableObject, IDispos
                 OpenEditDashboardCommand.NotifyCanExecuteChanged();
                 OpenDeleteDashboardCommand.NotifyCanExecuteChanged();
                 SaveWidgetCommand.NotifyCanExecuteChanged();
+                SynchronizeTimeRangeOption();
             }
         }
     }
@@ -133,9 +160,29 @@ public sealed class KustoDashboardWorkspaceViewModel : ObservableObject, IDispos
     public IAsyncRelayCommand RefreshCommand { get; }
 
     /// <summary>
+    /// Gets the command that applies the selected preset or opens the custom editor.
+    /// </summary>
+    public IAsyncRelayCommand ApplyTimeRangeSelectionCommand { get; }
+
+    /// <summary>
+    /// Gets the command that closes the custom time-range editor.
+    /// </summary>
+    public IRelayCommand CloseCustomTimeRangeCommand { get; }
+
+    /// <summary>
+    /// Gets the command that validates and applies a custom time range.
+    /// </summary>
+    public IAsyncRelayCommand SaveCustomTimeRangeCommand { get; }
+
+    /// <summary>
     /// Gets available automatic refresh intervals.
     /// </summary>
     public IReadOnlyList<KustoDashboardRefreshOptionViewModel> RefreshOptions { get; }
+
+    /// <summary>
+    /// Gets available dashboard-wide time-range presets and the Custom action.
+    /// </summary>
+    public IReadOnlyList<KustoDashboardTimeRangeOptionViewModel> TimeRangeOptions { get; }
 
     /// <summary>
     /// Gets available dashboard visualization kinds.
@@ -146,6 +193,131 @@ public sealed class KustoDashboardWorkspaceViewModel : ObservableObject, IDispos
     /// Gets coordinated dashboard and widget color themes.
     /// </summary>
     public IReadOnlyList<KustoDashboardThemeViewModel> Themes { get; }
+
+    /// <summary>
+    /// Gets or sets the selected dashboard time-range option.
+    /// </summary>
+    public KustoDashboardTimeRangeOptionViewModel SelectedTimeRangeOption
+    {
+        get => selectedTimeRangeOption;
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+
+            if (SetProperty(ref selectedTimeRangeOption, value)
+                && !isSynchronizingTimeRangeOption)
+            {
+                ApplyTimeRangeSelectionCommand.Execute(null);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gets a value indicating whether the custom time-range editor is open.
+    /// </summary>
+    public bool IsCustomTimeRangeOpen
+    {
+        get => isCustomTimeRangeOpen;
+        private set
+        {
+            if (SetProperty(ref isCustomTimeRangeOpen, value))
+            {
+                SaveCustomTimeRangeCommand.NotifyCanExecuteChanged();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gets or sets the custom local start date.
+    /// </summary>
+    public DateTimeOffset? CustomTimeRangeStartDate
+    {
+        get => customTimeRangeStartDate;
+        set
+        {
+            if (SetProperty(ref customTimeRangeStartDate, value))
+            {
+                ValidateCustomTimeRange();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gets or sets the custom local start time.
+    /// </summary>
+    public TimeSpan? CustomTimeRangeStartTime
+    {
+        get => customTimeRangeStartTime;
+        set
+        {
+            if (SetProperty(ref customTimeRangeStartTime, value))
+            {
+                ValidateCustomTimeRange();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gets or sets the custom local end date.
+    /// </summary>
+    public DateTimeOffset? CustomTimeRangeEndDate
+    {
+        get => customTimeRangeEndDate;
+        set
+        {
+            if (SetProperty(ref customTimeRangeEndDate, value))
+            {
+                ValidateCustomTimeRange();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gets or sets the custom local end time.
+    /// </summary>
+    public TimeSpan? CustomTimeRangeEndTime
+    {
+        get => customTimeRangeEndTime;
+        set
+        {
+            if (SetProperty(ref customTimeRangeEndTime, value))
+            {
+                ValidateCustomTimeRange();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gets custom time-range validation feedback.
+    /// </summary>
+    public string CustomTimeRangeErrorText
+    {
+        get => customTimeRangeErrorText;
+        private set
+        {
+            if (SetProperty(ref customTimeRangeErrorText, value))
+            {
+                OnPropertyChanged(nameof(HasCustomTimeRangeError));
+                OnPropertyChanged(nameof(CanSaveCustomTimeRange));
+                SaveCustomTimeRangeCommand.NotifyCanExecuteChanged();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gets a value indicating whether custom range validation failed.
+    /// </summary>
+    public bool HasCustomTimeRangeError => CustomTimeRangeErrorText.Length > 0;
+
+    /// <summary>
+    /// Gets a value indicating whether the custom range can be applied.
+    /// </summary>
+    public bool CanSaveCustomTimeRange => IsCustomTimeRangeOpen
+        && CustomTimeRangeStartDate is not null
+        && CustomTimeRangeStartTime is not null
+        && CustomTimeRangeEndDate is not null
+        && CustomTimeRangeEndTime is not null
+        && !HasCustomTimeRangeError;
 
     /// <summary>
     /// Gets the command that opens creation of a dashboard.
@@ -624,21 +796,27 @@ public sealed class KustoDashboardWorkspaceViewModel : ObservableObject, IDispos
         DateTimeOffset utcNow,
         CancellationToken cancellationToken = default)
     {
-        if (IsRefreshing || SelectedDashboard is null)
+        if (SelectedDashboard is null)
         {
             return;
         }
 
+        KustoDashboardViewModel dashboard = SelectedDashboard;
+        int generation = ++refreshGeneration;
         IsRefreshing = true;
 
         try
         {
-            await Task.WhenAll(SelectedDashboard.Widgets
-                .Select(item => item.RefreshAsync(utcNow, cancellationToken)));
+            KustoDashboardTimeRangeBounds bounds = dashboard.TimeRange.Resolve(utcNow);
+            await Task.WhenAll(dashboard.Widgets
+                .Select(item => item.RefreshAsync(utcNow, bounds, cancellationToken)));
         }
         finally
         {
-            IsRefreshing = false;
+            if (generation == refreshGeneration)
+            {
+                IsRefreshing = false;
+            }
         }
     }
 
@@ -657,16 +835,22 @@ public sealed class KustoDashboardWorkspaceViewModel : ObservableObject, IDispos
             return;
         }
 
+        int generation = ++refreshGeneration;
         IsRefreshing = true;
 
         try
         {
-            await Task.WhenAll(SelectedDashboard.Widgets
-                .Select(item => item.RefreshIfDueAsync(utcNow, cancellationToken)));
+            KustoDashboardViewModel dashboard = SelectedDashboard;
+            KustoDashboardTimeRangeBounds bounds = dashboard.TimeRange.Resolve(utcNow);
+            await Task.WhenAll(dashboard.Widgets
+                .Select(item => item.RefreshIfDueAsync(utcNow, bounds, cancellationToken)));
         }
         finally
         {
-            IsRefreshing = false;
+            if (generation == refreshGeneration)
+            {
+                IsRefreshing = false;
+            }
         }
     }
 
@@ -709,13 +893,58 @@ public sealed class KustoDashboardWorkspaceViewModel : ObservableObject, IDispos
         if (!isDisposed)
         {
             isDisposed = true;
+            refreshGeneration++;
             RefreshCommand.Cancel();
+            ApplyTimeRangeSelectionCommand.Cancel();
+            SaveCustomTimeRangeCommand.Cancel();
 
             foreach (KustoDashboardViewModel dashboard in Dashboards)
             {
                 dashboard.Dispose();
             }
         }
+    }
+
+    /// <summary>
+    /// Retargets matching dashboard widgets and clears their endpoint-bound cached results.
+    /// </summary>
+    /// <param name="oldClusterUri">The cluster authority being replaced.</param>
+    /// <param name="newClusterUri">The replacement cluster authority.</param>
+    /// <returns>The number of retargeted widgets.</returns>
+    internal int RetargetCluster(Uri oldClusterUri, Uri newClusterUri)
+    {
+        ArgumentNullException.ThrowIfNull(oldClusterUri);
+        ArgumentNullException.ThrowIfNull(newClusterUri);
+        KustoDashboardWidgetViewModel[] widgets = Dashboards
+            .SelectMany(dashboard => dashboard.Widgets)
+            .Where(widget => string.Equals(
+                widget.ClusterUri.GetLeftPart(UriPartial.Authority),
+                oldClusterUri.GetLeftPart(UriPartial.Authority),
+                StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        foreach (KustoDashboardWidgetViewModel widget in widgets)
+        {
+            widget.ApplyDefinition(new KustoDashboardWidget(
+                widget.Id,
+                widget.Title,
+                newClusterUri,
+                widget.DatabaseName,
+                widget.QueryText,
+                widget.RefreshInterval,
+                widget.DisplayMode,
+                widget.VisualizationKind,
+                new KustoDashboardWidgetLayout(
+                    widget.Column,
+                    widget.Row,
+                    widget.ColumnSpan,
+                    widget.RowSpan),
+                widget.BackgroundColor,
+                widget.ForegroundColor,
+                widget.AccentColor));
+        }
+
+        return widgets.Length;
     }
 
     private static KustoDashboard CloneWithNewIdentifiers(KustoDashboard source)
@@ -736,7 +965,22 @@ public sealed class KustoDashboardWorkspaceViewModel : ObservableObject, IDispos
                 item.Layout,
                 item.BackgroundColor,
                 item.ForegroundColor,
-                item.AccentColor)));
+                item.AccentColor)),
+            source.TimeRange);
+    }
+
+    private static ReadOnlyCollection<KustoDashboardTimeRangeOptionViewModel> CreateTimeRangeOptions()
+    {
+        return Array.AsReadOnly(new KustoDashboardTimeRangeOptionViewModel[]
+        {
+            new("Last 15 minutes", TimeSpan.FromMinutes(15)),
+            new("Last 1 hour", TimeSpan.FromHours(1)),
+            new("Last 6 hours", TimeSpan.FromHours(6)),
+            new("Last 24 hours", TimeSpan.FromHours(24)),
+            new("Last 7 days", TimeSpan.FromDays(7)),
+            new("Last 30 days", TimeSpan.FromDays(30)),
+            new("Custom", null),
+        });
     }
 
     private static ReadOnlyCollection<KustoDashboardRefreshOptionViewModel> CreateRefreshOptions()
@@ -1000,7 +1244,133 @@ public sealed class KustoDashboardWorkspaceViewModel : ObservableObject, IDispos
 
     private async Task RefreshSelectedFromCommandAsync(CancellationToken cancellationToken)
     {
-        await RefreshSelectedAsync(DateTimeOffset.UtcNow, cancellationToken);
+        await RefreshSelectedAsync(timeProvider.GetUtcNow(), cancellationToken);
+    }
+
+    private async Task ApplyTimeRangeSelectionAsync(CancellationToken cancellationToken)
+    {
+        KustoDashboardViewModel? dashboard = SelectedDashboard;
+        KustoDashboardTimeRangeOptionViewModel option = SelectedTimeRangeOption;
+        if (dashboard is null)
+        {
+            return;
+        }
+
+        if (option.IsCustom)
+        {
+            OpenCustomTimeRange(dashboard);
+            return;
+        }
+
+        KustoDashboardTimeRange timeRange = KustoDashboardTimeRange.CreateRelative(option.Duration!.Value);
+        if (dashboard.ApplyTimeRange(timeRange))
+        {
+            await RefreshSelectedAsync(timeProvider.GetUtcNow(), cancellationToken);
+        }
+    }
+
+    private async Task SaveCustomTimeRangeAsync(CancellationToken cancellationToken)
+    {
+        KustoDashboardViewModel? dashboard = SelectedDashboard;
+        KustoDashboardTimeRange? timeRange = TryCreateCustomTimeRange();
+        if (dashboard is null || timeRange is null)
+        {
+            return;
+        }
+
+        bool changed = dashboard.ApplyTimeRange(timeRange);
+        IsCustomTimeRangeOpen = false;
+        SynchronizeTimeRangeOption();
+        if (changed)
+        {
+            await RefreshSelectedAsync(timeProvider.GetUtcNow(), cancellationToken);
+        }
+    }
+
+    private void OpenCustomTimeRange(KustoDashboardViewModel dashboard)
+    {
+        DateTimeOffset endLocal;
+        DateTimeOffset startLocal;
+        if (dashboard.TimeRange.Kind == KustoDashboardTimeRangeKind.Absolute)
+        {
+            startLocal = TimeZoneInfo.ConvertTime(dashboard.TimeRange.StartUtc!.Value, localTimeZone);
+            endLocal = TimeZoneInfo.ConvertTime(dashboard.TimeRange.EndUtc!.Value, localTimeZone);
+        }
+        else
+        {
+            endLocal = TimeZoneInfo.ConvertTime(timeProvider.GetUtcNow(), localTimeZone);
+            startLocal = endLocal.Subtract(dashboard.TimeRange.RelativeDuration!.Value);
+        }
+
+        IsCustomTimeRangeOpen = false;
+        CustomTimeRangeStartDate = startLocal;
+        CustomTimeRangeStartTime = startLocal.TimeOfDay;
+        CustomTimeRangeEndDate = endLocal;
+        CustomTimeRangeEndTime = endLocal.TimeOfDay;
+        CustomTimeRangeErrorText = string.Empty;
+        IsCustomTimeRangeOpen = true;
+        ValidateCustomTimeRange();
+    }
+
+    private void CloseCustomTimeRange()
+    {
+        IsCustomTimeRangeOpen = false;
+        CustomTimeRangeErrorText = string.Empty;
+        SynchronizeTimeRangeOption();
+    }
+
+    private void SynchronizeTimeRangeOption()
+    {
+        KustoDashboardTimeRange? timeRange = SelectedDashboard?.TimeRange;
+        KustoDashboardTimeRangeOptionViewModel option = timeRange?.Kind
+            == KustoDashboardTimeRangeKind.Relative
+            ? TimeRangeOptions.FirstOrDefault(item => item.Duration == timeRange.RelativeDuration)
+                ?? TimeRangeOptions[^1]
+            : TimeRangeOptions[^1];
+        isSynchronizingTimeRangeOption = true;
+        SelectedTimeRangeOption = option;
+        isSynchronizingTimeRangeOption = false;
+    }
+
+    private void ValidateCustomTimeRange()
+    {
+        if (!IsCustomTimeRangeOpen)
+        {
+            return;
+        }
+
+        CustomTimeRangeErrorText = TryCreateCustomTimeRange() is null
+            ? CustomTimeRangeErrorText
+            : string.Empty;
+    }
+
+    private KustoDashboardTimeRange? TryCreateCustomTimeRange()
+    {
+        if (CustomTimeRangeStartDate is null
+            || CustomTimeRangeStartTime is null
+            || CustomTimeRangeEndDate is null
+            || CustomTimeRangeEndTime is null)
+        {
+            CustomTimeRangeErrorText = "Enter both a start and end date and time.";
+            return null;
+        }
+
+        try
+        {
+            DateTime startLocal = CustomTimeRangeStartDate.Value.Date
+                .Add(CustomTimeRangeStartTime.Value);
+            DateTime endLocal = CustomTimeRangeEndDate.Value.Date
+                .Add(CustomTimeRangeEndTime.Value);
+            return KustoDashboardTimeRange.CreateAbsoluteFromLocal(
+                startLocal,
+                endLocal,
+                localTimeZone);
+        }
+        catch (ArgumentException exception)
+        {
+            CustomTimeRangeErrorText = exception.Message;
+            return null;
+        }
     }
 
     private KustoDashboardViewModel CreateDashboardViewModel(KustoDashboard definition)

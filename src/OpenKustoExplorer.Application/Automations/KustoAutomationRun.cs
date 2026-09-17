@@ -23,6 +23,30 @@ public sealed class KustoAutomationRun
         KustoAutomationRunStatus status,
         string? errorMessage,
         KustoQueryResult? result)
+        : this(id, startedAtUtc, completedAtUtc, status, errorMessage, result, null, null)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="KustoAutomationRun"/> class with target provenance.
+    /// </summary>
+    /// <param name="id">The stable run identifier.</param>
+    /// <param name="startedAtUtc">The UTC execution start.</param>
+    /// <param name="completedAtUtc">The UTC execution completion.</param>
+    /// <param name="status">The final execution state.</param>
+    /// <param name="errorMessage">The optional failure or cancellation message.</param>
+    /// <param name="result">The optional materialized result.</param>
+    /// <param name="clusterUri">The cluster targeted by this run, or <see langword="null"/> for legacy in-memory data.</param>
+    /// <param name="databaseName">The database targeted by this run, or <see langword="null"/> for legacy in-memory data.</param>
+    public KustoAutomationRun(
+        Guid id,
+        DateTimeOffset startedAtUtc,
+        DateTimeOffset completedAtUtc,
+        KustoAutomationRunStatus status,
+        string? errorMessage,
+        KustoQueryResult? result,
+        Uri? clusterUri,
+        string? databaseName)
     {
         ArgumentOutOfRangeException.ThrowIfEqual(id, Guid.Empty);
 
@@ -41,12 +65,27 @@ public sealed class KustoAutomationRun
             throw new ArgumentException("A successful automation run requires a result.", nameof(result));
         }
 
+        if ((clusterUri is null) != string.IsNullOrWhiteSpace(databaseName))
+        {
+            string parameterName = clusterUri is null ? nameof(clusterUri) : nameof(databaseName);
+            throw new ArgumentException(
+                "Automation run provenance requires both a cluster URI and database name.",
+                parameterName);
+        }
+
+        if (clusterUri is not null && (!clusterUri.IsAbsoluteUri || clusterUri.Scheme != Uri.UriSchemeHttps))
+        {
+            throw new ArgumentException("An automation run cluster URI must be absolute HTTPS.", nameof(clusterUri));
+        }
+
         Id = id;
         StartedAtUtc = startedAtUtc.ToUniversalTime();
         CompletedAtUtc = completedAtUtc.ToUniversalTime();
         Status = status;
         ErrorMessage = string.IsNullOrWhiteSpace(errorMessage) ? null : errorMessage.Trim();
         Result = result;
+        ClusterUri = clusterUri;
+        DatabaseName = string.IsNullOrWhiteSpace(databaseName) ? null : databaseName.Trim();
     }
 
     /// <summary>
@@ -78,4 +117,10 @@ public sealed class KustoAutomationRun
     /// Gets the optional materialized result.
     /// </summary>
     public KustoQueryResult? Result { get; }
+
+    /// <summary>Gets the cluster targeted by this run, or <see langword="null"/> for legacy in-memory data.</summary>
+    public Uri? ClusterUri { get; }
+
+    /// <summary>Gets the database targeted by this run, or <see langword="null"/> for legacy in-memory data.</summary>
+    public string? DatabaseName { get; }
 }

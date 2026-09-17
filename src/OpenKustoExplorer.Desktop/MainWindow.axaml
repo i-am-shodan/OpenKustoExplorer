@@ -122,6 +122,20 @@
               </Button>
             </Grid>
           </Border>
+          <Button
+              x:Name="UpdateButton"
+              Height="32"
+              VerticalAlignment="Center"
+              AutomationProperties.Name="Download available update"
+              Classes="primaryCommand"
+              Click="OnOpenUpdateClick"
+              IsVisible="False"
+              ToolTip.Tip="Open the latest official GitHub release">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <LucideIcon Kind="Download" Size="13" />
+              <TextBlock Text="Update" />
+            </StackPanel>
+          </Button>
           <ScrollViewer MaxWidth="180" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
             <ItemsControl x:Name="SignedInUsersList" AutomationProperties.Name="Signed-in users">
               <ItemsControl.ItemsPanel>

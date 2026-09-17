@@ -18,6 +18,8 @@ public sealed class FileKustoDashboardStoreTests
         string directoryPath = Path.Combine(Path.GetTempPath(), $"OpenKustoExplorer-{Guid.NewGuid():N}");
         string filePath = Path.Combine(directoryPath, "dashboards.json");
         DateTimeOffset cachedAtUtc = new(2026, 9, 8, 10, 30, 0, TimeSpan.Zero);
+        DateTimeOffset rangeStartUtc = new(2026, 9, 1, 0, 0, 0, TimeSpan.Zero);
+        DateTimeOffset rangeEndUtc = new(2026, 9, 8, 0, 0, 0, TimeSpan.Zero);
         KustoQueryResult cachedResult = new(
             [
                 new KustoResultTable(
@@ -56,7 +58,8 @@ public sealed class FileKustoDashboardStoreTests
             Guid.NewGuid(),
             "Operations",
             "#EEF2F3",
-            [widget]);
+            [widget],
+            KustoDashboardTimeRange.CreateAbsolute(rangeStartUtc, rangeEndUtc));
 
         try
         {
@@ -73,6 +76,9 @@ public sealed class FileKustoDashboardStoreTests
             Assert.Equal(dashboard.Id, imported.Id);
             Assert.Equal("Operations", imported.Title);
             Assert.Equal("#EEF2F3", imported.BackgroundColor);
+            Assert.Equal(KustoDashboardTimeRangeKind.Absolute, imported.TimeRange.Kind);
+            Assert.Equal(rangeStartUtc, imported.TimeRange.StartUtc);
+            Assert.Equal(rangeEndUtc, imported.TimeRange.EndUtc);
             Assert.Equal(widget.Id, importedWidget.Id);
             Assert.Equal("Errors | summarize Count=count() by Service", importedWidget.QueryText);
             Assert.Equal(TimeSpan.FromMinutes(2), importedWidget.RefreshInterval);
@@ -99,5 +105,51 @@ public sealed class FileKustoDashboardStoreTests
                 Directory.Delete(directoryPath, true);
             }
         }
+    }
+
+    /// <summary>
+    /// Verifies version 1 dashboards receive the Last 24 hours default.
+    /// </summary>
+    [Fact]
+    public void LoadVersionOneDefaultsToLast24Hours()
+    {
+        string directoryPath = Path.Join(Path.GetTempPath(), $"OpenKustoExplorer-{Guid.NewGuid():N}");
+        string filePath = Path.Join(directoryPath, "dashboards.json");
+        Guid dashboardId = Guid.NewGuid();
+
+        try
+        {
+            Directory.CreateDirectory(directoryPath);
+            string catalogJson = $$"""{"version":1,"dashboards":[{"id":"{{dashboardId}}","title":"Legacy","backgroundColor":"#FFFFFF","widgets":[]}]}""";
+            File.WriteAllText(filePath, catalogJson);
+
+            KustoDashboard restored = Assert.Single(new FileKustoDashboardStore(filePath).Load().Dashboards);
+
+            Assert.Equal(dashboardId, restored.Id);
+            Assert.Equal(KustoDashboardTimeRangeKind.Relative, restored.TimeRange.Kind);
+            Assert.Equal(TimeSpan.FromHours(24), restored.TimeRange.RelativeDuration);
+        }
+        finally
+        {
+            if (Directory.Exists(directoryPath))
+            {
+                Directory.Delete(directoryPath, true);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Verifies version 2 imports require an explicit dashboard time range.
+    /// </summary>
+    [Fact]
+    public void ImportVersionTwoRejectsMissingTimeRange()
+    {
+        string json = $$"""{"version":2,"dashboards":[{"id":"{{Guid.NewGuid()}}","title":"Invalid","backgroundColor":"#FFFFFF","widgets":[]}]}""";
+        using MemoryStream stream = new(System.Text.Encoding.UTF8.GetBytes(json));
+        FileKustoDashboardStore store = new(Path.Join(Path.GetTempPath(), $"unused-{Guid.NewGuid():N}.json"));
+
+        InvalidDataException exception = Assert.Throws<InvalidDataException>(() => store.Import(stream));
+
+        Assert.Contains("timeRange", exception.Message, StringComparison.Ordinal);
     }
 }

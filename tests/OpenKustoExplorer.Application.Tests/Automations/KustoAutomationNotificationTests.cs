@@ -120,6 +120,89 @@ public sealed class KustoAutomationNotificationTests
         Assert.Equal("--rows 0 --name \"Empty result monitor\"", notification.ApplicationArguments);
     }
 
+    /// <summary>
+    /// Verifies a webhook-only action snapshots metadata and every matched criterion.
+    /// </summary>
+    [Fact]
+    public void WebhookOnlyActionSnapshotsMetadataAndOrderedTriggers()
+    {
+        DateTimeOffset startedAtUtc = new(2026, 9, 16, 10, 0, 0, TimeSpan.Zero);
+        KustoAutomationWebhookSettings webhook = new(
+            KustoAutomationWebhookEndpointSource.EnvironmentVariable,
+            environmentVariableName: "OPENKUSTOEXPLORER_TEST_WEBHOOK");
+        KustoAutomationNotificationSettings settings = new(
+            true,
+            KustoAutomationRowCountComparison.GreaterThanOrEqual,
+            5,
+            false,
+            false,
+            null,
+            null,
+            null,
+            587,
+            true,
+            "{name}: {row_count}",
+            "{query}",
+            webhook: webhook);
+        Guid automationId = Guid.NewGuid();
+        KustoAutomation automation = new(
+            automationId,
+            "Monitor",
+            new Uri("https://adx.example.com"),
+            "Telemetry",
+            "Events | take 6",
+            TimeSpan.FromMinutes(5),
+            startedAtUtc.AddHours(-1),
+            startedAtUtc.AddMinutes(5),
+            null,
+            true,
+            [],
+            settings);
+        KustoAutomationRun currentRun = CreateSuccessfulRun(startedAtUtc, 6);
+
+        KustoAutomationNotification notification = Assert.IsType<KustoAutomationNotification>(
+            KustoAutomationNotification.TryCreate(
+                automation,
+                currentRun,
+                CreateSuccessfulRun(startedAtUtc.AddMinutes(-5), 4)));
+
+        Assert.True(settings.HasEnabledChannel);
+        Assert.Equal(automationId, notification.AutomationId);
+        Assert.Equal("Monitor", notification.AutomationName);
+        Assert.Equal(currentRun.Id, notification.RunId);
+        Assert.Equal(startedAtUtc, notification.StartedAtUtc);
+        Assert.Equal(currentRun.CompletedAtUtc, notification.CompletedAtUtc);
+        Assert.Equal(KustoAutomationRunStatus.Succeeded, notification.RunStatus);
+        Assert.Equal("adx.example.com", notification.ClusterUri.Host);
+        Assert.Equal("Telemetry", notification.DatabaseName);
+        Assert.Collection(
+            notification.Triggers,
+            trigger => Assert.Equal(
+                KustoAutomationNotificationTriggerKind.RowCountChanged,
+                trigger.Kind),
+            trigger =>
+            {
+                Assert.Equal(KustoAutomationNotificationTriggerKind.RowCountComparison, trigger.Kind);
+                Assert.Equal(KustoAutomationRowCountComparison.GreaterThanOrEqual, trigger.Comparison);
+                Assert.Equal(5, trigger.ComparisonValue);
+            });
+    }
+
+    /// <summary>
+    /// Verifies stored endpoints require HTTPS and reject URL user information.
+    /// </summary>
+    /// <param name="url">The invalid URL.</param>
+    [Theory]
+    [InlineData("http://example.com/hook")]
+    [InlineData("https://user@example.com/hook")]
+    public void StoredWebhookRejectsUnsafeUrl(string url)
+    {
+        Assert.Throws<ArgumentException>(
+            () => new KustoAutomationWebhookSettings(
+                KustoAutomationWebhookEndpointSource.StoredUrl,
+                new Uri(url)));
+    }
+
     private static KustoAutomationRun CreateSuccessfulRun(DateTimeOffset startedAtUtc, int rowCount)
     {
         KustoResultTable table = new(

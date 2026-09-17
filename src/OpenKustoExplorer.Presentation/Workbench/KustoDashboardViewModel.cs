@@ -14,6 +14,7 @@ public sealed class KustoDashboardViewModel : ObservableObject, IDisposable
     private readonly IKustoQueryService queryService;
     private string backgroundColor;
     private bool isDisposed;
+    private KustoDashboardTimeRange timeRange;
     private string title;
 
     /// <summary>
@@ -35,6 +36,7 @@ public sealed class KustoDashboardViewModel : ObservableObject, IDisposable
         Id = definition.Id;
         title = definition.Title;
         backgroundColor = definition.BackgroundColor;
+        timeRange = definition.TimeRange;
         Widgets = new ObservableCollection<KustoDashboardWidgetViewModel>(
             definition.Widgets.Select(CreateWidgetViewModel));
     }
@@ -53,6 +55,23 @@ public sealed class KustoDashboardViewModel : ObservableObject, IDisposable
     /// Gets the dashboard canvas color.
     /// </summary>
     public string BackgroundColor => backgroundColor;
+
+    /// <summary>
+    /// Gets the dashboard-wide time range.
+    /// </summary>
+    public KustoDashboardTimeRange TimeRange => timeRange;
+
+    /// <summary>
+    /// Gets the concise active time-range label.
+    /// </summary>
+    public string TimeRangeSummary => TimeRange.Kind == KustoDashboardTimeRangeKind.Relative
+        ? FormatRelativeTimeRange(TimeRange.RelativeDuration!.Value)
+        : $"{TimeRange.StartUtc!.Value.ToLocalTime():g} - {TimeRange.EndUtc!.Value.ToLocalTime():g}";
+
+    /// <summary>
+    /// Gets a value indicating whether the active time range uses custom fixed bounds.
+    /// </summary>
+    public bool HasCustomTimeRange => TimeRange.Kind == KustoDashboardTimeRangeKind.Absolute;
 
     /// <summary>
     /// Gets query-backed widgets in display order.
@@ -115,12 +134,39 @@ public sealed class KustoDashboardViewModel : ObservableObject, IDisposable
     /// <param name="newBackgroundColor">The dashboard canvas color.</param>
     public void ApplyDetails(string newTitle, string newBackgroundColor)
     {
-        KustoDashboard validatedDefinition = new(Id, newTitle, newBackgroundColor, []);
+        KustoDashboard validatedDefinition = new(Id, newTitle, newBackgroundColor, [], TimeRange);
         title = validatedDefinition.Title;
         backgroundColor = validatedDefinition.BackgroundColor;
         OnPropertyChanged(nameof(Title));
         OnPropertyChanged(nameof(BackgroundColor));
         definitionChanged(this);
+    }
+
+    /// <summary>
+    /// Replaces the dashboard-wide time range and invalidates widget results.
+    /// </summary>
+    /// <param name="newTimeRange">The validated replacement range.</param>
+    /// <returns><see langword="true"/> when the definition changed; otherwise, <see langword="false"/>.</returns>
+    public bool ApplyTimeRange(KustoDashboardTimeRange newTimeRange)
+    {
+        ArgumentNullException.ThrowIfNull(newTimeRange);
+
+        if (HasSameTimeRange(TimeRange, newTimeRange))
+        {
+            return false;
+        }
+
+        timeRange = newTimeRange;
+        foreach (KustoDashboardWidgetViewModel widget in Widgets)
+        {
+            widget.InvalidateForTimeRangeChange();
+        }
+
+        OnPropertyChanged(nameof(TimeRange));
+        OnPropertyChanged(nameof(TimeRangeSummary));
+        OnPropertyChanged(nameof(HasCustomTimeRange));
+        definitionChanged(this);
+        return true;
     }
 
     /// <summary>
@@ -133,7 +179,8 @@ public sealed class KustoDashboardViewModel : ObservableObject, IDisposable
             Id,
             Title,
             BackgroundColor,
-            Widgets.Select(item => item.CreateDefinition()));
+            Widgets.Select(item => item.CreateDefinition()),
+            TimeRange);
     }
 
     /// <inheritdoc />
@@ -150,11 +197,42 @@ public sealed class KustoDashboardViewModel : ObservableObject, IDisposable
         }
     }
 
+    private static string FormatRelativeTimeRange(TimeSpan duration)
+    {
+        if (duration.Ticks >= TimeSpan.TicksPerDay
+            && duration.Ticks % TimeSpan.TicksPerDay == 0)
+        {
+            long days = duration.Ticks / TimeSpan.TicksPerDay;
+            return $"Last {days:N0} {(days == 1 ? "day" : "days")}";
+        }
+
+        if (duration.Ticks >= TimeSpan.TicksPerHour
+            && duration.Ticks % TimeSpan.TicksPerHour == 0)
+        {
+            long hours = duration.Ticks / TimeSpan.TicksPerHour;
+            return $"Last {hours:N0} {(hours == 1 ? "hour" : "hours")}";
+        }
+
+        long minutes = duration.Ticks / TimeSpan.TicksPerMinute;
+        return $"Last {minutes:N0} minutes";
+    }
+
+    private static bool HasSameTimeRange(
+        KustoDashboardTimeRange left,
+        KustoDashboardTimeRange right)
+    {
+        return left.Kind == right.Kind
+            && left.RelativeDuration == right.RelativeDuration
+            && left.StartUtc == right.StartUtc
+            && left.EndUtc == right.EndUtc;
+    }
+
     private KustoDashboardWidgetViewModel CreateWidgetViewModel(KustoDashboardWidget definition)
     {
         return new KustoDashboardWidgetViewModel(
             definition,
             queryService,
-            _ => definitionChanged(this));
+            _ => definitionChanged(this),
+            utcNow => TimeRange.Resolve(utcNow));
     }
 }
