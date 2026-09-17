@@ -156,7 +156,7 @@ public sealed class KustoDashboardWorkspaceViewModelTests
         widget.PreviewLayout(7, 9, 18, 12);
         widget.CommitLayout();
 
-        persistedWidget = Assert.Single(Assert.Single(store.SavedCatalog!.Dashboards).Widgets);
+        persistedWidget = Assert.Single(Assert.Single(store.SavedCatalog.Dashboards).Widgets);
         Assert.Equal(7, persistedWidget.Layout.Column);
         Assert.Equal(9, persistedWidget.Layout.Row);
         Assert.Equal(18, persistedWidget.Layout.ColumnSpan);

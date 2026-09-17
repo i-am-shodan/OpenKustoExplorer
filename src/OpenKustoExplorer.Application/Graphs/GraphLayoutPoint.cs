@@ -56,7 +56,9 @@ public readonly struct GraphLayoutPoint : IEquatable<GraphLayoutPoint>
     public static bool operator !=(GraphLayoutPoint left, GraphLayoutPoint right) => !left.Equals(right);
 
     /// <inheritdoc />
-    public bool Equals(GraphLayoutPoint other) => X.Equals(other.X) && Y.Equals(other.Y);
+    public bool Equals(GraphLayoutPoint other) =>
+        EqualityComparer<double>.Default.Equals(X, other.X)
+        && EqualityComparer<double>.Default.Equals(Y, other.Y);
 
     /// <inheritdoc />
     public override bool Equals(object? obj) => obj is GraphLayoutPoint other && Equals(other);

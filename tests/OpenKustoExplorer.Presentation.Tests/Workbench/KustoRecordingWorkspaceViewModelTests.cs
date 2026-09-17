@@ -261,7 +261,7 @@ public sealed class KustoRecordingWorkspaceViewModelTests
 
             await viewModel.MarkSelectedCellCommand.ExecuteAsync(null);
 
-            Assert.Equal("Rows 51-100 of 120", viewModel.SelectedExecution!.PageText);
+            Assert.Equal("Rows 51-100 of 120", viewModel.SelectedExecution.PageText);
             Assert.Equal(50, Assert.Single(viewModel.SelectedExecution.Tables).Rows.Count);
             Assert.Contains("row 61", viewModel.SelectedResultValueLocationText, StringComparison.Ordinal);
             Assert.True(viewModel.SelectedResultValueIsMarked);
@@ -443,7 +443,7 @@ public sealed class KustoRecordingWorkspaceViewModelTests
             Assert.Equal("https://malware.example.test/c2", viewModel.ChainStartValueText);
             Assert.Equal("192.0.2.56", viewModel.ChainEndValueText);
             Assert.True(viewModel.CanGenerateChain);
-            Assert.Single(viewModel.SelectedSession!.TimelineValues, value => value.IsChainStart);
+            Assert.Single(viewModel.SelectedSession.TimelineValues, value => value.IsChainStart);
             Assert.Single(viewModel.SelectedSession.TimelineValues, value => value.IsChainEnd);
             KustoResultExportFile export = viewModel.CreatePertinentValuesCsvExport();
             string csv = Encoding.UTF8.GetString(export.Content);
@@ -627,7 +627,7 @@ public sealed class KustoRecordingWorkspaceViewModelTests
 
             viewModel.SelectTimelineValue(timelineValue);
 
-            Assert.Equal(firstExecutionId, viewModel.SelectedExecution!.Id);
+            Assert.Equal(firstExecutionId, viewModel.SelectedExecution.Id);
             KustoRecordedResultTableViewModel selectedTable = Assert.Single(firstExecution.Tables);
             Assert.Equal("Results", selectedTable.DisplayName);
             Assert.Contains("url", selectedTable.MetadataText, StringComparison.Ordinal);
@@ -638,8 +638,8 @@ public sealed class KustoRecordingWorkspaceViewModelTests
 
             await viewModel.SetEndpointFromTimelineValueAsync(timelineValue, KustoChainEndpointRole.Start);
 
-            Assert.Equal(firstExecutionId, viewModel.SelectedSession!.SelectedExecution!.Id);
-            Assert.Equal(0, viewModel.SelectedTable!.TableOrdinal);
+            Assert.Equal(firstExecutionId, viewModel.SelectedSession.SelectedExecution!.Id);
+            Assert.Equal(0, viewModel.SelectedTable.TableOrdinal);
             Assert.True(viewModel.HasChainStart);
             Assert.False(viewModel.HasChainEnd);
             Assert.False(viewModel.CanGenerateChain);
@@ -658,10 +658,10 @@ public sealed class KustoRecordingWorkspaceViewModelTests
             Assert.Equal("192.0.2.56", viewModel.ChainEndValueText);
             Assert.Contains("OutboundBrowsing · url", viewModel.ChainEndLocationText, StringComparison.Ordinal);
             await viewModel.MarkSelectedColumnCommand.ExecuteAsync(null);
-            Assert.All(viewModel.SelectedTable!.Rows, row => Assert.True(row.Cells[1].IsRecordedPertinent));
+            Assert.All(viewModel.SelectedTable.Rows, row => Assert.True(row.Cells[1].IsRecordedPertinent));
             await viewModel.MarkSelectedCellCommand.ExecuteAsync(null);
             Assert.True(viewModel.SelectedResultValueIsMarked);
-            Assert.True(viewModel.SelectedTable!.Rows[0].Cells[1].IsRecordedPertinent);
+            Assert.True(viewModel.SelectedTable.Rows[0].Cells[1].IsRecordedPertinent);
             Assert.True(viewModel.SelectedTable.Rows[1].Cells[0].IsRecordedManualMatch);
             await viewModel.UnmarkSelectedCellCommand.ExecuteAsync(null);
             Assert.False(viewModel.SelectedResultValueIsMarked);
@@ -672,9 +672,9 @@ public sealed class KustoRecordingWorkspaceViewModelTests
             await viewModel.DeleteExecutionCommand.ExecuteAsync(null);
 
             KustoRecordedExecutionViewModel remainingExecution = Assert.Single(
-                viewModel.SelectedSession!.Executions);
+                viewModel.SelectedSession.Executions);
             Assert.Equal(firstExecutionId, remainingExecution.Id);
-            Assert.Equal(firstExecutionId, viewModel.SelectedExecution!.Id);
+            Assert.Equal(firstExecutionId, viewModel.SelectedExecution.Id);
             Assert.True(viewModel.HasChainStart);
             Assert.False(viewModel.HasChainEnd);
             Assert.False(viewModel.CanGenerateChain);
@@ -686,7 +686,7 @@ public sealed class KustoRecordingWorkspaceViewModelTests
             await viewModel.SaveRenameExecutionCommand.ExecuteAsync(null);
 
             Assert.False(viewModel.IsRenameExecutionOpen);
-            Assert.Equal("Initial URL pivot", viewModel.SelectedExecution!.QueryTitle);
+            Assert.Equal("Initial URL pivot", viewModel.SelectedExecution.QueryTitle);
             Assert.Contains("Initial URL pivot", viewModel.ChainStartLocationText, StringComparison.Ordinal);
             KustoRecordedSession renamedSession = Assert.IsType<KustoRecordedSession>(
                 await store.GetSessionAsync(viewModel.SelectedSession.Id));

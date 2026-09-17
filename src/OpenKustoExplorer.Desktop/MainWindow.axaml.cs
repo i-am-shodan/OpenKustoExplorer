@@ -644,7 +644,9 @@ public sealed partial class MainWindow : Window, IDisposable
         if (sender is Button { CommandParameter: string accountId }
             && identityService is not null)
         {
-            await identityService.SignOutAsync(accountId).ConfigureAwait(true);
+            await identityService.SignOutAsync(
+                accountId,
+                automationCancellationSource.Token).ConfigureAwait(true);
         }
     }
 
@@ -1732,7 +1734,10 @@ public sealed partial class MainWindow : Window, IDisposable
         if (sender is MenuItem { DataContext: KustoRecordedPertinentValueViewModel value }
             && DataContext is MainWindowViewModel viewModel)
         {
-            await viewModel.Recording.SetEndpointFromPertinentValueAsync(value, role);
+            await viewModel.Recording.SetEndpointFromPertinentValueAsync(
+                value,
+                role,
+                automationCancellationSource.Token);
         }
     }
 
@@ -1743,7 +1748,10 @@ public sealed partial class MainWindow : Window, IDisposable
         if (sender is MenuItem { DataContext: KustoRecordedTimelineValueViewModel value }
             && DataContext is MainWindowViewModel viewModel)
         {
-            await viewModel.Recording.SetEndpointFromTimelineValueAsync(value, role);
+            await viewModel.Recording.SetEndpointFromTimelineValueAsync(
+                value,
+                role,
+                automationCancellationSource.Token);
         }
     }
 
@@ -2628,7 +2636,7 @@ public sealed partial class MainWindow : Window, IDisposable
                 {
                     await using Stream stream = await file.OpenWriteAsync();
                     stream.SetLength(0);
-                    await stream.WriteAsync(export.Content);
+                    await stream.WriteAsync(export.Content, automationCancellationSource.Token);
                     viewModel.ReportActionStatus($"Exported {format}");
                 }
             }
@@ -2665,7 +2673,7 @@ public sealed partial class MainWindow : Window, IDisposable
                 {
                     await using Stream stream = await file.OpenWriteAsync();
                     stream.SetLength(0);
-                    await stream.WriteAsync(export.Content);
+                    await stream.WriteAsync(export.Content, automationCancellationSource.Token);
                     viewModel.ReportActionStatus("Exported pertinent values");
                 }
             }
@@ -2920,7 +2928,7 @@ public sealed partial class MainWindow : Window, IDisposable
                 byte[] content = KustoGraphMlSerializer.Serialize(graphLayout);
                 await using Stream stream = await file.OpenWriteAsync();
                 stream.SetLength(0);
-                await stream.WriteAsync(content);
+                await stream.WriteAsync(content, automationCancellationSource.Token);
                 ReportDesktopStatus("Saved graph as GraphML");
             }
         }

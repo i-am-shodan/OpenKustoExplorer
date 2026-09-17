@@ -209,13 +209,13 @@ public sealed class MainWindowViewModelTests
         viewModel.Copilot.Prompt = "Review the tab";
         await viewModel.Copilot.SendCommand.ExecuteAsync(null);
 
-        Assert.Equal(Document, copilotService.Context!.QueryText);
+        Assert.Equal(Document, copilotService.Context.QueryText);
 
         viewModel.Copilot.ShareTabContent = false;
         viewModel.Copilot.Prompt = "Answer without tab content";
         await viewModel.Copilot.SendCommand.ExecuteAsync(null);
 
-        Assert.Empty(copilotService.Context!.QueryText);
+        Assert.Empty(copilotService.Context.QueryText);
     }
 
     /// <summary>
@@ -543,7 +543,7 @@ public sealed class MainWindowViewModelTests
 
         viewModel.Copilot.Prompt = "Use available context";
         await viewModel.Copilot.SendCommand.ExecuteAsync(null);
-        Assert.Empty(copilotService.Context!.SharedDataText);
+        Assert.Empty(copilotService.Context.SharedDataText);
         Assert.False(copilotService.Options!.EnableAzureMcp);
 
         await viewModel.Copilot.RefreshModelsCommand.ExecuteAsync(null);
@@ -556,9 +556,9 @@ public sealed class MainWindowViewModelTests
         viewModel.Copilot.Prompt = "Use the shared result";
         await viewModel.Copilot.SendCommand.ExecuteAsync(null);
 
-        Assert.Contains("SecretValue", copilotService.Context!.SharedDataText, StringComparison.Ordinal);
+        Assert.Contains("SecretValue", copilotService.Context.SharedDataText, StringComparison.Ordinal);
         Assert.Contains("bounded-result-value", copilotService.Context.SharedDataText, StringComparison.Ordinal);
-        Assert.Equal("gpt-test", copilotService.Options!.ModelId);
+        Assert.Equal("gpt-test", copilotService.Options.ModelId);
         Assert.True(copilotService.Options.EnableAzureMcp);
         Assert.True(copilotService.Options.EnableMicrosoftLearnMcp);
         Assert.False(copilotService.Options.ShareRecordedSessionData);
@@ -615,7 +615,7 @@ public sealed class MainWindowViewModelTests
         viewModel.Copilot.Prompt = "Interpret the shared run";
         await viewModel.Copilot.SendCommand.ExecuteAsync(null);
 
-        Assert.Equal(KustoCopilotScopeKind.Automation, copilotService.Context!.ScopeKind);
+        Assert.Equal(KustoCopilotScopeKind.Automation, copilotService.Context.ScopeKind);
         Assert.Contains("FailedSignIns", copilotService.Context.SharedDataText, StringComparison.Ordinal);
         Assert.Contains("47", copilotService.Context.SharedDataText, StringComparison.Ordinal);
     }
@@ -753,7 +753,7 @@ public sealed class MainWindowViewModelTests
         await viewModel.Copilot.SendCommand.ExecuteAsync(null);
         Assert.Equal(
             "(cluster and database hidden by user)",
-            copilotService.Context!.TargetText);
+            copilotService.Context.TargetText);
         Assert.Empty(copilotService.Context.SchemaText);
     }
 
@@ -2814,7 +2814,7 @@ public sealed class MainWindowViewModelTests
         viewModel.AutomationNotifications.WebhookStoredUrl = "https://hooks.example.com/automation";
         viewModel.AutomationNotifications.SaveCommand.Execute(null);
 
-        saved = Assert.Single(automationStore.SavedCatalog!.Automations);
+        saved = Assert.Single(automationStore.SavedCatalog.Automations);
         Assert.False(viewModel.AutomationNotifications.IsOpen);
         Assert.Equal(
             KustoAutomationWebhookEndpointSource.StoredUrl,
@@ -3525,7 +3525,7 @@ public sealed class MainWindowViewModelTests
 
         Assert.Equal("Second graph", viewModel.Graph.SelectedGraph?.Name);
         Assert.Equal(secondState.Snapshot, graphStore.RequestedSnapshot);
-        Assert.DoesNotContain(viewModel.Graph.Layout!.Nodes, node => node.Entity.Entity == firstEntity.Entity);
+        Assert.DoesNotContain(viewModel.Graph.Layout.Nodes, node => node.Entity.Entity == firstEntity.Entity);
         Assert.Contains(viewModel.Graph.Layout.Nodes, node => node.Entity.Entity == secondEntity.Entity);
     }
 
@@ -3719,7 +3719,7 @@ public sealed class MainWindowViewModelTests
         await viewModel.Graph.ViewTimelinePointCommand.ExecutionTask!;
 
         Assert.False(viewModel.Graph.IsViewingHistory);
-        Assert.Contains(viewModel.Graph.Layout!.Nodes, node => node.Entity.Entity == liveEntity.Entity);
+        Assert.Contains(viewModel.Graph.Layout.Nodes, node => node.Entity.Entity == liveEntity.Entity);
     }
 
     /// <summary>
@@ -3800,7 +3800,7 @@ public sealed class MainWindowViewModelTests
         await viewModel.Graph.RunCypherCommand.ExecuteAsync(null);
 
         Assert.True(viewModel.Graph.HasCypherDiagnostics);
-        Assert.Contains(viewModel.Graph.Layout!.Nodes, node => node.Entity.Entity == matchedEntity.Entity);
+        Assert.Contains(viewModel.Graph.Layout.Nodes, node => node.Entity.Entity == matchedEntity.Entity);
         Assert.Equal("OpenCypher has errors", viewModel.Graph.CypherResultSummary);
     }
 
