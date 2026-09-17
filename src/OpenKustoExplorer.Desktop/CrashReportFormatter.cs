@@ -11,6 +11,8 @@ namespace OpenKustoExplorer.Desktop;
 /// </summary>
 internal static partial class CrashReportFormatter
 {
+    private const int RegexTimeoutMilliseconds = 1_000;
+
     /// <summary>
     /// Creates a sanitized diagnostic report for an unexpected exception.
     /// </summary>
@@ -116,21 +118,26 @@ internal static partial class CrashReportFormatter
             }
         }
 
-        sanitized = BearerTokenRegex().Replace(sanitized, "$1[REDACTED]");
-        sanitized = SecretAssignmentRegex().Replace(sanitized, "$1$2[REDACTED]");
-        return EmailAddressRegex().Replace(sanitized, "[REDACTED]@$1");
+        sanitized = BearerTokenRegex().Replace(sanitized, "${prefix}[REDACTED]");
+        sanitized = SecretAssignmentRegex().Replace(sanitized, "${name}${separator}[REDACTED]");
+        return EmailAddressRegex().Replace(sanitized, "[REDACTED]@${domain}");
     }
 
-    [GeneratedRegex(@"(?i)\b(Bearer\s+)[A-Za-z0-9._~+/=-]{8,}", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(
+        @"(?i)\b(?<prefix>Bearer\s+)[A-Za-z0-9._~+/=-]{8,}",
+        RegexOptions.CultureInvariant | RegexOptions.ExplicitCapture,
+        RegexTimeoutMilliseconds)]
     private static partial Regex BearerTokenRegex();
 
     [GeneratedRegex(
-        @"(?i)\b(access_token|refresh_token|id_token|client_secret|password|api[_-]?key)(\s*[:=]\s*)[^\s,;&]+",
-        RegexOptions.CultureInvariant)]
+        @"(?i)\b(?<name>access_token|refresh_token|id_token|client_secret|password|api[_-]?key)(?<separator>\s*[:=]\s*)[^\s,;&]+",
+        RegexOptions.CultureInvariant | RegexOptions.ExplicitCapture,
+        RegexTimeoutMilliseconds)]
     private static partial Regex SecretAssignmentRegex();
 
     [GeneratedRegex(
-        @"(?i)\b[A-Z0-9._%+-]+@([A-Z0-9.-]+\.[A-Z]{2,})\b",
-        RegexOptions.CultureInvariant)]
+        @"(?i)\b[A-Z0-9._%+-]+@(?<domain>[A-Z0-9.-]+\.[A-Z]{2,})\b",
+        RegexOptions.CultureInvariant | RegexOptions.ExplicitCapture,
+        RegexTimeoutMilliseconds)]
     private static partial Regex EmailAddressRegex();
 }

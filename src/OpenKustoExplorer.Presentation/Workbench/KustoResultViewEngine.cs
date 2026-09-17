@@ -39,15 +39,31 @@ internal static class KustoResultViewEngine
             rows = rows.Where(row => MatchesFilter(row.Cells[column.ColumnIndex].Text, column));
         }
 
-        KustoResultColumnViewModel? sortColumn = columns.FirstOrDefault(column => column.IsSortActive);
-        if (sortColumn is not null)
+        IOrderedEnumerable<KustoResultRowViewModel>? orderedRows = null;
+        foreach (KustoResultColumnViewModel sortColumn in columns
+            .Where(column => column.IsSortActive)
+            .OrderBy(column => column.SortPriority))
         {
             KustoResultValueComparer comparer = new(sortColumn.TypeName);
-            rows = sortColumn.SortDirection == KustoResultSortDirection.Ascending
-                ? rows.OrderBy(row => row.Cells[sortColumn.ColumnIndex].Text, comparer)
-                    .ThenBy(row => row.RowIndex)
-                : rows.OrderByDescending(row => row.Cells[sortColumn.ColumnIndex].Text, comparer)
-                    .ThenBy(row => row.RowIndex);
+            Func<KustoResultRowViewModel, string> keySelector = row =>
+                row.Cells[sortColumn.ColumnIndex].Text;
+            if (orderedRows is null)
+            {
+                orderedRows = sortColumn.SortDirection == KustoResultSortDirection.Ascending
+                    ? rows.OrderBy(keySelector, comparer)
+                    : rows.OrderByDescending(keySelector, comparer);
+            }
+            else
+            {
+                orderedRows = sortColumn.SortDirection == KustoResultSortDirection.Ascending
+                    ? orderedRows.ThenBy(keySelector, comparer)
+                    : orderedRows.ThenByDescending(keySelector, comparer);
+            }
+        }
+
+        if (orderedRows is not null)
+        {
+            rows = orderedRows.ThenBy(row => row.RowIndex);
         }
 
         return Array.AsReadOnly(rows.ToArray());

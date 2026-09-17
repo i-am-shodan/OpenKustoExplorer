@@ -35,6 +35,18 @@ public interface IKustoRecordedSessionStore
         DateTimeOffset stoppedAtUtc,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Pauses one open recording period and discards executions that are still in flight.</summary>
+    /// <param name="periodId">The recording period to pause.</param>
+    /// <param name="pausedAtUtc">The UTC pause time.</param>
+    /// <param name="discardedExecutionIds">Execution identifiers that must not remain in the session.</param>
+    /// <param name="cancellationToken">Cancels and rolls back the operation.</param>
+    /// <returns>A task that completes after the period and executions are updated atomically.</returns>
+    public Task PauseRecordingAsync(
+        Guid periodId,
+        DateTimeOffset pausedAtUtc,
+        IReadOnlyCollection<Guid> discardedExecutionIds,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Begins one query execution and returns its identifier.</summary>
     /// <param name="execution">The execution metadata and inferred interests.</param>
     /// <param name="cancellationToken">Cancels the operation.</param>

@@ -63,6 +63,34 @@ public sealed class MainWindowViewModelTests
     }
 
     /// <summary>
+    /// Verifies imported KQL files create collision-safe tabs that inherit the active target.
+    /// </summary>
+    [Fact]
+    public void ImportKqlFilesCreatesTargetedTabsInPickerOrder()
+    {
+        MainWindowViewModel viewModel = CreateViewModel();
+        KustoDocumentViewModel original = Assert.Single(viewModel.Documents);
+
+        IReadOnlyList<KustoDocumentViewModel> imported = viewModel.ImportKqlFiles(
+        [
+            new KustoQueryFileContent("Query 1.kql", "StormEvents | take 5"),
+            new KustoQueryFileContent("query 1.kql", string.Empty),
+        ]);
+
+        Assert.Equal(2, imported.Count);
+        Assert.Equal(["Query 1 2", "query 1 3"], imported.Select(document => document.Title));
+        Assert.Equal("StormEvents | take 5", imported[0].Text);
+        Assert.Empty(imported[1].Text);
+        Assert.All(imported, document =>
+        {
+            Assert.Equal(original.ClusterUri, document.ClusterUri);
+            Assert.Equal(original.DatabaseName, document.DatabaseName);
+        });
+        Assert.Same(imported[1], viewModel.SelectedDocument);
+        Assert.Equal("Imported 2 KQL files", viewModel.StatusText);
+    }
+
+    /// <summary>
     /// Verifies Copilot receives active tab/schema context and proposals require explicit application.
     /// </summary>
     /// <returns>A task that completes after two deterministic Copilot turns.</returns>
@@ -1194,6 +1222,47 @@ public sealed class MainWindowViewModelTests
     }
 
     /// <summary>
+    /// Verifies extended result sorting composes typed keys in stable priority order.
+    /// </summary>
+    /// <returns>A task that completes after result projection.</returns>
+    [Fact]
+    public async Task ResultViewSupportsStableMultiColumnSort()
+    {
+        KustoResultTable table = new(
+            "Result 1",
+            [new KustoResultColumn("Region", "string"), new KustoResultColumn("Score", "long")],
+            [
+                new KustoResultRow(["B", "1"]),
+                new KustoResultRow(["A", "3"]),
+                new KustoResultRow(["B", "2"]),
+                new KustoResultRow(["A", "1"]),
+            ]);
+        MainWindowViewModel viewModel = CreateViewModel(
+            queryService: new StubKustoQueryService
+            {
+                Result = new KustoQueryResult([table], TimeSpan.Zero),
+            });
+        await viewModel.RunQueryCommand.ExecuteAsync(null);
+
+        viewModel.ToggleResultSort(viewModel.ResultColumns[0]);
+        viewModel.ToggleResultSort(viewModel.ResultColumns[1], extendSort: true);
+        viewModel.ToggleResultSort(viewModel.ResultColumns[1], extendSort: true);
+
+        Assert.Equal(
+            ["A:3", "A:1", "B:2", "B:1"],
+            viewModel.ResultRows.Select(row => $"{row.Cells[0].Text}:{row.Cells[1].Text}"));
+        Assert.Equal(1, viewModel.ResultColumns[0].SortPriority);
+        Assert.Equal(2, viewModel.ResultColumns[1].SortPriority);
+
+        viewModel.ToggleResultSort(viewModel.ResultColumns[1]);
+        viewModel.ToggleResultSort(viewModel.ResultColumns[1]);
+
+        Assert.False(viewModel.ResultColumns[0].IsSortActive);
+        Assert.Equal(1, viewModel.ResultColumns[1].SortPriority);
+        Assert.Equal(["1", "1", "2", "3"], viewModel.ResultRows.Select(row => row.Cells[1].Text));
+    }
+
+    /// <summary>
     /// Verifies each query tab restores its own local result search, filters, and sort order.
     /// </summary>
     /// <returns>A task that completes after switching between independently transformed tabs.</returns>
@@ -1247,6 +1316,61 @@ public sealed class MainWindowViewModelTests
         viewModel.SelectedDocument = secondDocument;
         Assert.Equal("Bob", Assert.Single(viewModel.ResultRows).Cells[0].Text);
         Assert.Equal(KustoResultSortDirection.None, viewModel.ResultColumns[1].SortDirection);
+    }
+
+    /// <summary>
+    /// Verifies exports follow displayed transforms and retain the exact query that produced the result.
+    /// </summary>
+    /// <returns>A task that completes after query execution and export projection.</returns>
+    [Fact]
+    public async Task ResultExportsUseDisplayedOrderAndExecutedQuerySnapshot()
+    {
+        KustoResultTable table = new(
+            "Result 1",
+            [new KustoResultColumn("Name", "string"), new KustoResultColumn("Score", "long")],
+            [
+                new KustoResultRow(["Alicia", "20"]),
+                new KustoResultRow(["Bob", "2"]),
+                new KustoResultRow(["Alice", "10"]),
+            ]);
+        MainWindowViewModel viewModel = CreateViewModel(
+            queryService: new StubKustoQueryService
+            {
+                Result = new KustoQueryResult([table], TimeSpan.FromMilliseconds(10)),
+            });
+        const string ExecutedQuery = "StormEvents | project Name=State, Score=DamageProperty";
+        viewModel.QueryText = ExecutedQuery;
+
+        await viewModel.RunQueryCommand.ExecuteAsync(null);
+        KustoResultColumnViewModel nameColumn = viewModel.ResultColumns[0];
+        nameColumn.SelectedFilterOption = nameColumn.FilterOptions.Single(option =>
+            option.Operator == KustoResultFilterOperator.StartsWith);
+        nameColumn.FilterText = "Ali";
+        viewModel.ToggleResultSort(viewModel.ResultColumns[1]);
+        viewModel.QueryText = "print Edited=true";
+
+        string queryAndResults = viewModel.CreateQueryAndResultsClipboardText();
+        string query = viewModel.CreateQueryClipboardText();
+        string csv = System.Text.Encoding.UTF8.GetString(
+            viewModel.CreateResultExport(KustoResultExportFormat.Csv).Content);
+        string kql = viewModel.CreateKqlDatatable();
+
+        Assert.StartsWith("Cluster: https://help.kusto.windows.net/", queryAndResults, StringComparison.Ordinal);
+        Assert.Contains(
+            $"{Environment.NewLine}Database: Samples{Environment.NewLine}{Environment.NewLine}"
+                + ExecutedQuery
+                + Environment.NewLine
+                + Environment.NewLine,
+            queryAndResults,
+            StringComparison.Ordinal);
+        Assert.Equal(ExecutedQuery, query);
+        Assert.DoesNotContain("print Edited", queryAndResults, StringComparison.Ordinal);
+        Assert.DoesNotContain("Bob", queryAndResults, StringComparison.Ordinal);
+        Assert.True(queryAndResults.IndexOf("Alice", StringComparison.Ordinal)
+            < queryAndResults.IndexOf("Alicia", StringComparison.Ordinal));
+        Assert.DoesNotContain("Bob", csv, StringComparison.Ordinal);
+        Assert.True(csv.IndexOf("Alice", StringComparison.Ordinal) < csv.IndexOf("Alicia", StringComparison.Ordinal));
+        Assert.DoesNotContain("Bob", kql, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -1501,11 +1625,11 @@ public sealed class MainWindowViewModelTests
     }
 
     /// <summary>
-    /// Verifies complete datatable copies include rows hidden by result filters.
+    /// Verifies complete datatable copies contain only the displayed result projection.
     /// </summary>
     /// <returns>A task that completes after the datatable is created.</returns>
     [Fact]
-    public async Task CreateKqlDatatableIncludesRowsHiddenByResultFilters()
+    public async Task CreateKqlDatatableUsesDisplayedResultRows()
     {
         KustoResultTable table = new(
             "Result 1",
@@ -1527,8 +1651,8 @@ public sealed class MainWindowViewModelTests
 
         Assert.Single(viewModel.ResultRows);
         Assert.Contains("'Alice', 10", datatable, StringComparison.Ordinal);
-        Assert.Contains("'Bob', 20", datatable, StringComparison.Ordinal);
-        Assert.Contains("'Charlie', 30", datatable, StringComparison.Ordinal);
+        Assert.DoesNotContain("'Bob', 20", datatable, StringComparison.Ordinal);
+        Assert.DoesNotContain("'Charlie', 30", datatable, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -2120,6 +2244,119 @@ public sealed class MainWindowViewModelTests
     }
 
     /// <summary>
+    /// Verifies editing a cluster URL migrates live references while retaining historical run provenance.
+    /// </summary>
+    /// <returns>A task that completes after document autosave.</returns>
+    [Fact]
+    public async Task EditingClusterUrlMigratesPersistedReferences()
+    {
+        Uri oldClusterUri = new("https://old-adx.contoso.com");
+        Uri newClusterUri = new("https://new-adx.contoso.com");
+        DateTimeOffset timestamp = new(2026, 9, 16, 12, 0, 0, TimeSpan.Zero);
+        KustoResultTable table = new(
+            "PrimaryResult",
+            [new KustoResultColumn("Count", "long")],
+            [new KustoResultRow(["1"])]);
+        KustoQueryResult cachedResult = new([table], TimeSpan.FromMilliseconds(5));
+        KustoConnectionCatalog connectionCatalog = new(
+        [
+            new KustoClusterConnection(
+                oldClusterUri,
+                "Old ADX",
+                [
+                    new KustoDatabaseConnection(
+                        "Telemetry",
+                        "Telemetry",
+                        CreateSchema(oldClusterUri.Host, "Telemetry", "Events")),
+                ],
+                "Production"),
+        ]);
+        StubKustoConnectionStore connectionStore = new() { Catalog = connectionCatalog };
+        StubKustoDocumentStore documentStore = new()
+        {
+            Workspace = new KustoDocumentWorkspace(
+                [new KustoDocument(Guid.NewGuid(), "Investigation", "Events | take 1", 0, oldClusterUri, "Telemetry")],
+                null),
+        };
+        KustoDashboardWidget widget = new(
+            Guid.NewGuid(),
+            "Event count",
+            oldClusterUri,
+            "Telemetry",
+            "Events | count",
+            TimeSpan.FromMinutes(5),
+            KustoDashboardWidgetDisplayMode.Table,
+            KustoVisualizationKind.Table,
+            new KustoDashboardWidgetLayout(0, 0, 16, 10),
+            "#FFFFFF",
+            "#1F2933",
+            "#167D8D",
+            cachedResult,
+            timestamp);
+        StubKustoDashboardStore dashboardStore = new()
+        {
+            Catalog = new KustoDashboardCatalog(
+                [new KustoDashboard(Guid.NewGuid(), "Operations", "#FFFFFF", [widget])]),
+        };
+        KustoAutomationRun historicalRun = new(
+            Guid.NewGuid(),
+            timestamp,
+            timestamp.AddSeconds(1),
+            KustoAutomationRunStatus.Succeeded,
+            null,
+            cachedResult,
+            oldClusterUri,
+            "Telemetry");
+        StubKustoAutomationStore automationStore = new()
+        {
+            Catalog = new KustoAutomationCatalog(
+            [
+                new KustoAutomation(
+                    Guid.NewGuid(),
+                    "Event monitor",
+                    oldClusterUri,
+                    "Telemetry",
+                    "Events | count",
+                    TimeSpan.FromMinutes(5),
+                    timestamp,
+                    timestamp.AddMinutes(5),
+                    null,
+                    true,
+                    [historicalRun]),
+            ]),
+        };
+        MainWindowViewModel viewModel = CreateViewModel(
+            connectionStore: connectionStore,
+            documentStore: documentStore,
+            dashboardStore: dashboardStore,
+            automationStore: automationStore);
+        KustoClusterViewModel cluster = Assert.Single(viewModel.Clusters);
+
+        cluster.EditCommand.Execute(null);
+        Assert.Equal(oldClusterUri.AbsoluteUri, viewModel.OrganizeClusterAddress);
+        Assert.Equal("1 query tabs, 1 widgets, 1 automations", viewModel.OrganizeClusterReferenceSummary);
+        viewModel.OrganizeClusterAddress = newClusterUri.AbsoluteUri;
+        viewModel.OrganizeClusterDisplayName = "New ADX";
+        viewModel.SaveClusterFolderCommand.Execute(null);
+        await documentStore.SaveAttempted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        KustoClusterViewModel migratedCluster = Assert.Single(viewModel.Clusters);
+        Assert.Equal(newClusterUri, migratedCluster.ClusterUri);
+        Assert.Equal("New ADX", migratedCluster.DisplayName);
+        Assert.Equal("Production", migratedCluster.FolderName);
+        Assert.Equal(newClusterUri, Assert.Single(viewModel.Documents).ClusterUri);
+        Assert.Equal(newClusterUri, Assert.Single(connectionStore.SavedCatalog!.Clusters).ClusterUri);
+        KustoDashboardWidget savedWidget = Assert.Single(Assert.Single(
+            dashboardStore.SavedCatalog!.Dashboards).Widgets);
+        Assert.Equal(newClusterUri, savedWidget.ClusterUri);
+        Assert.Null(savedWidget.CachedResult);
+        KustoAutomation savedAutomation = Assert.Single(automationStore.SavedCatalog!.Automations);
+        Assert.Equal(newClusterUri, savedAutomation.ClusterUri);
+        Assert.Equal(oldClusterUri, Assert.Single(savedAutomation.Runs).ClusterUri);
+        Assert.False(viewModel.IsOrganizeClusterOpen);
+    }
+
+    /// <summary>
     /// Verifies that Add Cluster normalizes a host, discovers databases, loads the selected schema, and persists it.
     /// </summary>
     /// <returns>A task that completes after cluster discovery and schema loading are verified.</returns>
@@ -2540,6 +2777,10 @@ public sealed class MainWindowViewModelTests
         viewModel.AutomationNotifications.RunApplicationEnabled = true;
         viewModel.AutomationNotifications.ApplicationPath = "C:\\Tools\\handle-result.exe";
         viewModel.AutomationNotifications.ApplicationArguments = "--rows {row_count}";
+        viewModel.AutomationNotifications.WebhookEnabled = true;
+        viewModel.AutomationNotifications.WebhookUsesEnvironmentVariable = true;
+        viewModel.AutomationNotifications.WebhookEnvironmentVariableName =
+            "OPENKUSTOEXPLORER_OPERATIONS_WEBHOOK";
         viewModel.AutomationNotifications.SaveCommand.Execute(null);
 
         Assert.Equal("Renamed", scheduled.Name);
@@ -2555,6 +2796,32 @@ public sealed class MainWindowViewModelTests
         Assert.True(saved.NotificationSettings.RunApplicationEnabled);
         Assert.Equal("C:\\Tools\\handle-result.exe", saved.NotificationSettings.ApplicationPath);
         Assert.Equal("--rows {row_count}", saved.NotificationSettings.ApplicationArguments);
+        Assert.Equal(
+            KustoAutomationWebhookEndpointSource.EnvironmentVariable,
+            saved.NotificationSettings.Webhook?.EndpointSource);
+        Assert.Equal(
+            "OPENKUSTOEXPLORER_OPERATIONS_WEBHOOK",
+            saved.NotificationSettings.Webhook?.EnvironmentVariableName);
+
+        scheduled.ConfigureNotificationsCommand.Execute(null);
+        viewModel.AutomationNotifications.WebhookUsesStoredUrl = true;
+        viewModel.AutomationNotifications.WebhookStoredUrl = "http://hooks.example.com/automation";
+        viewModel.AutomationNotifications.SaveCommand.Execute(null);
+
+        Assert.True(viewModel.AutomationNotifications.IsOpen);
+        Assert.Contains("HTTPS", viewModel.AutomationNotifications.ErrorText, StringComparison.Ordinal);
+
+        viewModel.AutomationNotifications.WebhookStoredUrl = "https://hooks.example.com/automation";
+        viewModel.AutomationNotifications.SaveCommand.Execute(null);
+
+        saved = Assert.Single(automationStore.SavedCatalog!.Automations);
+        Assert.False(viewModel.AutomationNotifications.IsOpen);
+        Assert.Equal(
+            KustoAutomationWebhookEndpointSource.StoredUrl,
+            saved.NotificationSettings.Webhook?.EndpointSource);
+        Assert.Equal(
+            "https://hooks.example.com/automation",
+            saved.NotificationSettings.Webhook?.StoredUrl?.AbsoluteUri.TrimEnd('/'));
     }
 
     /// <summary>

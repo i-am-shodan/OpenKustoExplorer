@@ -41,11 +41,7 @@ public sealed class KustoRecordedResultTableViewModel
         ArgumentOutOfRangeException.ThrowIfNegative(firstRowOrdinal);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(firstRowOrdinal, table.Rows.Count);
 
-        int visibleRowCount = rowCount ?? table.Rows.Count - firstRowOrdinal;
-        ArgumentOutOfRangeException.ThrowIfNegative(visibleRowCount);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(
-            visibleRowCount,
-            table.Rows.Count - firstRowOrdinal);
+        int visibleRowCount = GetVisibleRowCount(rowCount, table.Rows.Count - firstRowOrdinal);
 
         ExecutionId = executionId;
         TableOrdinal = tableOrdinal;
@@ -160,6 +156,17 @@ public sealed class KustoRecordedResultTableViewModel
 
     /// <summary>Gets a value indicating whether the table contains retained rows.</summary>
     public bool HasRows => Rows.Count > 0;
+
+    private static int GetVisibleRowCount(int? rowCount, int maximumRowCount)
+    {
+        int visibleRowCount = rowCount ?? maximumRowCount;
+        if (visibleRowCount < 0 || visibleRowCount > maximumRowCount)
+        {
+            throw new ArgumentOutOfRangeException(nameof(rowCount));
+        }
+
+        return visibleRowCount;
+    }
 
     private readonly record struct CoordinateKey(
         Guid ExecutionId,

@@ -12,11 +12,13 @@ public sealed class KustoDashboard
     /// <param name="title">The dashboard title.</param>
     /// <param name="backgroundColor">The dashboard canvas color.</param>
     /// <param name="widgets">The dashboard widgets.</param>
+    /// <param name="timeRange">The dashboard-wide time range, or <see langword="null"/> for Last 24 hours.</param>
     public KustoDashboard(
         Guid id,
         string title,
         string backgroundColor,
-        IEnumerable<KustoDashboardWidget> widgets)
+        IEnumerable<KustoDashboardWidget> widgets,
+        KustoDashboardTimeRange? timeRange = null)
     {
         ArgumentOutOfRangeException.ThrowIfEqual(id, Guid.Empty);
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
@@ -32,6 +34,7 @@ public sealed class KustoDashboard
         Title = title.Trim();
         BackgroundColor = KustoDashboardColor.Validate(backgroundColor, nameof(backgroundColor));
         Widgets = Array.AsReadOnly(widgetArray);
+        TimeRange = timeRange ?? KustoDashboardTimeRange.Last24Hours;
     }
 
     /// <summary>
@@ -48,6 +51,11 @@ public sealed class KustoDashboard
     /// Gets the dashboard canvas color.
     /// </summary>
     public string BackgroundColor { get; }
+
+    /// <summary>
+    /// Gets the dashboard-wide time range.
+    /// </summary>
+    public KustoDashboardTimeRange TimeRange { get; }
 
     /// <summary>
     /// Gets dashboard widgets in display order.

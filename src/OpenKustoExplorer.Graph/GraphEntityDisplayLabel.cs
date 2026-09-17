@@ -19,7 +19,11 @@ public static class GraphEntityDisplayLabel
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(displayLabel);
         string normalized = displayLabel.Trim();
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(normalized.Length, MaximumLength);
+        if (normalized.Length > MaximumLength)
+        {
+            throw new ArgumentOutOfRangeException(nameof(displayLabel));
+        }
+
         return normalized;
     }
 }

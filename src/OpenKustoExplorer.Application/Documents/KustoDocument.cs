@@ -44,7 +44,10 @@ public sealed class KustoDocument
         bool hasDatabase = !string.IsNullOrWhiteSpace(databaseName);
         if (hasCluster != hasDatabase)
         {
-            throw new ArgumentException("A document target requires both a cluster URI and database name.");
+            string parameterName = hasCluster ? nameof(databaseName) : nameof(clusterUri);
+            throw new ArgumentException(
+                "A document target requires both a cluster URI and database name.",
+                parameterName);
         }
 
         if (clusterUri is not null && (!clusterUri.IsAbsoluteUri || clusterUri.Scheme != Uri.UriSchemeHttps))

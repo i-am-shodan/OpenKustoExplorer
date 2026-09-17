@@ -8,8 +8,8 @@ namespace OpenKustoExplorer.Presentation.Workbench;
 internal sealed class KustoDocumentWorkspacePersistence : IDisposable
 {
     private static readonly TimeSpan AutosaveDelay = TimeSpan.FromMilliseconds(400);
-    private readonly object autosaveLock = new();
-    private readonly object storeLock = new();
+    private readonly Lock autosaveLock = new();
+    private readonly Lock storeLock = new();
     private readonly IKustoDocumentStore store;
     private CancellationTokenSource? autosaveCancellationSource;
     private KustoDocumentWorkspace? latestWorkspace;

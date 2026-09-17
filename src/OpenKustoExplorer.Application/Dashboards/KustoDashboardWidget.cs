@@ -49,7 +49,10 @@ public sealed class KustoDashboardWidget
         ArgumentNullException.ThrowIfNull(layout);
         if ((cachedResult is null) != (cachedAtUtc is null))
         {
-            throw new ArgumentException("A dashboard result and its refresh time must be provided together.");
+            string parameterName = cachedResult is null ? nameof(cachedResult) : nameof(cachedAtUtc);
+            throw new ArgumentException(
+                "A dashboard result and its refresh time must be provided together.",
+                parameterName);
         }
 
         if (!clusterUri.IsAbsoluteUri || clusterUri.Scheme != Uri.UriSchemeHttps)

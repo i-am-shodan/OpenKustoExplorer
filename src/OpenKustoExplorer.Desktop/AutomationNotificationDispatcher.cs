@@ -5,14 +5,15 @@ using OpenKustoExplorer.Application.Automations;
 namespace OpenKustoExplorer.Desktop;
 
 /// <summary>
-/// Delivers evaluated automation actions through application, desktop toast, and SMTP channels.
+/// Delivers evaluated automation actions through application, desktop, webhook, and SMTP channels.
 /// </summary>
-internal sealed class AutomationNotificationDispatcher
+internal sealed class AutomationNotificationDispatcher : IDisposable
 {
     private const string SmtpPasswordEnvironmentVariable = "OPENKUSTOEXPLORER_SMTP_PASSWORD";
     private const string SmtpUsernameEnvironmentVariable = "OPENKUSTOEXPLORER_SMTP_USERNAME";
     private readonly AutomationApplicationDispatcher applicationDispatcher;
     private readonly DesktopNotificationService notifications;
+    private readonly AutomationWebhookDispatcher webhookDispatcher;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="AutomationNotificationDispatcher"/> class.
@@ -22,6 +23,7 @@ internal sealed class AutomationNotificationDispatcher
     {
         ArgumentNullException.ThrowIfNull(notifications);
         applicationDispatcher = new AutomationApplicationDispatcher(new AutomationApplicationLauncher());
+        webhookDispatcher = new AutomationWebhookDispatcher();
         this.notifications = notifications;
     }
 
@@ -29,7 +31,7 @@ internal sealed class AutomationNotificationDispatcher
     /// Delivers all enabled channels without propagating a channel failure into the scheduler.
     /// </summary>
     /// <param name="notification">The evaluated notification.</param>
-    /// <param name="cancellationToken">Cancels email delivery during application shutdown.</param>
+    /// <param name="cancellationToken">Cancels network delivery during application shutdown.</param>
     /// <returns>A task that completes after enabled channels have been attempted.</returns>
     public async Task DispatchAsync(
         KustoAutomationNotification notification,
@@ -52,6 +54,19 @@ internal sealed class AutomationNotificationDispatcher
                 applicationFailure);
         }
 
+        if (notification.Settings.Webhook is not null)
+        {
+            string? webhookFailure = await webhookDispatcher.DispatchAsync(
+                notification,
+                cancellationToken).ConfigureAwait(true);
+            if (webhookFailure is not null)
+            {
+                notifications.ShowError(
+                    "Automation webhook failed",
+                    webhookFailure);
+            }
+        }
+
         if (notification.Settings.EmailEnabled)
         {
             try
@@ -71,6 +86,12 @@ internal sealed class AutomationNotificationDispatcher
                 ShowEmailFailure(exception.Message);
             }
         }
+    }
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        webhookDispatcher.Dispose();
     }
 
     private static async Task SendEmailAsync(

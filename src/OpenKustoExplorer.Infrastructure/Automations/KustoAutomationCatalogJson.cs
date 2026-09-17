@@ -11,7 +11,8 @@ namespace OpenKustoExplorer.Infrastructure.Automations;
 /// </summary>
 internal static class KustoAutomationCatalogJson
 {
-    private const int CurrentVersion = 1;
+    private const int CurrentVersion = 3;
+    private const int MinimumSupportedVersion = 1;
 
     /// <summary>
     /// Reads an automation catalog from UTF-8 JSON.
@@ -25,7 +26,7 @@ internal static class KustoAutomationCatalogJson
         using JsonDocument document = JsonDocument.Parse(stream);
         JsonElement root = document.RootElement;
         int version = root.GetProperty("version").GetInt32();
-        if (version != CurrentVersion)
+        if (version is < MinimumSupportedVersion or > CurrentVersion)
         {
             throw new InvalidDataException($"Unsupported automation catalog version {version}.");
         }
@@ -33,7 +34,7 @@ internal static class KustoAutomationCatalogJson
         List<KustoAutomation> automations = [];
         foreach (JsonElement automationElement in root.GetProperty("automations").EnumerateArray())
         {
-            automations.Add(ReadAutomation(automationElement));
+            automations.Add(ReadAutomation(automationElement, version));
         }
 
         return new KustoAutomationCatalog(automations);
@@ -64,19 +65,21 @@ internal static class KustoAutomationCatalogJson
         writer.WriteEndObject();
     }
 
-    private static KustoAutomation ReadAutomation(JsonElement element)
+    private static KustoAutomation ReadAutomation(JsonElement element, int version)
     {
+        Uri clusterUri = new(GetRequiredString(element, "clusterUri"), UriKind.Absolute);
+        string databaseName = GetRequiredString(element, "databaseName");
         List<KustoAutomationRun> runs = [];
         foreach (JsonElement runElement in element.GetProperty("runs").EnumerateArray())
         {
-            runs.Add(ReadRun(runElement));
+            runs.Add(ReadRun(runElement, clusterUri, databaseName, version));
         }
 
         return new KustoAutomation(
             element.GetProperty("id").GetGuid(),
             GetRequiredString(element, "name"),
-            new Uri(GetRequiredString(element, "clusterUri"), UriKind.Absolute),
-            GetRequiredString(element, "databaseName"),
+            clusterUri,
+            databaseName,
             GetRequiredString(element, "queryText"),
             TimeSpan.FromSeconds(element.GetProperty("intervalSeconds").GetDouble()),
             element.GetProperty("createdAtUtc").GetDateTimeOffset(),
@@ -109,6 +112,7 @@ internal static class KustoAutomationCatalogJson
                 ?? KustoAutomationNotificationSettings.DefaultSubjectTemplate;
             string messageTemplate = GetOptionalString(element, "messageTemplate")
                 ?? KustoAutomationNotificationSettings.DefaultMessageTemplate;
+            KustoAutomationWebhookSettings? webhook = ReadWebhookSettings(element);
             settings = new KustoAutomationNotificationSettings(
                 GetOptionalBoolean(element, "notifyWhenRowCountChanges", defaultValue: false),
                 comparison,
@@ -124,13 +128,49 @@ internal static class KustoAutomationCatalogJson
                 messageTemplate,
                 GetOptionalBoolean(element, "runApplicationEnabled", defaultValue: false),
                 GetOptionalString(element, "applicationPath"),
-                GetOptionalString(element, "applicationArguments"));
+                GetOptionalString(element, "applicationArguments"),
+                webhook);
         }
 
         return settings;
     }
 
-    private static KustoAutomationRun ReadRun(JsonElement element)
+    private static KustoAutomationWebhookSettings? ReadWebhookSettings(JsonElement notificationElement)
+    {
+        if (!notificationElement.TryGetProperty("webhook", out JsonElement element)
+            || element.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        string endpointSourceText = GetRequiredString(element, "endpointSource");
+        if (!Enum.TryParse(
+            endpointSourceText,
+            ignoreCase: true,
+            out KustoAutomationWebhookEndpointSource endpointSource)
+            || !Enum.IsDefined(endpointSource))
+        {
+            throw new InvalidDataException($"Unsupported automation webhook endpoint source {endpointSourceText}.");
+        }
+
+        return endpointSource switch
+        {
+            KustoAutomationWebhookEndpointSource.StoredUrl => new KustoAutomationWebhookSettings(
+                endpointSource,
+                new Uri(GetRequiredString(element, "url"), UriKind.Absolute)),
+            KustoAutomationWebhookEndpointSource.EnvironmentVariable => new KustoAutomationWebhookSettings(
+                endpointSource,
+                environmentVariableName: GetRequiredString(element, "environmentVariableName")),
+            _ => throw new InvalidDataException(
+                $"Unsupported automation webhook endpoint source {endpointSourceText}."),
+        };
+    }
+
+    private static KustoAutomationRun ReadRun(
+        JsonElement element,
+        Uri automationClusterUri,
+        string automationDatabaseName,
+        int version)
     {
         string statusText = GetRequiredString(element, "status");
         if (!Enum.TryParse(statusText, ignoreCase: true, out KustoAutomationRunStatus status)
@@ -146,13 +186,21 @@ internal static class KustoAutomationCatalogJson
             result = ReadResult(resultElement);
         }
 
+        Uri clusterUri = version >= 2
+            ? new Uri(GetRequiredString(element, "clusterUri"), UriKind.Absolute)
+            : automationClusterUri;
+        string databaseName = version >= 2
+            ? GetRequiredString(element, "databaseName")
+            : automationDatabaseName;
         return new KustoAutomationRun(
             element.GetProperty("id").GetGuid(),
             element.GetProperty("startedAtUtc").GetDateTimeOffset(),
             element.GetProperty("completedAtUtc").GetDateTimeOffset(),
             status,
             GetOptionalString(element, "errorMessage"),
-            result);
+            result,
+            clusterUri,
+            databaseName);
     }
 
     private static KustoQueryResult ReadResult(JsonElement element)
@@ -251,7 +299,7 @@ internal static class KustoAutomationCatalogJson
 
         foreach (KustoAutomationRun run in automation.Runs)
         {
-            WriteRun(writer, run);
+            WriteRun(writer, run, automation.ClusterUri, automation.DatabaseName);
         }
 
         writer.WriteEndArray();
@@ -279,16 +327,47 @@ internal static class KustoAutomationCatalogJson
         writer.WriteBoolean("runApplicationEnabled", settings.RunApplicationEnabled);
         WriteOptionalString(writer, "applicationPath", settings.ApplicationPath);
         WriteOptionalString(writer, "applicationArguments", settings.ApplicationArguments);
+        WriteWebhookSettings(writer, settings.Webhook);
         writer.WriteEndObject();
     }
 
-    private static void WriteRun(Utf8JsonWriter writer, KustoAutomationRun run)
+    private static void WriteWebhookSettings(
+        Utf8JsonWriter writer,
+        KustoAutomationWebhookSettings? webhook)
+    {
+        if (webhook is null)
+        {
+            return;
+        }
+
+        writer.WritePropertyName("webhook");
+        writer.WriteStartObject();
+        writer.WriteString("endpointSource", webhook.EndpointSource.ToString());
+        if (webhook.EndpointSource == KustoAutomationWebhookEndpointSource.StoredUrl)
+        {
+            writer.WriteString("url", webhook.StoredUrl!.AbsoluteUri);
+        }
+        else
+        {
+            writer.WriteString("environmentVariableName", webhook.EnvironmentVariableName);
+        }
+
+        writer.WriteEndObject();
+    }
+
+    private static void WriteRun(
+        Utf8JsonWriter writer,
+        KustoAutomationRun run,
+        Uri automationClusterUri,
+        string automationDatabaseName)
     {
         writer.WriteStartObject();
         writer.WriteString("id", run.Id);
         writer.WriteString("startedAtUtc", run.StartedAtUtc);
         writer.WriteString("completedAtUtc", run.CompletedAtUtc);
         writer.WriteString("status", run.Status.ToString());
+        writer.WriteString("clusterUri", (run.ClusterUri ?? automationClusterUri).AbsoluteUri);
+        writer.WriteString("databaseName", run.DatabaseName ?? automationDatabaseName);
 
         if (run.ErrorMessage is not null)
         {

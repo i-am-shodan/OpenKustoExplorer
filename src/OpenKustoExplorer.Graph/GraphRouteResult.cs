@@ -19,7 +19,11 @@ public sealed class GraphRouteResult
         GraphViewport viewport)
     {
         ArgumentNullException.ThrowIfNull(viewport);
-        ArgumentOutOfRangeException.ThrowIfNegative(shortestHopCount ?? 0);
+        if (shortestHopCount < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(shortestHopCount));
+        }
+
         Start = start;
         End = end;
         ShortestHopCount = shortestHopCount;

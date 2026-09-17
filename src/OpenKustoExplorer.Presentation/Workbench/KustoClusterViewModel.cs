@@ -11,6 +11,7 @@ namespace OpenKustoExplorer.Presentation.Workbench;
 /// </summary>
 public sealed class KustoClusterViewModel : ObservableObject
 {
+    private string displayName;
     private string? folderName;
     private bool isRefreshing;
     private string statusText;
@@ -22,19 +23,22 @@ public sealed class KustoClusterViewModel : ObservableObject
     /// <param name="refreshAction">Refreshes accessible databases.</param>
     /// <param name="removeAction">Removes the cluster from the catalog.</param>
     /// <param name="organizeAction">Opens the folder organizer for this cluster.</param>
+    /// <param name="editAction">Opens connection properties for this cluster.</param>
     internal KustoClusterViewModel(
         KustoClusterConnection connection,
         Func<KustoClusterViewModel, CancellationToken, Task> refreshAction,
         Action<KustoClusterViewModel> removeAction,
-        Action<KustoClusterViewModel> organizeAction)
+        Action<KustoClusterViewModel> organizeAction,
+        Action<KustoClusterViewModel> editAction)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(refreshAction);
         ArgumentNullException.ThrowIfNull(removeAction);
         ArgumentNullException.ThrowIfNull(organizeAction);
+        ArgumentNullException.ThrowIfNull(editAction);
 
         ClusterUri = connection.ClusterUri;
-        DisplayName = connection.DisplayName;
+        displayName = connection.DisplayName;
         folderName = connection.FolderName;
         Databases = new ObservableCollection<KustoDatabaseViewModel>(
             connection.Databases.Select(database => new KustoDatabaseViewModel(connection.ClusterUri, database)));
@@ -45,6 +49,7 @@ public sealed class KustoClusterViewModel : ObservableObject
             () => !IsRefreshing);
         RemoveCommand = new RelayCommand(() => removeAction(this));
         OrganizeCommand = new RelayCommand(() => organizeAction(this));
+        EditCommand = new RelayCommand(() => editAction(this));
     }
 
     /// <summary>
@@ -55,7 +60,7 @@ public sealed class KustoClusterViewModel : ObservableObject
     /// <summary>
     /// Gets the cluster display name.
     /// </summary>
-    public string DisplayName { get; }
+    public string DisplayName => displayName;
 
     /// <summary>
     /// Gets the optional user-defined Explorer folder name.
@@ -90,6 +95,11 @@ public sealed class KustoClusterViewModel : ObservableObject
     /// Gets the command that moves this cluster into or out of a user folder.
     /// </summary>
     public IRelayCommand OrganizeCommand { get; }
+
+    /// <summary>
+    /// Gets the command that opens editable connection properties.
+    /// </summary>
+    public IRelayCommand EditCommand { get; }
 
     /// <summary>
     /// Gets a value indicating whether database discovery is active.
@@ -203,6 +213,19 @@ public sealed class KustoClusterViewModel : ObservableObject
     internal void SetFolder(string? newFolderName)
     {
         FolderName = string.IsNullOrWhiteSpace(newFolderName) ? null : newFolderName.Trim();
+    }
+
+    /// <summary>
+    /// Replaces editable display and folder metadata without changing the cluster authority.
+    /// </summary>
+    /// <param name="newDisplayName">The validated display name.</param>
+    /// <param name="newFolderName">The normalized folder name, or <see langword="null"/>.</param>
+    internal void ApplyDetails(string newDisplayName, string? newFolderName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(newDisplayName);
+        displayName = newDisplayName.Trim();
+        OnPropertyChanged(nameof(DisplayName));
+        SetFolder(newFolderName);
     }
 
     /// <summary>

@@ -19,9 +19,16 @@
 
 Open Kusto Explorer brings the workflows around KQL into one focused application. AI assistance defaults to GitHub Copilot and can instead use Azure OpenAI or OpenAI. It works alongside the schema-aware editor, results, scheduled automations, and evidence graphs to help create valid queries and interpret explicitly shared data. Every generated query remains a proposal, every KQL proposal is checked locally, and every data-sharing boundary stays under your control.
 
-![Schema-aware KQL query workbench](docs/screenshots/query-workbench.png)
+<p align="center">
+  <a href="docs/open-kusto-explorer-security-intro.mp4">
+    <img src="docs/screenshots/query-workbench.png" alt="Watch the Open Kusto Explorer security investigation feature overview" />
+  </a>
+</p>
 
-<p align="center"><em>GitHub Copilot validates KQL against the active schema and interprets bounded result data before you choose what to apply.</em></p>
+<p align="center">
+  <strong><a href="docs/open-kusto-explorer-security-intro.mp4">Watch the feature overview</a></strong><br />
+  <em>See schema-aware KQL, investigation workflows, dashboards, automations, and security analysis in Open Kusto Explorer. MP4, 17 MB.</em>
+</p>
 
 ## Why Open Kusto Explorer?
 
@@ -36,8 +43,8 @@ Open Kusto Explorer brings the workflows around KQL into one focused application
 | Workspace | What it gives you |
 | --- | --- |
 | **Query** | Schema-aware KQL editing, completion, diagnostics, browser-authenticated execution, result inspection, export, and visualization |
-| **Dashboards** | Durable named dashboards with query-backed table and chart widgets on a draggable, resizable snap grid |
-| **Automations** | Recurring KQL, retained run history, charts, row-delta triggers, desktop alerts, TLS email, and application actions |
+| **Dashboards** | Durable named dashboards with shared time ranges and query-backed table and chart widgets on a draggable, resizable snap grid |
+| **Automations** | Recurring KQL, retained run history, charts, row-delta triggers, desktop alerts, TLS email, application actions, and webhooks |
 | **Sessions** | Named manual-query recordings with retained results, pertinent-value highlighting, inferred pivot chains, and generated follow-up KQL |
 | **Graph** | Named local investigation graphs, evidence provenance, historical generations, route finding, and bounded read-only openCypher |
 | **AI assistant** | GitHub Copilot by default, or configured Azure OpenAI/OpenAI, with scoped conversations and bounded read-only investigation tools |
@@ -60,7 +67,9 @@ Copilot never executes a KQL proposal automatically. You review the complete pro
 - Semantic classification, completion, live diagnostics, and contextual syntax help powered by `Microsoft.Azure.Kusto.Language`.
 - Multi-query tabs: execution runs the KQL block at or nearest the caret.
 - Independent cluster and database targets per tab, plus tab colors, groups, renaming, search, and autosave.
+- Multi-file `.kql` import opens local query-tab snapshots that inherit the active tab target.
 - Microsoft sign-in through the system browser; database discovery and schema loading happen lazily.
+- Cluster context menus expose the complete URL and editable connection properties; URL changes migrate query tabs, dashboard widgets, and future automation runs while retaining historical run provenance.
 - Cancellation, execution timing, query details, and automatic handling of Kusto `render` metadata.
 - Non-destructive import of open Microsoft Kusto Explorer tabs, connection groups, and cluster registrations on Windows.
 - GitHub Copilot can explain or refine the active query, repair a failed query from its diagnostics, and validate every proposed KQL edit before it is shown.
@@ -68,10 +77,10 @@ Copilot never executes a KQL proposal automatically. You review the complete pro
 ### Results That Do Not Get In The Way
 
 - Virtualized, content-fitted result grids with horizontal overflow handling and per-tab state.
-- Local search, sorting, filtering, alternating rows, and persisted conditional formatting.
+- Local search, multi-column sorting, filtering, alternating rows, and persisted conditional formatting.
 - Double-click any cell to open its complete, selectable value in a dedicated output tab.
 - Copy values or rows, insert single-value or multi-selection `or` filters into the active query, or generate reusable KQL `datatable` literals.
-- Export to CSV, Excel, JSON, the clipboard, or save a chart as PNG.
+- Export the displayed filtered/sorted projection to CSV, Excel, JSON, a runnable KQL `datatable()` script, or the clipboard; query-and-result clipboard exports retain the exact executed query block.
 - Render time, anomaly, line, area, stacked area, scatter, bar, column, pie, treemap, card, ladder, pivot, and time-pivot views.
 
 ## Record An Investigation
@@ -84,7 +93,7 @@ Recording is an explicit local capture mode for manual query activity. It retain
 2. Enter a new session name, or enable **Append to existing session** and choose a previous investigation.
 3. Select **Save and start**, then run queries normally with **Run**, `F5`, or `Shift+Enter`. Recording follows manual executions across every query tab.
 4. Optionally right-click live result cells to mark a value, mark every retained value in a column, or remove a mark. Matching values are highlighted in later results while the session remains active.
-5. Select **Stop recording session** when the capture period is complete. You can append another recording period to the same named session later.
+5. Select **Pause** to stop capturing without canceling Kusto queries, **Resume** to open another period in the same named session, or **Stop** to finish. Queries still in flight when Pause is selected are excluded from the recording.
 
 Each execution retains its KQL, source-tab title, cluster and database, start and completion times, duration, outcome, error details, inferred values of interest, and every materialized result table within the capture limits. Failed, canceled, interrupted, capture-failed, and zero-row executions remain visible as investigation history.
 
@@ -128,6 +137,16 @@ The SecurityLogs acceptance workflow records URL, IP, authentication, employee, 
 
 Draft and validate widget KQL with GitHub Copilot in Query, then pin the caret-selected block directly to a dashboard. Every widget keeps its own Azure Data Explorer target, refresh cadence, display mode, visualization, colors, and snapped layout. Dashboard definitions can be exported and imported as JSON.
 
+Each dashboard stores one shared time range. Existing and new dashboards default to **Last 24 hours**; the toolbar also offers 15 minutes, 1 hour, 6 hours, 7 days, 30 days, and a fixed custom local start/end range. Relative ranges slide to the start of each refresh, while custom values are persisted and executed in UTC. Changing the range clears cached widget results and refreshes the dashboard immediately.
+
+Open Kusto Explorer prepends the Azure Data Explorer dashboard variables `_startTime` and `_endTime` to every widget execution. Widget KQL opts into filtering where it is semantically correct; the application does not guess a timestamp column or inject a `where` operator.
+
+```kusto
+Events
+| where Timestamp between (_startTime.._endTime)
+| summarize Events=count() by bin(Timestamp, 1h)
+```
+
 ![Query-backed dashboard workspace](docs/screenshots/dashboard.png)
 
 <p align="center"><em>Rendered query-backed charts and tables with independent refresh intervals, themes, and snap-grid layout.</em></p>
@@ -142,9 +161,13 @@ Schedule a KQL block without leaving the editor. Open Kusto Explorer retains up 
 
 - Run on an interval while the application is open and catch up one missed occurrence after restart.
 - Trigger when row count changes or crosses an `=`, `>=`, `<=`, or `!=` threshold.
-- Notify through in-app desktop alerts, TLS email, or a local application with templated arguments.
+- Notify through in-app desktop alerts, TLS email, a local application with templated arguments, or an HTTPS webhook.
 - Use `{row_count}`, `{rows_changed}`, `{name}`, and `{query}` in notification templates.
 - Feed scheduled `make-graph` and `graph()` results into the active named investigation graph.
+
+A webhook uses exactly one endpoint source: a stored absolute HTTPS URL or the name of an environment variable resolved when delivery begins. Prefer the environment-variable mode for signed or secret-bearing URLs; the resolved value is never persisted or included in an error. Delivery is an HTTP `POST` with `application/json`, redirects disabled, and a 30-second timeout per attempt.
+
+Webhook schema version 1 contains `eventType`, the run ID as `eventId`, automation identity and target, run timestamps and status, row count and signed delta, and the criteria that triggered the action. It deliberately excludes KQL, formatted notification text, result rows or values, credentials, and resolved environment URLs. Network failures, timeouts, HTTP 408, 429, and 5xx responses are retried after 1 and 2 seconds. Consumers should deduplicate possible repeat delivery with `eventId`; delivery failure is reported without changing the successful automation run or schedule.
 
 ## Follow The Evidence
 
@@ -212,6 +235,8 @@ Then:
 
 The initial workspace includes a local Help-cluster schema snapshot, so editor intelligence is available before the first connection is added.
 
+After the main window opens, the application makes one unauthenticated request to the official GitHub `releases/latest` endpoint. When a newer stable release exists, a small **Update** button appears in the top-right toolbar and opens the official release page. Open Kusto Explorer does not download or install updates automatically, and an offline or unavailable GitHub endpoint does not interrupt startup.
+
 ## Keyboard Essentials
 
 | Shortcut | Action |
@@ -219,6 +244,7 @@ The initial workspace includes a local Help-cluster schema snapshot, so editor i
 | `F5` or `Shift+Enter` | Run the query block at the caret |
 | `Esc` or `Shift+F5` | Cancel the active query |
 | `F1` | Show or refresh modeless help, with official Microsoft Learn links when available |
+| `Ctrl+O` | Import one or more `.kql` files into new query tabs |
 | `Ctrl+Space` | Open schema-aware completion |
 | `Ctrl+Enter` | Insert a new line and pipe |
 | `Ctrl+Shift+F` | Search titles and KQL across open tabs |
@@ -233,15 +259,16 @@ Application state lives under the platform's local application-data directory. O
 | File | Contents |
 | --- | --- |
 | `connections.json` | Cluster and database catalog plus cached schemas; no credentials |
-| `documents.json` | Open tabs, text, caret positions, grouping, colors, targets, and formatting rules |
-| `dashboards.json` | Dashboard definitions, widget KQL, layout, refresh, and themes |
-| `automations.json` | Schedules, notification settings, and bounded run history |
+| `documents.json` | Open tabs, text, caret positions, groups, colors, targets, and formatting rules |
+| `dashboards.json` | Dashboard definitions, shared time ranges, widget KQL, layout, refresh, and themes |
+| `automations.json` | Schedules, notification settings and endpoint sources, and bounded run history |
 | `settings.json` | Theme, density, text size, AI provider metadata, and assistant defaults; never API keys |
 | `graph.db` | Named graph generations, observations, relationships, and evidence |
 | `recorded-sessions.db` | Recorded manual KQL, retained results, inferred interests, marks, endpoints, and pivot evidence |
 
 - Authentication tokens and account photos remain in memory for the current process.
 - SMTP credentials are read only from `OPENKUSTOEXPLORER_SMTP_USERNAME` and `OPENKUSTOEXPLORER_SMTP_PASSWORD`.
+- Environment-backed webhook URLs are resolved only for delivery and are never written to local state.
 - Kusto Explorer import excludes credentials, query history, cached result payloads, and source application settings.
 - Copilot result, graph, Learn MCP, and Azure MCP sharing are independently gated.
 - Recorded sessions are local, unencrypted per-user data with no automatic retention. Delete sensitive sessions explicitly from the Sessions workspace. Result rows are available to the assistant only through consented, session-pinned tools with strict row and output bounds.
@@ -281,7 +308,7 @@ dotnet build OpenKustoExplorer.slnx --configuration Release --no-restore -warnas
 dotnet test OpenKustoExplorer.slnx --configuration Release --no-build --no-restore
 ```
 
-CI runs formatting, warning-free builds, tests, Native AOT smoke execution, and desktop publication on Windows and Linux.
+CI runs a fail-closed direct/transitive NuGet vulnerability audit, formatting, warning-free builds, tests, Native AOT smoke execution, and desktop publication on Windows and Linux. CodeQL separately analyzes C# security and quality on pull requests, main pushes, and a weekly schedule. Dependabot checks centrally managed NuGet packages and GitHub Actions weekly, grouping compatible minor/patch updates while leaving major updates for individual review. Every successful push event to `main` then creates one stable GitHub release and matching source tag; pull requests, manual CI runs, and failed builds create neither.
 
 ### Performance Tracing
 
@@ -294,7 +321,23 @@ dotnet run --project src/OpenKustoExplorer.Desktop
 
 The same durations are emitted from the `OpenKustoExplorer.Performance` `System.Diagnostics.Metrics` meter for compatible runtime diagnostics tools.
 
-## Publish Native AOT
+## Automatic Releases
+
+`VersionPrefix` in `Directory.Build.props` is the floor for the current release series. CI derives a deterministic patch version from first-parent `main` history and passes it to every build and publish command, so the packaged assembly and generated `vMAJOR.MINOR.PATCH` tag always agree. The first commit carrying a new floor receives that exact version; later main commits increment its patch component. A push containing several commits or a failed earlier release can therefore leave unused patch numbers, but published SemVer ordering remains monotonic.
+
+For a breaking release, bump the major floor before merging the breaking-change pull request:
+
+```powershell
+pwsh ./scripts/Bump-MajorVersion.ps1
+```
+
+Review and commit the resulting `Directory.Build.props` change in that pull request. For example, a `1.x` floor becomes `2.0.0`; that merge publishes `v2.0.0`, and subsequent successful main pushes publish `v2.0.1`, `v2.0.2`, and so on. Use `-WhatIf` to preview the change. A merge commit or squash merge naturally places the new floor on the release commit. When using rebase merge, make the version-floor change the final commit so that earlier rebased commits do not intentionally advance the patch component. Do not run the bump only after the breaking changes have already merged, because their automatic patch release will already have been created.
+
+The release job begins only after both platform quality jobs pass. It attaches versioned Windows and Linux Native AOT archives plus separate symbol archives, creates the source tag at the triggering main commit, and reconciles the highest stable SemVer as GitHub's latest release. CI never edits or commits version files back to `main`. Repository policy must allow the release job's scoped `contents: write` permission, and published main history should not be force-rewritten.
+
+## Publish Native AOT Manually
+
+Manual local publications use the current `VersionPrefix`; official releases are produced by CI as described above.
 
 Windows x64:
 
@@ -321,6 +364,7 @@ The published bundle is self-contained; the target machine does not need a separ
 ## Current Boundaries
 
 - Interactive query results are materialized up to 10,000 rows; export and visualization operate on that bounded result.
+- One `.kql` import processes up to 100 files of at most 1 MiB each; UTF-8 and BOM-marked UTF-16 are supported.
 - Session recording persists up to 500 rows per execution across all result tables and labels capped executions as limited.
 - Generated pivot queries currently require one cluster/database and conservative direct table-column lineage.
 - Scheduled automations run while Open Kusto Explorer is open and catch up at most one missed occurrence.

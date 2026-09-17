@@ -9,6 +9,15 @@ public sealed class KustoAutomationNotification
 {
     private KustoAutomationNotification(
         KustoAutomationNotificationSettings settings,
+        Guid automationId,
+        string automationName,
+        Guid runId,
+        DateTimeOffset startedAtUtc,
+        DateTimeOffset completedAtUtc,
+        KustoAutomationRunStatus runStatus,
+        Uri clusterUri,
+        string databaseName,
+        IReadOnlyList<KustoAutomationNotificationTrigger> triggers,
         int rowCount,
         int rowsChanged,
         string title,
@@ -16,6 +25,15 @@ public sealed class KustoAutomationNotification
         string? applicationArguments)
     {
         Settings = settings;
+        AutomationId = automationId;
+        AutomationName = automationName;
+        RunId = runId;
+        StartedAtUtc = startedAtUtc;
+        CompletedAtUtc = completedAtUtc;
+        RunStatus = runStatus;
+        ClusterUri = clusterUri;
+        DatabaseName = databaseName;
+        Triggers = triggers;
         RowCount = rowCount;
         RowsChanged = rowsChanged;
         Title = title;
@@ -27,6 +45,51 @@ public sealed class KustoAutomationNotification
     /// Gets the channel and transport settings.
     /// </summary>
     public KustoAutomationNotificationSettings Settings { get; }
+
+    /// <summary>
+    /// Gets the stable automation identifier.
+    /// </summary>
+    public Guid AutomationId { get; }
+
+    /// <summary>
+    /// Gets the automation name at evaluation time.
+    /// </summary>
+    public string AutomationName { get; }
+
+    /// <summary>
+    /// Gets the stable run identifier used as the webhook event identifier.
+    /// </summary>
+    public Guid RunId { get; }
+
+    /// <summary>
+    /// Gets the run's UTC start time.
+    /// </summary>
+    public DateTimeOffset StartedAtUtc { get; }
+
+    /// <summary>
+    /// Gets the run's UTC completion time.
+    /// </summary>
+    public DateTimeOffset CompletedAtUtc { get; }
+
+    /// <summary>
+    /// Gets the run status at evaluation time.
+    /// </summary>
+    public KustoAutomationRunStatus RunStatus { get; }
+
+    /// <summary>
+    /// Gets the cluster targeted by the evaluated run.
+    /// </summary>
+    public Uri ClusterUri { get; }
+
+    /// <summary>
+    /// Gets the database targeted by the evaluated run.
+    /// </summary>
+    public string DatabaseName { get; }
+
+    /// <summary>
+    /// Gets matched notification criteria in deterministic order.
+    /// </summary>
+    public IReadOnlyList<KustoAutomationNotificationTrigger> Triggers { get; }
 
     /// <summary>
     /// Gets the current materialized row count.
@@ -110,8 +173,32 @@ public sealed class KustoAutomationNotification
                 rowCount,
                 rowsChanged,
                 useGroupedNumbers: false);
+        List<KustoAutomationNotificationTrigger> triggers = [];
+        if (changedMatches)
+        {
+            triggers.Add(new KustoAutomationNotificationTrigger(
+                KustoAutomationNotificationTriggerKind.RowCountChanged));
+        }
+
+        if (comparisonMatches)
+        {
+            triggers.Add(new KustoAutomationNotificationTrigger(
+                KustoAutomationNotificationTriggerKind.RowCountComparison,
+                settings.RowCountComparison,
+                settings.RowCountValue));
+        }
+
         return new KustoAutomationNotification(
             settings,
+            automation.Id,
+            automation.Name,
+            currentRun.Id,
+            currentRun.StartedAtUtc,
+            currentRun.CompletedAtUtc,
+            currentRun.Status,
+            currentRun.ClusterUri ?? automation.ClusterUri,
+            currentRun.DatabaseName ?? automation.DatabaseName,
+            Array.AsReadOnly(triggers.ToArray()),
             rowCount,
             rowsChanged,
             title,

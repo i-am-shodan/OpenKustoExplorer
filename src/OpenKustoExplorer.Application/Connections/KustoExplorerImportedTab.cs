@@ -44,7 +44,10 @@ public sealed class KustoExplorerImportedTab
         bool hasDatabase = !string.IsNullOrWhiteSpace(databaseName);
         if (hasCluster != hasDatabase)
         {
-            throw new ArgumentException("An imported tab target requires both cluster and database.");
+            string parameterName = hasCluster ? nameof(databaseName) : nameof(clusterUri);
+            throw new ArgumentException(
+                "An imported tab target requires both cluster and database.",
+                parameterName);
         }
 
         if (clusterUri is not null && (!clusterUri.IsAbsoluteUri || clusterUri.Scheme != Uri.UriSchemeHttps))

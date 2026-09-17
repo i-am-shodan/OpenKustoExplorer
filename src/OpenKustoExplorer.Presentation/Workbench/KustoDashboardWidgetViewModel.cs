@@ -19,6 +19,7 @@ public sealed class KustoDashboardWidgetViewModel : ObservableObject, IDisposabl
 
     private readonly Action<KustoDashboardWidgetViewModel>? definitionChanged;
     private readonly IKustoQueryService queryService;
+    private readonly Func<DateTimeOffset, KustoDashboardTimeRangeBounds> timeRangeResolver;
     private string accentColor;
     private string backgroundColor;
     private DateTimeOffset? cachedAtUtc;
@@ -30,6 +31,8 @@ public sealed class KustoDashboardWidgetViewModel : ObservableObject, IDisposabl
     private string errorMessage = string.Empty;
     private bool isDisposed;
     private bool isRefreshing;
+    private CancellationTokenSource? refreshCancellationSource;
+    private int refreshGeneration;
     private DateTimeOffset? lastRefreshedAtUtc;
     private DateTimeOffset? nextRefreshAtUtc;
     private string foregroundColor;
@@ -51,15 +54,19 @@ public sealed class KustoDashboardWidgetViewModel : ObservableObject, IDisposabl
     /// <param name="definition">The persisted widget definition.</param>
     /// <param name="queryService">The Kusto query service.</param>
     /// <param name="definitionChanged">An optional callback that persists definition changes.</param>
+    /// <param name="timeRangeResolver">An optional owning-dashboard time-range resolver.</param>
     public KustoDashboardWidgetViewModel(
         KustoDashboardWidget definition,
         IKustoQueryService queryService,
-        Action<KustoDashboardWidgetViewModel>? definitionChanged = null)
+        Action<KustoDashboardWidgetViewModel>? definitionChanged = null,
+        Func<DateTimeOffset, KustoDashboardTimeRangeBounds>? timeRangeResolver = null)
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(queryService);
         this.queryService = queryService;
         this.definitionChanged = definitionChanged;
+        this.timeRangeResolver = timeRangeResolver
+            ?? KustoDashboardTimeRange.Last24Hours.Resolve;
         Id = definition.Id;
         title = definition.Title;
         clusterUri = definition.ClusterUri;
@@ -357,26 +364,77 @@ public sealed class KustoDashboardWidgetViewModel : ObservableObject, IDisposabl
     }
 
     /// <summary>
+    /// Refreshes the widget with pre-resolved dashboard bounds if its interval has elapsed.
+    /// </summary>
+    /// <param name="utcNow">The current UTC time.</param>
+    /// <param name="bounds">The shared dashboard bounds.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>A task representing the refresh check.</returns>
+    public Task RefreshIfDueAsync(
+        DateTimeOffset utcNow,
+        KustoDashboardTimeRangeBounds bounds,
+        CancellationToken cancellationToken = default)
+    {
+        return NextRefreshAtUtc is null || NextRefreshAtUtc <= utcNow
+            ? RefreshAsync(utcNow, bounds, cancellationToken)
+            : Task.CompletedTask;
+    }
+
+    /// <summary>
     /// Immediately executes and projects this widget's query.
     /// </summary>
     /// <param name="utcNow">The UTC time used to schedule the next refresh.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>A task representing query execution.</returns>
-    public async Task RefreshAsync(DateTimeOffset utcNow, CancellationToken cancellationToken = default)
+    public Task RefreshAsync(DateTimeOffset utcNow, CancellationToken cancellationToken = default)
     {
-        if (IsRefreshing || isDisposed)
+        return RefreshAsync(utcNow, timeRangeResolver(utcNow), cancellationToken);
+    }
+
+    /// <summary>
+    /// Immediately executes this widget's query with fixed dashboard time bounds.
+    /// </summary>
+    /// <param name="utcNow">The UTC time used to schedule the next refresh.</param>
+    /// <param name="bounds">The shared dashboard bounds.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>A task representing query execution.</returns>
+    public async Task RefreshAsync(
+        DateTimeOffset utcNow,
+        KustoDashboardTimeRangeBounds bounds,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(bounds);
+
+        if (isDisposed)
         {
             return;
         }
 
+        int generation = ++refreshGeneration;
+        using CancellationTokenSource linkedCancellationSource =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        if (refreshCancellationSource is not null)
+        {
+            await refreshCancellationSource.CancelAsync();
+        }
+
+        refreshCancellationSource = linkedCancellationSource;
         IsRefreshing = true;
         ErrorMessage = string.Empty;
         ResultSummary = "Refreshing";
 
         try
         {
-            KustoQueryRequest request = new(ClusterUri, DatabaseName, QueryText);
-            KustoQueryResult result = await queryService.ExecuteAsync(request, cancellationToken);
+            string executableQuery = KustoDashboardTimeRangeQueryComposer.Compose(QueryText, bounds);
+            KustoQueryRequest request = new(ClusterUri, DatabaseName, executableQuery);
+            KustoQueryResult result = await queryService.ExecuteAsync(
+                request,
+                linkedCancellationSource.Token);
+            if (generation != refreshGeneration)
+            {
+                return;
+            }
+
             ApplyResult(result);
             LastRefreshedAtUtc = utcNow;
             NextRefreshAtUtc = utcNow.Add(RefreshInterval);
@@ -384,19 +442,29 @@ public sealed class KustoDashboardWidgetViewModel : ObservableObject, IDisposabl
             cachedAtUtc = utcNow;
             definitionChanged?.Invoke(this);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (linkedCancellationSource.IsCancellationRequested)
         {
-            ResultSummary = "Refresh canceled";
+            if (generation == refreshGeneration)
+            {
+                ResultSummary = "Refresh canceled";
+            }
         }
         catch (Exception exception)
         {
-            ErrorMessage = exception.Message;
-            ResultSummary = "Refresh failed";
-            NextRefreshAtUtc = utcNow.Add(RefreshInterval);
+            if (generation == refreshGeneration)
+            {
+                ErrorMessage = exception.Message;
+                ResultSummary = "Refresh failed";
+                NextRefreshAtUtc = utcNow.Add(RefreshInterval);
+            }
         }
         finally
         {
-            IsRefreshing = false;
+            if (generation == refreshGeneration)
+            {
+                refreshCancellationSource = null;
+                IsRefreshing = false;
+            }
         }
     }
 
@@ -488,8 +556,30 @@ public sealed class KustoDashboardWidgetViewModel : ObservableObject, IDisposabl
         if (!isDisposed)
         {
             isDisposed = true;
+            refreshGeneration++;
+            refreshCancellationSource?.Cancel();
             RefreshCommand.Cancel();
         }
+    }
+
+    /// <summary>
+    /// Clears result state that belongs to a superseded dashboard time range.
+    /// </summary>
+    internal void InvalidateForTimeRangeChange()
+    {
+        refreshGeneration++;
+        refreshCancellationSource?.Cancel();
+        refreshCancellationSource = null;
+        cachedResult = null;
+        cachedAtUtc = null;
+        ErrorMessage = string.Empty;
+        ResultColumns = [];
+        ResultRows = [];
+        Visualization = null;
+        ResultSummary = "Waiting for refresh";
+        LastRefreshedAtUtc = null;
+        NextRefreshAtUtc = null;
+        IsRefreshing = false;
     }
 
     private static KustoQueryResult CreateCachedResult(KustoQueryResult result)

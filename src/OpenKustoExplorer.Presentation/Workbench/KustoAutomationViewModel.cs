@@ -16,6 +16,7 @@ public sealed class KustoAutomationViewModel : ObservableObject
 
     private readonly DateTimeOffset createdAtUtc;
     private readonly Action<KustoAutomationViewModel> stateChangedAction;
+    private Uri clusterUri;
     private bool isEnabled;
     private bool isRunning;
     private string name;
@@ -53,7 +54,7 @@ public sealed class KustoAutomationViewModel : ObservableObject
         Id = automation.Id;
         name = automation.Name;
         notificationSettings = automation.NotificationSettings;
-        ClusterUri = automation.ClusterUri;
+        clusterUri = automation.ClusterUri;
         DatabaseName = automation.DatabaseName;
         QueryText = automation.QueryText;
         Interval = automation.Interval;
@@ -125,7 +126,7 @@ public sealed class KustoAutomationViewModel : ObservableObject
     /// <summary>
     /// Gets the target cluster URI.
     /// </summary>
-    public Uri ClusterUri { get; }
+    public Uri ClusterUri => clusterUri;
 
     /// <summary>
     /// Gets the target database name.
@@ -391,6 +392,23 @@ public sealed class KustoAutomationViewModel : ObservableObject
         notificationSettings = settings;
         OnPropertyChanged(nameof(NotificationSettings));
         OnPropertyChanged(nameof(NotificationSummary));
+    }
+
+    /// <summary>
+    /// Retargets future runs while preserving historical run provenance.
+    /// </summary>
+    /// <param name="newClusterUri">The replacement cluster authority.</param>
+    internal void RetargetCluster(Uri newClusterUri)
+    {
+        ArgumentNullException.ThrowIfNull(newClusterUri);
+        if (!newClusterUri.IsAbsoluteUri || newClusterUri.Scheme != Uri.UriSchemeHttps)
+        {
+            throw new ArgumentException("An automation cluster URI must be absolute HTTPS.", nameof(newClusterUri));
+        }
+
+        clusterUri = newClusterUri;
+        OnPropertyChanged(nameof(ClusterUri));
+        OnPropertyChanged(nameof(TargetText));
     }
 
     /// <summary>

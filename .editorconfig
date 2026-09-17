@@ -38,9 +38,18 @@ dotnet_diagnostic.SA1633.severity = none
 dotnet_diagnostic.S1142.severity = error
 dotnet_diagnostic.S134.severity = error
 dotnet_diagnostic.S3776.severity = error
+dotnet_diagnostic.MA0004.severity = suggestion
+dotnet_diagnostic.MA0006.severity = suggestion
+dotnet_diagnostic.MA0008.severity = suggestion
+dotnet_diagnostic.MA0046.severity = suggestion
+dotnet_diagnostic.MA0051.severity = suggestion
+dotnet_diagnostic.MA0097.severity = suggestion
 dotnet_code_quality.S1142.max = 1
 dotnet_code_quality.S134.max = 3
 dotnet_code_quality.S3776.threshold = 15
+
+[tests/**/*.cs]
+dotnet_diagnostic.MA0002.severity = suggestion
 
 [*.md]
 trim_trailing_whitespace = false

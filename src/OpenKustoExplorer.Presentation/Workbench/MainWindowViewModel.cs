@@ -55,6 +55,9 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     private readonly IKustoLanguageService languageService;
     private Guid? activeRecordedExecutionId;
     private KustoDatabaseViewModel? activeDatabase;
+    private Uri? activeExecutedClusterUri;
+    private string activeExecutedDatabaseName = string.Empty;
+    private string activeExecutedQueryText = string.Empty;
     private KustoResultTable? activeResultTable;
     private int activeSchemaRevision;
     private string addClusterErrorText = string.Empty;
@@ -99,6 +102,8 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     private string newClusterFolderName = string.Empty;
     private int nextDocumentNumber = 1;
     private string organizeClusterDisplayName = string.Empty;
+    private string organizeClusterAddress = string.Empty;
+    private string organizeClusterErrorText = string.Empty;
     private string organizeFolderName = string.Empty;
     private KustoClusterViewModel? organizingCluster;
     private string queryErrorText = string.Empty;
@@ -342,7 +347,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         SaveRenameAutomationCommand = new RelayCommand(
             SaveRenameAutomation,
             () => CanSaveRenameAutomation);
-        SaveClusterFolderCommand = new RelayCommand(SaveClusterFolder);
+        SaveClusterFolderCommand = new RelayCommand(SaveClusterFolder, () => CanSaveClusterProperties);
         SaveGroupTabCommand = new RelayCommand(SaveGroupTab);
         SaveRenameTabCommand = new RelayCommand(SaveRenameTab, () => CanSaveRenameTab);
         SelectDatabaseCommand = new AsyncRelayCommand<KustoDatabaseViewModel>(
@@ -1673,12 +1678,33 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
-    /// Gets the display name of the cluster currently being organized.
+    /// Gets or sets the display name of the cluster currently being organized.
     /// </summary>
     public string OrganizeClusterDisplayName
     {
         get => organizeClusterDisplayName;
-        private set => SetProperty(ref organizeClusterDisplayName, value);
+        set
+        {
+            if (SetProperty(ref organizeClusterDisplayName, value))
+            {
+                NotifyClusterPropertiesChanged();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gets or sets the complete cluster URL in the connection properties editor.
+    /// </summary>
+    public string OrganizeClusterAddress
+    {
+        get => organizeClusterAddress;
+        set
+        {
+            if (SetProperty(ref organizeClusterAddress, value))
+            {
+                NotifyClusterPropertiesChanged();
+            }
+        }
     }
 
     /// <summary>
@@ -1688,6 +1714,50 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     {
         get => organizeFolderName;
         set => SetProperty(ref organizeFolderName, value);
+    }
+
+    /// <summary>Gets the latest connection-properties validation error.</summary>
+    public string OrganizeClusterErrorText
+    {
+        get => organizeClusterErrorText;
+        private set
+        {
+            if (SetProperty(ref organizeClusterErrorText, value))
+            {
+                OnPropertyChanged(nameof(HasOrganizeClusterError));
+            }
+        }
+    }
+
+    /// <summary>Gets a value indicating whether the connection-properties error is visible.</summary>
+    public bool HasOrganizeClusterError => OrganizeClusterErrorText.Length > 0;
+
+    /// <summary>Gets a value indicating whether edited connection properties can be saved.</summary>
+    public bool CanSaveClusterProperties => organizingCluster is not null
+        && !string.IsNullOrWhiteSpace(OrganizeClusterDisplayName)
+        && TryNormalizeClusterUri(OrganizeClusterAddress, out _);
+
+    /// <summary>Gets the number of persisted assets that reference the edited cluster.</summary>
+    public string OrganizeClusterReferenceSummary
+    {
+        get
+        {
+            if (organizingCluster is null)
+            {
+                return string.Empty;
+            }
+
+            int documentCount = Documents.Count(document => IsSameCluster(
+                document.ClusterUri,
+                organizingCluster.ClusterUri));
+            int widgetCount = Dashboard.Dashboards
+                .SelectMany(dashboard => dashboard.Widgets)
+                .Count(widget => IsSameCluster(widget.ClusterUri, organizingCluster.ClusterUri));
+            int automationCount = Automations.Count(automation => IsSameCluster(
+                automation.ClusterUri,
+                organizingCluster.ClusterUri));
+            return $"{documentCount:N0} query tabs, {widgetCount:N0} widgets, {automationCount:N0} automations";
+        }
     }
 
     /// <summary>
@@ -2130,6 +2200,16 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     /// <param name="column">The active result column.</param>
     public void ToggleResultSort(KustoResultColumnViewModel column)
     {
+        ToggleResultSort(column, extendSort: false);
+    }
+
+    /// <summary>
+    /// Advances one result sort and optionally preserves the other active sort keys.
+    /// </summary>
+    /// <param name="column">The active result column.</param>
+    /// <param name="extendSort">Whether the existing ordered sort set is preserved.</param>
+    public void ToggleResultSort(KustoResultColumnViewModel column, bool extendSort)
+    {
         ArgumentNullException.ThrowIfNull(column);
 
         if (!ResultColumns.Contains(column))
@@ -2141,12 +2221,25 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
 
         try
         {
-            foreach (KustoResultColumnViewModel otherColumn in ResultColumns.Where(candidate => candidate != column))
+            if (!extendSort)
             {
-                otherColumn.ClearSort();
+                foreach (KustoResultColumnViewModel otherColumn in ResultColumns.Where(candidate => candidate != column))
+                {
+                    otherColumn.ClearSort();
+                }
             }
 
-            column.CycleSort();
+            int priority = column.SortPriority
+                ?? (ResultColumns.Where(candidate => candidate.IsSortActive).Max(candidate => candidate.SortPriority) ?? 0) + 1;
+            column.CycleSort(priority);
+            int normalizedPriority = 1;
+            foreach (KustoResultColumnViewModel activeColumn in ResultColumns
+                .Where(candidate => candidate.IsSortActive)
+                .OrderBy(candidate => candidate.SortPriority))
+            {
+                activeColumn.SetSortPriority(normalizedPriority);
+                normalizedPriority++;
+            }
         }
         finally
         {
@@ -2234,6 +2327,44 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
+    /// Creates the exact executed query followed by the displayed result projection as tab-separated text.
+    /// </summary>
+    /// <returns>The query-and-results clipboard payload.</returns>
+    public string CreateQueryAndResultsClipboardText()
+    {
+        if (string.IsNullOrEmpty(activeExecutedQueryText)
+            || activeExecutedClusterUri is null
+            || string.IsNullOrEmpty(activeExecutedDatabaseName))
+        {
+            throw new InvalidOperationException("Run a query before copying query and results.");
+        }
+
+        return string.Concat(
+            "Cluster: ",
+            activeExecutedClusterUri.AbsoluteUri,
+            Environment.NewLine,
+            "Database: ",
+            activeExecutedDatabaseName,
+            Environment.NewLine,
+            Environment.NewLine,
+            activeExecutedQueryText,
+            Environment.NewLine,
+            Environment.NewLine,
+            CreateClipboardText(ResultRows));
+    }
+
+    /// <summary>
+    /// Creates the exact KQL block that produced the displayed result.
+    /// </summary>
+    /// <returns>The executed query clipboard payload.</returns>
+    public string CreateQueryClipboardText()
+    {
+        return string.IsNullOrEmpty(activeExecutedQueryText)
+            ? throw new InvalidOperationException("Run a query before copying it.")
+            : activeExecutedQueryText;
+    }
+
+    /// <summary>
     /// Creates a KQL datatable expression for selected result rows.
     /// </summary>
     /// <param name="rows">The selected rows, or an empty list for the context row.</param>
@@ -2255,7 +2386,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     {
         KustoResultTable table = activeResultTable
             ?? throw new InvalidOperationException("Run a query before copying results.");
-        return KustoResultDataExporter.CreateKqlDatatable(table, table.Rows);
+        return KustoResultDataExporter.CreateKqlDatatable(table, GetSourceRows(ResultRows));
     }
 
     /// <summary>
@@ -2267,7 +2398,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     {
         KustoResultTable table = activeResultTable
             ?? throw new InvalidOperationException("Run a query before exporting results.");
-        return KustoResultDataExporter.CreateFile(table, format);
+        return KustoResultDataExporter.CreateFile(table, GetSourceRows(ResultRows), format);
     }
 
     /// <summary>
@@ -2337,6 +2468,55 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         KustoDocumentViewModel target = offset < 0 ? targetBlock[0] : targetBlock[^1];
         MoveDocumentBlock(source, target, placeAfter: offset > 0);
         return true;
+    }
+
+    /// <summary>
+    /// Imports decoded KQL files into new query tabs that inherit the active document target.
+    /// </summary>
+    /// <param name="files">The files to import in picker order.</param>
+    /// <returns>The imported documents in the same order.</returns>
+    public IReadOnlyList<KustoDocumentViewModel> ImportKqlFiles(IReadOnlyList<KustoQueryFileContent> files)
+    {
+        ArgumentNullException.ThrowIfNull(files);
+        Uri? clusterUri = SelectedDocument?.ClusterUri;
+        string? databaseName = SelectedDocument?.DatabaseName;
+        List<KustoDocumentViewModel> importedDocuments = [];
+
+        foreach (KustoQueryFileContent file in files)
+        {
+            if (file is null)
+            {
+                throw new ArgumentNullException(nameof(files), "Imported files cannot contain null entries.");
+            }
+
+            string baseTitle = Path.GetFileNameWithoutExtension(file.FileName);
+            if (string.IsNullOrWhiteSpace(baseTitle))
+            {
+                baseTitle = "Imported query";
+            }
+
+            string title = GetUniqueDocumentTitle(baseTitle);
+            KustoDocument document = new(
+                Guid.NewGuid(),
+                title,
+                file.Text,
+                0,
+                clusterUri,
+                databaseName);
+            KustoDocumentViewModel viewModel = CreateDocumentViewModel(document);
+            AddDocument(viewModel);
+            importedDocuments.Add(viewModel);
+        }
+
+        if (importedDocuments.Count > 0)
+        {
+            SelectedDocument = importedDocuments[^1];
+            StatusText = importedDocuments.Count == 1
+                ? $"Imported {importedDocuments[0].Title}"
+                : $"Imported {importedDocuments.Count:N0} KQL files";
+        }
+
+        return importedDocuments.AsReadOnly();
     }
 
     /// <inheritdoc />
@@ -2420,14 +2600,12 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
 
     private static string GetConnectionStatusText(KustoDatabaseViewModel? database)
     {
-        string statusText = "Select a database";
-
-        if (database is not null)
+        if (database is null)
         {
-            statusText = database.IsSchemaLoaded ? "Schema cached" : "Schema not loaded";
+            return "Select a database";
         }
 
-        return statusText;
+        return database.IsSchemaLoaded ? "Schema cached" : "Schema not loaded";
     }
 
     private static Uri NormalizeClusterUri(string clusterAddress)
@@ -2440,6 +2618,14 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         }
 
         return clusterUri!;
+    }
+
+    private static bool IsSameCluster(Uri? left, Uri right)
+    {
+        return left is not null && string.Equals(
+            left.GetLeftPart(UriPartial.Authority),
+            right.GetLeftPart(UriPartial.Authority),
+            StringComparison.OrdinalIgnoreCase);
     }
 
     private static string? NormalizeFolderName(string? folderName)
@@ -2830,6 +3016,9 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         }
 
         activeResultTable = null;
+        activeExecutedClusterUri = null;
+        activeExecutedDatabaseName = string.Empty;
+        activeExecutedQueryText = string.Empty;
         activeRecordedExecutionId = null;
         resultContextCell = null;
         InspectedResultCell = null;
@@ -2869,6 +3058,9 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
             queryInfo.CopyFrom(QueryInfo);
             documentOutputStates[document.Id] = new KustoDocumentOutputState(
                 activeResultTable,
+                activeExecutedClusterUri,
+                activeExecutedDatabaseName,
+                activeExecutedQueryText,
                 activeRecordedExecutionId,
                 ResultColumns.ToArray(),
                 resultSourceRows.ToArray(),
@@ -2891,6 +3083,9 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
                 ? existingState
                 : new KustoDocumentOutputState();
         activeResultTable = state.ResultTable;
+        activeExecutedClusterUri = state.ExecutedClusterUri;
+        activeExecutedDatabaseName = state.ExecutedDatabaseName;
+        activeExecutedQueryText = state.ExecutedQueryText;
         activeRecordedExecutionId = state.RecordedExecutionId;
         resultContextCell = null;
         InspectedResultCell = state.InspectedResultCell;
@@ -3731,15 +3926,18 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         KustoQueryResult result = await queryService.ExecuteAsync(request, cancellationToken);
         KustoVisualization? effectiveVisualization = result.Visualization ?? queryVisualization;
         ApplyQueryResult(result, effectiveVisualization);
+        activeExecutedClusterUri = request.ClusterUri;
+        activeExecutedDatabaseName = request.DatabaseName;
+        activeExecutedQueryText = request.QueryText;
         QueryInfo.Complete(result, effectiveVisualization, DateTimeOffset.Now);
-        await Recording.CompleteExecutionAsync(
+        bool retained = await Recording.CompleteExecutionAsync(
             recordedExecutionId,
             new KustoRecordedExecutionCompletion(
                 KustoRecordedExecutionStatus.Succeeded,
                 DateTimeOffset.UtcNow,
                 result,
                 null));
-        activeRecordedExecutionId = recordedExecutionId;
+        activeRecordedExecutionId = retained ? recordedExecutionId : null;
         ApplyRecordingAnnotations();
         StatusText = $"Query completed in {result.Duration.TotalMilliseconds:N0} ms";
         return true;
@@ -3793,6 +3991,9 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
             cancellationToken);
         QueryInfo.CompleteGraph(graphResult, DateTimeOffset.Now);
         ApplyGraphQueryResult(graphResult);
+        activeExecutedClusterUri = request.ClusterUri;
+        activeExecutedDatabaseName = request.DatabaseName;
+        activeExecutedQueryText = request.QueryText;
         KustoResultTable? recordedTable = graphResult.Export.ResultTable;
         KustoQueryResultCompleteness completeness = recordedTable is not null
             && recordedTable.Rows.Count < graphResult.Export.EdgeCount
@@ -3802,14 +4003,14 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
             recordedTable is null ? [] : [recordedTable],
             graphResult.Export.Duration,
             completeness: completeness);
-        await Recording.CompleteExecutionAsync(
+        bool retained = await Recording.CompleteExecutionAsync(
             recordedExecutionId,
             new KustoRecordedExecutionCompletion(
                 KustoRecordedExecutionStatus.Succeeded,
                 DateTimeOffset.UtcNow,
                 recordedResult,
                 null));
-        activeRecordedExecutionId = recordedExecutionId;
+        activeRecordedExecutionId = retained ? recordedExecutionId : null;
         WorkbenchMode = KustoWorkbenchMode.Graph;
         await Graph.RefreshAsync(cancellationToken);
         StatusText = $"Graph query completed in {graphResult.Export.Duration.TotalMilliseconds:N0} ms";
@@ -4170,7 +4371,6 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
 
         KustoResultRow[] sourceRows = selectedRows
             .DistinctBy(row => row.RowIndex)
-            .OrderBy(row => row.RowIndex)
             .Select(row => table.Rows[row.RowIndex])
             .ToArray();
 
@@ -4472,13 +4672,20 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     {
         organizingCluster = null;
         IsOrganizeClusterOpen = false;
+        OrganizeClusterAddress = string.Empty;
         OrganizeClusterDisplayName = string.Empty;
+        OrganizeClusterErrorText = string.Empty;
         OrganizeFolderName = string.Empty;
     }
 
     private KustoClusterViewModel CreateClusterViewModel(KustoClusterConnection connection)
     {
-        return new KustoClusterViewModel(connection, RefreshClusterAsync, RemoveCluster, OpenOrganizeCluster);
+        return new KustoClusterViewModel(
+            connection,
+            RefreshClusterAsync,
+            RemoveCluster,
+            OpenOrganizeCluster,
+            OpenOrganizeCluster);
     }
 
     private KustoDocumentViewModel CreateDocumentViewModel(KustoDocument document)
@@ -4983,13 +5190,15 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         {
             automation.BeginRun();
             DateTimeOffset startedAtUtc = DateTimeOffset.UtcNow;
+            Uri runClusterUri = automation.ClusterUri;
+            string runDatabaseName = automation.DatabaseName;
             KustoAutomationRun run;
 
             try
             {
                 KustoQueryRequest request = new(
-                    automation.ClusterUri,
-                    automation.DatabaseName,
+                    runClusterUri,
+                    runDatabaseName,
                     automation.QueryText);
                 KustoQueryResult result = await ExecuteAutomationQueryAsync(
                     automation,
@@ -5002,7 +5211,9 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
                     DateTimeOffset.UtcNow,
                     KustoAutomationRunStatus.Succeeded,
                     null,
-                    result);
+                    result,
+                    runClusterUri,
+                    runDatabaseName);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -5012,7 +5223,9 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
                     DateTimeOffset.UtcNow,
                     KustoAutomationRunStatus.Canceled,
                     "Application shutdown canceled the query.",
-                    null);
+                    null,
+                    runClusterUri,
+                    runDatabaseName);
             }
             catch (Exception exception)
             {
@@ -5022,7 +5235,9 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
                     DateTimeOffset.UtcNow,
                     KustoAutomationRunStatus.Failed,
                     exception.Message,
-                    null);
+                    null,
+                    runClusterUri,
+                    runDatabaseName);
             }
 
             KustoVisualization? runVisualization = run.Result?.Visualization;
@@ -5118,9 +5333,13 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         ArgumentNullException.ThrowIfNull(cluster);
 
         organizingCluster = cluster;
+        OrganizeClusterAddress = cluster.ClusterUri.AbsoluteUri;
         OrganizeClusterDisplayName = cluster.DisplayName;
         OrganizeFolderName = cluster.FolderName ?? string.Empty;
+        OrganizeClusterErrorText = string.Empty;
         IsOrganizeClusterOpen = true;
+        OnPropertyChanged(nameof(OrganizeClusterReferenceSummary));
+        NotifyClusterPropertiesChanged();
     }
 
     private void OpenRenameTab(KustoDocumentViewModel document)
@@ -5264,17 +5483,125 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
 
     private void SaveClusterFolder()
     {
-        if (organizingCluster is not null)
+        if (organizingCluster is null)
         {
+            return;
+        }
+
+        OrganizeClusterErrorText = string.Empty;
+        try
+        {
+            KustoClusterViewModel cluster = organizingCluster;
+            Uri newClusterUri = NormalizeClusterUri(OrganizeClusterAddress);
+            string displayName = OrganizeClusterDisplayName.Trim();
             string? folderName = NormalizeFolderName(OrganizeFolderName);
-            organizingCluster.SetFolder(folderName);
-            RebuildFolders();
-            UpdateVisibleClusters();
-            PersistCatalog();
-            string location = folderName ?? "Explorer root";
-            StatusText = $"Moved {organizingCluster.DisplayName} to {location}";
+            bool duplicate = Clusters.Any(candidate => !ReferenceEquals(candidate, cluster)
+                && IsSameCluster(candidate.ClusterUri, newClusterUri));
+            if (duplicate)
+            {
+                throw new InvalidOperationException("A connection for this cluster URL already exists.");
+            }
+
+            bool changesAuthority = !IsSameCluster(cluster.ClusterUri, newClusterUri);
+            if (changesAuthority)
+            {
+                EnsureClusterReferencesAreIdle(cluster.ClusterUri);
+                MigrateClusterReferences(cluster, newClusterUri, displayName, folderName);
+                StatusText = $"Updated connection to {newClusterUri.Host}";
+            }
+            else
+            {
+                cluster.ApplyDetails(displayName, folderName);
+                RebuildFolders();
+                UpdateVisibleClusters();
+                PersistCatalog();
+                StatusText = $"Updated {displayName}";
+            }
+
             CloseOrganizeCluster();
         }
+        catch (Exception exception) when (exception is ArgumentException
+            or InvalidOperationException
+            or UriFormatException)
+        {
+            OrganizeClusterErrorText = exception.Message;
+        }
+    }
+
+    private void EnsureClusterReferencesAreIdle(Uri clusterUri)
+    {
+        bool queryIsRunning = IsRunningQuery && IsSameCluster(SelectedDocument?.ClusterUri, clusterUri);
+        bool widgetIsRunning = Dashboard.Dashboards
+            .SelectMany(dashboard => dashboard.Widgets)
+            .Any(widget => widget.IsRefreshing && IsSameCluster(widget.ClusterUri, clusterUri));
+        bool automationIsRunning = Automations.Any(automation =>
+            automation.IsRunning && IsSameCluster(automation.ClusterUri, clusterUri));
+        if (queryIsRunning || widgetIsRunning || automationIsRunning)
+        {
+            throw new InvalidOperationException("Wait for queries using this connection to finish before changing its URL.");
+        }
+    }
+
+    private void MigrateClusterReferences(
+        KustoClusterViewModel cluster,
+        Uri newClusterUri,
+        string displayName,
+        string? folderName)
+    {
+        Uri oldClusterUri = cluster.ClusterUri;
+        string? selectedDatabaseName = activeDatabase is not null && IsSameCluster(
+            activeDatabase.ClusterUri,
+            oldClusterUri)
+                ? activeDatabase.Name
+                : null;
+        KustoDatabaseConnection[] databases = cluster.Databases
+            .Select(database => new KustoDatabaseConnection(database.Name, database.DisplayName, null))
+            .ToArray();
+        KustoClusterViewModel replacement = CreateClusterViewModel(new KustoClusterConnection(
+            newClusterUri,
+            displayName,
+            databases,
+            folderName));
+        int clusterIndex = Clusters.IndexOf(cluster);
+        Clusters[clusterIndex] = replacement;
+
+        foreach (KustoDocumentViewModel document in Documents.Where(document => IsSameCluster(
+            document.ClusterUri,
+            oldClusterUri)))
+        {
+            document.SetTarget(newClusterUri, document.DatabaseName!);
+        }
+
+        Dashboard.RetargetCluster(oldClusterUri, newClusterUri);
+        foreach (KustoAutomationViewModel automation in Automations.Where(automation => IsSameCluster(
+            automation.ClusterUri,
+            oldClusterUri)))
+        {
+            automation.RetargetCluster(newClusterUri);
+        }
+
+        (queryService as IKustoAuthenticationSessionInvalidator)?.InvalidateClusterSession(oldClusterUri);
+        RebuildFolders();
+        UpdateVisibleClusters();
+        PersistCatalog();
+        PersistAutomations();
+        ScheduleDocumentAutosave();
+
+        KustoDatabaseViewModel? replacementDatabase = replacement.Databases.FirstOrDefault(database => string.Equals(
+            database.Name,
+            selectedDatabaseName,
+            StringComparison.OrdinalIgnoreCase));
+        if (replacementDatabase is not null)
+        {
+            SelectedExplorerItem = replacementDatabase;
+        }
+    }
+
+    private void NotifyClusterPropertiesChanged()
+    {
+        OrganizeClusterErrorText = string.Empty;
+        OnPropertyChanged(nameof(CanSaveClusterProperties));
+        SaveClusterFolderCommand.NotifyCanExecuteChanged();
     }
 
     private void SaveGroupTab()
@@ -5403,6 +5730,9 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
 
     private sealed record KustoDocumentOutputState(
         KustoResultTable? ResultTable,
+        Uri? ExecutedClusterUri,
+        string ExecutedDatabaseName,
+        string ExecutedQueryText,
         Guid? RecordedExecutionId,
         IReadOnlyList<KustoResultColumnViewModel> ResultColumns,
         IReadOnlyList<KustoResultRowViewModel> ResultSourceRows,
@@ -5419,6 +5749,9 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         internal KustoDocumentOutputState()
             : this(
                 null,
+                null,
+                string.Empty,
+                string.Empty,
                 null,
                 [],
                 [],

@@ -108,6 +108,66 @@ public sealed class KustoResultDataExporterTests
         Assert.DoesNotContain("string(null)", datatable, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Verifies every file format honors row projection order and KQL emits a runnable script file.
+    /// </summary>
+    [Fact]
+    public void FileExportsUseRequestedRowsInRequestedOrder()
+    {
+        KustoResultTable table = CreateTable();
+        IReadOnlyList<KustoResultRow> rows = [table.Rows[1]];
+
+        KustoResultExportFile csv = KustoResultDataExporter.CreateFile(
+            table,
+            rows,
+            KustoResultExportFormat.Csv);
+        KustoResultExportFile json = KustoResultDataExporter.CreateFile(
+            table,
+            rows,
+            KustoResultExportFormat.Json);
+        KustoResultExportFile kql = KustoResultDataExporter.CreateFile(
+            table,
+            rows,
+            KustoResultExportFormat.KqlScript);
+
+        Assert.DoesNotContain("Texas", Encoding.UTF8.GetString(csv.Content), StringComparison.Ordinal);
+        Assert.DoesNotContain("Texas", Encoding.UTF8.GetString(json.Content), StringComparison.Ordinal);
+        Assert.DoesNotContain("Texas", Encoding.UTF8.GetString(kql.Content), StringComparison.Ordinal);
+        Assert.EndsWith(".kql", kql.SuggestedFileName, StringComparison.Ordinal);
+        Assert.Contains("datatable(", Encoding.UTF8.GetString(kql.Content), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Verifies JSON exports preserve native server tokens and null values.
+    /// </summary>
+    [Fact]
+    public void JsonExportPreservesNativeTokens()
+    {
+        KustoResultTable table = new(
+            "Typed",
+            [
+                new KustoResultColumn("Count", "long"),
+                new KustoResultColumn("Enabled", "bool"),
+                new KustoResultColumn("Missing", "string"),
+            ],
+            [
+                new KustoResultRow(
+                [
+                    new KustoResultValue("42", "42", false),
+                    new KustoResultValue("true", "true", false),
+                    new KustoResultValue(string.Empty, "null", true),
+                ]),
+            ]);
+
+        string json = Encoding.UTF8.GetString(KustoResultDataExporter.CreateFile(
+            table,
+            KustoResultExportFormat.Json).Content);
+
+        Assert.Contains("\"Count\": 42", json, StringComparison.Ordinal);
+        Assert.Contains("\"Enabled\": true", json, StringComparison.Ordinal);
+        Assert.Contains("\"Missing\": null", json, StringComparison.Ordinal);
+    }
+
     private static KustoResultTable CreateTable()
     {
         return new KustoResultTable(

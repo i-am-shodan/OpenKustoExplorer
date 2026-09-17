@@ -72,6 +72,11 @@ public sealed class KustoAutomationRunViewModel : ObservableObject
         .ToLocalTime()
         .ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
 
+    /// <summary>Gets the cluster and database used by this historical run.</summary>
+    public string TargetText => run.ClusterUri is null
+        ? "Target unavailable"
+        : $"{run.ClusterUri.Host} / {run.DatabaseName}";
+
     /// <summary>
     /// Gets the concise run summary.
     /// </summary>

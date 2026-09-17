@@ -638,6 +638,53 @@ public sealed class SqliteKustoRecordedSessionStoreTests
     }
 
     /// <summary>
+    /// Verifies pausing closes the current period and atomically removes in-flight execution evidence.
+    /// </summary>
+    /// <returns>A task that completes after the session is resumed.</returns>
+    [Fact]
+    public async Task PauseRecordingDiscardsExecutionsAndAllowsResume()
+    {
+        string directoryPath = CreateTemporaryDirectory();
+        string filePath = Path.Combine(directoryPath, "recorded-sessions.db");
+        DateTimeOffset startedAtUtc = new(2026, 9, 16, 12, 0, 0, TimeSpan.Zero);
+
+        try
+        {
+            using SqliteKustoRecordedSessionStore store = new(filePath);
+            KustoRecordingPeriod period = await store.CreateSessionAsync("Paused", startedAtUtc);
+            Guid executionId = await BeginPredicateExecutionAsync(
+                store,
+                period,
+                "192.0.2.44",
+                startedAtUtc.AddSeconds(1));
+
+            await store.PauseRecordingAsync(
+                period.Id,
+                startedAtUtc.AddSeconds(2),
+                [executionId]);
+
+            KustoRecordedSession paused = Assert.IsType<KustoRecordedSession>(
+                await store.GetSessionAsync(period.SessionId));
+            Assert.NotNull(Assert.Single(paused.Periods).StoppedAtUtc);
+            Assert.Empty(paused.Executions);
+            Assert.Empty(paused.Interests);
+
+            KustoRecordingPeriod resumed = await store.AppendSessionAsync(
+                period.SessionId,
+                startedAtUtc.AddSeconds(3));
+            await store.StopRecordingAsync(resumed.Id, startedAtUtc.AddSeconds(4));
+
+            KustoRecordedSession completed = Assert.IsType<KustoRecordedSession>(
+                await store.GetSessionAsync(period.SessionId));
+            Assert.Equal(2, completed.Periods.Count);
+        }
+        finally
+        {
+            DeleteTemporaryDirectory(directoryPath);
+        }
+    }
+
+    /// <summary>
     /// Verifies dynamic objects canonicalize independently of property order.
     /// </summary>
     [Fact]

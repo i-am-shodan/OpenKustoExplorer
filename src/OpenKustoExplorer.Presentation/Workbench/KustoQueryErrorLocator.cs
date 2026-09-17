@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.RegularExpressions;
 using OpenKustoExplorer.Application.Language;
 
@@ -8,6 +9,8 @@ namespace OpenKustoExplorer.Presentation.Workbench;
 /// </summary>
 internal static partial class KustoQueryErrorLocator
 {
+    private const int RegexTimeoutMilliseconds = 1_000;
+
     /// <summary>
     /// Locates the failed line or executed statement when the exception describes a source error.
     /// </summary>
@@ -32,8 +35,16 @@ internal static partial class KustoQueryErrorLocator
         Match locationMatch = LinePositionRegex().Match(message);
 
         if (locationMatch.Success
-            && int.TryParse(locationMatch.Groups["line"].Value, out int relativeLine)
-            && int.TryParse(locationMatch.Groups["column"].Value, out int column)
+            && int.TryParse(
+                locationMatch.Groups["line"].Value,
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out int relativeLine)
+            && int.TryParse(
+                locationMatch.Groups["column"].Value,
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out int column)
             && relativeLine > 0
             && column > 0
             && TryGetTrimmedLine(selection.Text, relativeLine, out int lineStart, out int lineLength))
@@ -154,9 +165,13 @@ internal static partial class KustoQueryErrorLocator
 
     [GeneratedRegex(
         @"(?:\[\s*line\s*:\s*position\s*=\s*|\bline\s*(?:=|:)?\s*)(?<line>\d+)(?:\s*:\s*|\s*[,;]\s*(?:position|pos|column|col)\s*(?:=|:)?\s*)(?<column>\d+)",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+        RegexTimeoutMilliseconds)]
     private static partial Regex LinePositionRegex();
 
-    [GeneratedRegex(@"\b(?:SYN|SEM)\d+\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    [GeneratedRegex(
+        @"\b(?:SYN|SEM)\d+\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+        RegexTimeoutMilliseconds)]
     private static partial Regex SourceErrorCodeRegex();
 }
