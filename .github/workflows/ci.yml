@@ -301,20 +301,36 @@ jobs:
             exit 1
           fi
 
-          if gh release view "${tag}" >/dev/null 2>&1; then
-            release_is_draft="$(gh release view "${tag}" --json isDraft --jq '.isDraft')"
-            echo "Release ${tag} already exists; draft=${release_is_draft}."
-          elif [[ -n "${existing_commit}" ]]; then
-            gh release create "${tag}" --verify-tag --generate-notes --latest=false --draft
-            release_is_draft=true
+          release_record="$(
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+              --jq ".[] | select(.tag_name == \"${tag}\") | [.id, .draft, .target_commitish] | @tsv"
+          )"
+          if [[ -n "${release_record}" ]]; then
+            IFS=$'\t' read -r release_id release_is_draft release_target <<< "${release_record}"
+            if [[ "${release_is_draft}" == true && "${release_target}" != "${RELEASE_SHA}" ]]; then
+              echo "Draft release ${tag} targets ${release_target}, not ${RELEASE_SHA}." >&2
+              exit 1
+            fi
+
+            echo "Release ${tag} already exists; id=${release_id}, draft=${release_is_draft}."
           else
-            gh release create "${tag}" --target "${RELEASE_SHA}" --generate-notes --latest=false --draft
+            release_id="$(
+              gh api --method POST "repos/${GITHUB_REPOSITORY}/releases" \
+                -f tag_name="${tag}" \
+                -f target_commitish="${RELEASE_SHA}" \
+                -F draft=true \
+                -F prerelease=false \
+                -F generate_release_notes=true \
+                -f make_latest=false \
+                --jq '.id'
+            )"
             release_is_draft=true
+            echo "Created draft release ${tag}; id=${release_id}."
           fi
 
           get_remote_assets() {
-            gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
-              --jq '.assets[] | [.name, (.size | tostring), .state, (.digest // "")] | @tsv'
+            gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+              --jq '.assets[] | [.id, .name, (.size | tostring), .state, (.digest // "")] | @tsv'
           }
 
           asset_is_complete() {
@@ -325,7 +341,7 @@ jobs:
             read -r file_hash _ < <(sha256sum "${file}")
             file_digest="sha256:${file_hash}"
 
-            while IFS=$'\t' read -r asset_name asset_size asset_state asset_digest; do
+            while IFS=$'\t' read -r _ asset_name asset_size asset_state asset_digest; do
               if [[ "${asset_name}" == "${file_name}" \
                 && "${asset_size}" == "${file_size}" \
                 && "${asset_state}" == uploaded \
@@ -337,17 +353,48 @@ jobs:
             return 1
           }
 
+          find_asset_id() {
+            local file_name="$1"
+
+            while IFS=$'\t' read -r asset_id asset_name _; do
+              if [[ "${asset_name}" == "${file_name}" ]]; then
+                echo "${asset_id}"
+                return 0
+              fi
+            done <<< "${remote_assets}"
+
+            return 1
+          }
+
           upload_asset() {
             local file="$1"
-            local file_name attempt
+            local file_name attempt asset_id response_file
             file_name="$(basename "${file}")"
 
             for attempt in 1 2 3; do
+              remote_assets="$(get_remote_assets)"
+              asset_id="$(find_asset_id "${file_name}" || true)"
+              if [[ -n "${asset_id}" ]]; then
+                gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"
+              fi
+
               echo "Uploading ${file_name} (attempt ${attempt}/3)."
-              if gh release upload "${tag}" "${file}" --clobber; then
+              response_file="$(mktemp)"
+              if curl --silent --show-error --fail-with-body \
+                --request POST \
+                --header "Accept: application/vnd.github+json" \
+                --header "Authorization: Bearer ${GH_TOKEN}" \
+                --header "X-GitHub-Api-Version: 2022-11-28" \
+                --header "Content-Type: application/octet-stream" \
+                --data-binary "@${file}" \
+                --output "${response_file}" \
+                "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?name=${file_name}"; then
+                rm -f "${response_file}"
                 return 0
               fi
 
+              cat "${response_file}" >&2
+              rm -f "${response_file}"
               if [[ "${attempt}" -lt 3 ]]; then
                 sleep "$((attempt * 15))"
               fi
@@ -379,7 +426,10 @@ jobs:
           done
 
           if [[ "${release_is_draft}" == true ]]; then
-            gh release edit "${tag}" --draft=false --latest=false
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+              -F draft=false \
+              -f make_latest=false \
+              >/dev/null
           fi
 
           git fetch --force --tags origin
