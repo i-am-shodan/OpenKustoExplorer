@@ -47,7 +47,8 @@ function Get-VersionPrefixFromText {
         [Parameter(Mandatory)]
         [string] $Text,
         [Parameter(Mandatory)]
-        [string] $Source
+        [string] $Source,
+        [switch] $AllowMissing
     )
 
     try {
@@ -58,6 +59,10 @@ function Get-VersionPrefixFromText {
     }
 
     $nodes = @($document.SelectNodes('/Project/PropertyGroup/VersionPrefix'))
+    if ($AllowMissing -and $nodes.Count -eq 0) {
+        return $null
+    }
+
     if ($nodes.Count -ne 1) {
         throw "$Source must contain exactly one Project/PropertyGroup/VersionPrefix element."
     }
@@ -96,7 +101,7 @@ function Get-VersionPrefixAtCommit {
         return $null
     }
 
-    return (Get-VersionPrefixFromText -Text $content -Source "Directory.Build.props at commit $CommitId")
+    return (Get-VersionPrefixFromText -Text $content -Source "Directory.Build.props at commit $CommitId" -AllowMissing)
 }
 
 function Get-FirstParent {

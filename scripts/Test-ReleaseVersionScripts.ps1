@@ -81,13 +81,18 @@ try {
     $null = Invoke-TestGit -RepositoryRoot $testRoot -Arguments @('config', 'user.name', 'Release Test')
     $null = Invoke-TestGit -RepositoryRoot $testRoot -Arguments @('config', 'user.email', 'release-test@example.com')
 
+    $preFloorContent = "<Project>`n  <PropertyGroup />`n</Project>`n"
+    [IO.File]::WriteAllText((Join-Path $testRoot 'Directory.Build.props'), $preFloorContent, $utf8)
+    $null = Add-TestCommit -RepositoryRoot $testRoot -Message 'Before automatic release floor'
+
     Set-TestVersionFloor -RepositoryRoot $testRoot -Version '1.0.0'
     $oldFloorCommit = Add-TestCommit -RepositoryRoot $testRoot -Message 'Old release floor'
+    Assert-Equal '1.0.0' (& $resolverPath -RepositoryRoot $testRoot) 'First release floor'
     $null = Invoke-TestGit -RepositoryRoot $testRoot -Arguments @('tag', 'v1.0.0', $oldFloorCommit)
 
     Set-TestVersionFloor -RepositoryRoot $testRoot -Version '1.0.1'
     $floorCommit = Add-TestCommit -RepositoryRoot $testRoot -Message 'Automatic release floor'
-    Assert-Equal '1.0.1' (& $resolverPath -RepositoryRoot $testRoot) 'Initial release floor'
+    Assert-Equal '1.0.1' (& $resolverPath -RepositoryRoot $testRoot) 'Bumped release floor'
 
     [IO.File]::WriteAllText((Join-Path $testRoot 'change.txt'), 'first', $utf8)
     $firstPatchCommit = Add-TestCommit -RepositoryRoot $testRoot -Message 'First patch'
