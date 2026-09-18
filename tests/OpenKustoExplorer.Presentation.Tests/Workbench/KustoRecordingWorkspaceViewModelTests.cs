@@ -741,7 +741,146 @@ public sealed class KustoRecordingWorkspaceViewModelTests
         }
     }
 
-    private static KustoRecordingWorkspaceViewModel CreateViewModel(SqliteKustoRecordedSessionStore store)
+    /// <summary>
+    /// Verifies archive export requires a selected finalized session and delegates its stream.
+    /// </summary>
+    /// <returns>A task that completes after export and recording state changes.</returns>
+    [Fact]
+    public async Task ArchiveExportTracksSelectionAndRecordingState()
+    {
+        string directoryPath = CreateTemporaryDirectory();
+        string filePath = Path.Combine(directoryPath, "recorded-sessions.db");
+
+        try
+        {
+            using SqliteKustoRecordedSessionStore store = new(filePath);
+            FakeRecordedSessionArchiveService archiveService = new();
+            KustoRecordingWorkspaceViewModel viewModel = CreateViewModel(store, archiveService);
+
+            Assert.True(viewModel.CanImportSession);
+            Assert.False(viewModel.CanExportSelectedSession);
+            KustoRecordingPeriod period = await store.CreateSessionAsync(
+                "Archive/session",
+                DateTimeOffset.UtcNow);
+            await store.StopRecordingAsync(period.Id, DateTimeOffset.UtcNow.AddMinutes(1));
+            await viewModel.RefreshCommand.ExecuteAsync(null);
+
+            Assert.True(viewModel.CanExportSelectedSession);
+            Assert.Equal("Archive_session.okesession", viewModel.SuggestedArchiveFileName);
+            viewModel.OpenExportSessionCommand.Execute(null);
+            Assert.True(viewModel.IsExportConfirmationOpen);
+            viewModel.CancelExportSessionCommand.Execute(null);
+            Assert.False(viewModel.IsExportConfirmationOpen);
+            using MemoryStream destination = new();
+
+            await viewModel.ExportSelectedSessionAsync(destination);
+
+            Assert.Equal(period.SessionId, archiveService.ExportedSessionId);
+            Assert.Equal(1, destination.Length);
+            Assert.False(viewModel.IsLoading);
+
+            await viewModel.OpenRecordingCommand.ExecuteAsync(null);
+            viewModel.NewSessionName = "Active archive session";
+            await viewModel.StartRecordingCommand.ExecuteAsync(null);
+
+            Assert.True(viewModel.HasActiveRecording);
+            Assert.False(viewModel.CanImportSession);
+            Assert.False(viewModel.CanExportSelectedSession);
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => viewModel.ExportSelectedSessionAsync(new MemoryStream()));
+            await viewModel.StopRecordingCommand.ExecuteAsync(null);
+        }
+        finally
+        {
+            DeleteTemporaryDirectory(directoryPath);
+        }
+    }
+
+    /// <summary>
+    /// Verifies importing a session refreshes and selects the returned local copy.
+    /// </summary>
+    /// <returns>A task that completes after the imported copy is selected.</returns>
+    [Fact]
+    public async Task ArchiveImportRefreshesAndSelectsImportedCopy()
+    {
+        string directoryPath = CreateTemporaryDirectory();
+        string filePath = Path.Combine(directoryPath, "recorded-sessions.db");
+
+        try
+        {
+            using SqliteKustoRecordedSessionStore store = new(filePath);
+            FakeRecordedSessionArchiveService archiveService = new();
+            archiveService.ImportAction = async (_, cancellationToken) =>
+            {
+                DateTimeOffset startedAtUtc = DateTimeOffset.UtcNow;
+                KustoRecordingPeriod period = await store.CreateSessionAsync(
+                    "Imported copy",
+                    startedAtUtc,
+                    cancellationToken);
+                await store.StopRecordingAsync(
+                    period.Id,
+                    startedAtUtc.AddMinutes(1),
+                    cancellationToken);
+                return Assert.Single(await store.GetSessionsAsync(cancellationToken));
+            };
+            KustoRecordingWorkspaceViewModel viewModel = CreateViewModel(store, archiveService);
+            using MemoryStream source = new([42]);
+
+            KustoRecordedSessionSummary imported = await viewModel.ImportSessionCopyAsync(source);
+
+            Assert.Equal(1, archiveService.ImportCount);
+            Assert.Equal("Imported copy", imported.Name);
+            Assert.Equal(imported.Id, viewModel.SelectedSessionSummary?.Id);
+            Assert.Equal(imported.Id, viewModel.SelectedSession?.Id);
+            Assert.False(viewModel.IsLoading);
+        }
+        finally
+        {
+            DeleteTemporaryDirectory(directoryPath);
+        }
+    }
+
+    /// <summary>
+    /// Verifies a failed archive import keeps the current selection and clears loading state.
+    /// </summary>
+    /// <returns>A task that completes after the import failure.</returns>
+    [Fact]
+    public async Task ArchiveImportFailurePreservesSelection()
+    {
+        string directoryPath = CreateTemporaryDirectory();
+        string filePath = Path.Combine(directoryPath, "recorded-sessions.db");
+
+        try
+        {
+            using SqliteKustoRecordedSessionStore store = new(filePath);
+            KustoRecordingPeriod period = await store.CreateSessionAsync("Existing", DateTimeOffset.UtcNow);
+            await store.StopRecordingAsync(period.Id, DateTimeOffset.UtcNow.AddMinutes(1));
+            FakeRecordedSessionArchiveService archiveService = new()
+            {
+                ImportException = new InvalidDataException("Synthetic invalid archive"),
+            };
+            KustoRecordingWorkspaceViewModel viewModel = CreateViewModel(store, archiveService);
+            await viewModel.RefreshCommand.ExecuteAsync(null);
+            Guid selectedSessionId = Assert.IsType<KustoRecordedSessionSummaryViewModel>(
+                viewModel.SelectedSessionSummary).Id;
+
+            InvalidDataException exception = await Assert.ThrowsAsync<InvalidDataException>(
+                () => viewModel.ImportSessionCopyAsync(new MemoryStream([1])));
+
+            Assert.Equal("Synthetic invalid archive", exception.Message);
+            Assert.Equal(selectedSessionId, viewModel.SelectedSessionSummary?.Id);
+            Assert.Equal(selectedSessionId, viewModel.SelectedSession?.Id);
+            Assert.False(viewModel.IsLoading);
+        }
+        finally
+        {
+            DeleteTemporaryDirectory(directoryPath);
+        }
+    }
+
+    private static KustoRecordingWorkspaceViewModel CreateViewModel(
+        SqliteKustoRecordedSessionStore store,
+        IKustoRecordedSessionArchiveService? archiveService = null)
     {
         KustoRecordedChainSearcher searcher = new(store);
         return new KustoRecordingWorkspaceViewModel(
@@ -750,7 +889,8 @@ public sealed class KustoRecordingWorkspaceViewModelTests
             new KustoRecordedRelationExtractor(),
             searcher,
             new KustoRecordedRelationPlanner(),
-            new KustoRecordedChainQueryGenerator());
+            new KustoRecordedChainQueryGenerator(),
+            archiveService: archiveService);
     }
 
     private static KustoDatabaseSchema CreateSchema()
@@ -848,6 +988,42 @@ public sealed class KustoRecordingWorkspaceViewModelTests
         if (Directory.Exists(directoryPath))
         {
             Directory.Delete(directoryPath, true);
+        }
+    }
+
+    private sealed class FakeRecordedSessionArchiveService : IKustoRecordedSessionArchiveService
+    {
+        public Func<Stream, CancellationToken, Task<KustoRecordedSessionSummary>>? ImportAction { get; set; }
+
+        public Exception? ImportException { get; set; }
+
+        public Guid? ExportedSessionId { get; private set; }
+
+        public int ImportCount { get; private set; }
+
+        public Task ExportAsync(
+            Guid sessionId,
+            Stream destination,
+            CancellationToken cancellationToken = default)
+        {
+            ExportedSessionId = sessionId;
+            destination.WriteByte(42);
+            return Task.CompletedTask;
+        }
+
+        public Task<KustoRecordedSessionSummary> ImportCopyAsync(
+            Stream source,
+            CancellationToken cancellationToken = default)
+        {
+            ImportCount++;
+            if (ImportException is not null)
+            {
+                return Task.FromException<KustoRecordedSessionSummary>(ImportException);
+            }
+
+            return ImportAction?.Invoke(source, cancellationToken)
+                ?? Task.FromException<KustoRecordedSessionSummary>(
+                    new InvalidOperationException("No synthetic archive import was configured."));
         }
     }
 }

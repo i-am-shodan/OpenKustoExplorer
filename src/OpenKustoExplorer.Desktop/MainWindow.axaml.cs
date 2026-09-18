@@ -467,6 +467,15 @@ public sealed partial class MainWindow : Window, IDisposable
         };
     }
 
+    private static FilePickerFileType CreateRecordedSessionArchiveFileType()
+    {
+        return new FilePickerFileType("Open Kusto Explorer session archive")
+        {
+            Patterns = ["*.okesession"],
+            MimeTypes = ["application/vnd.openkustoexplorer.session+zip"],
+        };
+    }
+
     private static void OnDashboardWidgetKeyDown(object? sender, KeyEventArgs eventArguments)
     {
         bool isMove = eventArguments.KeyModifiers == KeyModifiers.Alt;
@@ -1297,6 +1306,35 @@ public sealed partial class MainWindow : Window, IDisposable
         {
             viewModel.Recording.CancelDeleteSessionCommand.Execute(null);
             sessionsButton?.Focus();
+        }
+    }
+
+    private void OnImportRecordedSessionClick(object? sender, RoutedEventArgs eventArguments)
+    {
+        _ = sender;
+        _ = eventArguments;
+        _ = ImportRecordedSessionAsync();
+    }
+
+    private void OnCancelRecordedSessionExportClick(object? sender, RoutedEventArgs eventArguments)
+    {
+        _ = sender;
+        _ = eventArguments;
+        if (DataContext is MainWindowViewModel viewModel)
+        {
+            viewModel.Recording.CancelExportSessionCommand.Execute(null);
+            sessionsButton?.Focus();
+        }
+    }
+
+    private void OnConfirmRecordedSessionExportClick(object? sender, RoutedEventArgs eventArguments)
+    {
+        _ = sender;
+        _ = eventArguments;
+        if (DataContext is MainWindowViewModel viewModel)
+        {
+            viewModel.Recording.CancelExportSessionCommand.Execute(null);
+            _ = ExportRecordedSessionAsync();
         }
     }
 
@@ -2189,6 +2227,13 @@ public sealed partial class MainWindow : Window, IDisposable
             return true;
         }
 
+        if (viewModel.Recording.IsExportConfirmationOpen)
+        {
+            viewModel.Recording.CancelExportSessionCommand.Execute(null);
+            sessionsButton?.Focus();
+            return true;
+        }
+
         if (viewModel.Recording.IsDeleteExecutionConfirmationOpen)
         {
             viewModel.Recording.CancelDeleteExecutionCommand.Execute(null);
@@ -2682,6 +2727,89 @@ public sealed partial class MainWindow : Window, IDisposable
                 or InvalidOperationException)
             {
                 viewModel.ReportActionStatus($"Export failed: {exception.Message}");
+            }
+        }
+    }
+
+    private async Task ExportRecordedSessionAsync()
+    {
+        if (DataContext is MainWindowViewModel viewModel)
+        {
+            try
+            {
+                FilePickerFileType fileType = CreateRecordedSessionArchiveFileType();
+                IStorageFile? file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+                {
+                    Title = "Export recorded session",
+                    SuggestedFileName = viewModel.Recording.SuggestedArchiveFileName,
+                    DefaultExtension = "okesession",
+                    SuggestedFileType = fileType,
+                    FileTypeChoices = [fileType],
+                    ShowOverwritePrompt = true,
+                });
+
+                if (file is not null)
+                {
+                    string sessionName = viewModel.Recording.SelectedSessionSummary?.Name ?? "recorded session";
+                    await using Stream stream = await file.OpenWriteAsync();
+                    stream.SetLength(0);
+                    await viewModel.Recording.ExportSelectedSessionAsync(
+                        stream,
+                        automationCancellationSource.Token);
+                    viewModel.ReportActionStatus($"Exported {sessionName}");
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // File-picker cancellation and application shutdown are expected.
+            }
+            catch (Exception exception) when (exception is IOException
+                or UnauthorizedAccessException
+                or InvalidDataException
+                or InvalidOperationException
+                or ArgumentException)
+            {
+                viewModel.ReportActionStatus($"Session export failed: {exception.Message}");
+            }
+        }
+    }
+
+    private async Task ImportRecordedSessionAsync()
+    {
+        if (DataContext is MainWindowViewModel viewModel)
+        {
+            try
+            {
+                FilePickerFileType fileType = CreateRecordedSessionArchiveFileType();
+                IReadOnlyList<IStorageFile> files = await StorageProvider.OpenFilePickerAsync(
+                    new FilePickerOpenOptions
+                    {
+                        Title = "Import recorded session",
+                        AllowMultiple = false,
+                        FileTypeFilter = [fileType],
+                    });
+
+                if (files.Count == 1)
+                {
+                    await using Stream stream = await files[0].OpenReadAsync();
+                    KustoRecordedSessionSummary imported = await viewModel.Recording.ImportSessionCopyAsync(
+                        stream,
+                        automationCancellationSource.Token);
+                    viewModel.ReportActionStatus($"Imported {imported.Name}");
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // File-picker cancellation and application shutdown are expected.
+            }
+            catch (Exception exception) when (exception is IOException
+                or UnauthorizedAccessException
+                or InvalidDataException
+                or InvalidOperationException
+                or ArgumentException
+                or JsonException)
+            {
+                viewModel.ReportActionStatus($"Session import failed: {exception.Message}");
             }
         }
     }

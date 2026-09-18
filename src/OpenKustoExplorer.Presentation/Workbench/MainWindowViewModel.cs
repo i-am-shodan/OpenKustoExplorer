@@ -157,6 +157,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     /// <param name="recordedRelationPlanner">The optional recorded relation planner.</param>
     /// <param name="recordedChainGenerator">The optional recorded-chain KQL generator.</param>
     /// <param name="timeProvider">The optional application clock.</param>
+    /// <param name="recordedSessionArchiveService">The optional portable recorded-session archive service.</param>
     /// <exception cref="ArgumentNullException"><paramref name="languageService"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentNullException"><paramref name="queryService"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentNullException"><paramref name="catalogService"/> is <see langword="null"/>.</exception>
@@ -187,7 +188,8 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         IKustoRecordedChainSearcher? recordedChainSearcher = null,
         IKustoRecordedRelationPlanner? recordedRelationPlanner = null,
         IKustoRecordedChainQueryGenerator? recordedChainGenerator = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IKustoRecordedSessionArchiveService? recordedSessionArchiveService = null)
     {
         using KustoPerformanceTrace.OperationScope performanceScope =
             KustoPerformanceTrace.Measure("startup.main_view_model.construct");
@@ -243,7 +245,8 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
                     recordedChainSearcher,
                     recordedRelationPlanner,
                     recordedChainGenerator,
-                    timeProvider);
+                    timeProvider,
+                    recordedSessionArchiveService);
         Recording.ActiveInterestsChanged += OnRecordingActiveInterestsChanged;
         AutomationNotifications = new KustoAutomationNotificationEditorViewModel(
             AutomationNotificationsSaved);

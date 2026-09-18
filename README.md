@@ -109,10 +109,20 @@ Executions that reach the row or payload boundary are labeled **result limited**
 
 Open the **Sessions** workspace and select a recorded session, then choose an execution to inspect its read-only KQL and retained result tables. Results are paged in groups of 50 rows. From this workspace you can:
 
-- Rename or delete individual recorded queries, delete an entire session, and export all pertinent values as CSV.
+- Rename or delete individual recorded queries, delete an entire session, export all pertinent values as CSV, or export a complete session archive.
 - Mark historical values or every retained value in a column, and remove individual value marks; exact typed matches are highlighted throughout the session without replacing conditional formatting.
 - Review the **Pertinent values** panel and **Discovery timeline** to see what was inferred from predicates, what you marked manually, and where each value first appeared.
 - Set chain start and end points from a result cell, pertinent value, or timeline item.
+
+### Share Or Back Up A Session
+
+Stop the active recording, select the session in the **Sessions** workspace, and choose **Export**. Open Kusto Explorer writes a versioned `.okesession` archive containing the recording periods, query text, source-tab metadata, cluster and database names, timestamps, outcomes and errors, retained result tables and exact values, relation lineage, pertinent interests, marks, and chain endpoints.
+
+Choose **Import session archive** beside Refresh to import one archive. Import always creates an independent local copy with new internal identifiers. The original name is retained when available; conflicts use names such as `Investigation (imported)` and `Investigation (imported 2)`. Import and export are unavailable while a recording is active or paused.
+
+Session archives are compressed but not encrypted. Treat them as sensitive investigation evidence and use an appropriately protected transfer or storage location.
+
+The underlying `recorded-sessions.db` is suitable only for a cold backup of the entire session catalog after Open Kusto Explorer has closed. The database uses SQLite write-ahead logging, so copying only the `.db` file while the application is running can omit recent data held in its `-wal` file. Use `.okesession` archives for sharing individual investigations.
 
 ### Generate A Follow-Up Query
 
@@ -271,7 +281,7 @@ Application state lives under the platform's local application-data directory. O
 - Environment-backed webhook URLs are resolved only for delivery and are never written to local state.
 - Kusto Explorer import excludes credentials, query history, cached result payloads, and source application settings.
 - Copilot result, graph, Learn MCP, and Azure MCP sharing are independently gated.
-- Recorded sessions are local, unencrypted per-user data with no automatic retention. Delete sensitive sessions explicitly from the Sessions workspace. Result rows are available to the assistant only through consented, session-pinned tools with strict row and output bounds.
+- Recorded sessions and exported `.okesession` archives are unencrypted and may contain sensitive query text and retained result values. Delete sensitive sessions explicitly from the Sessions workspace and protect exported archives in transit and at rest. Result rows are available to the assistant only through consented, session-pinned tools with strict row and output bounds.
 
 ## Architecture
 

@@ -2497,13 +2497,22 @@
             BorderBrush="{DynamicResource DecorativeDividerBrush}"
             BorderThickness="0,0,1,0">
           <Grid RowDefinitions="58,*,Auto">
-            <Grid Grid.Row="0" Margin="14,0" ColumnDefinitions="*,Auto" ColumnSpacing="6">
+            <Grid Grid.Row="0" Margin="14,0" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6">
               <StackPanel VerticalAlignment="Center" Spacing="1">
                 <TextBlock FontSize="{DynamicResource TypeEmphasisSize}" FontWeight="SemiBold" Text="Recorded sessions" />
                 <TextBlock Classes="tertiary" FontSize="{DynamicResource TypeSmallSize}" Text="Choose an investigation" />
               </StackPanel>
               <Button
                   Grid.Column="1"
+                  AutomationProperties.Name="Import recorded session"
+                  Classes="treeAction"
+                  Click="OnImportRecordedSessionClick"
+                  IsEnabled="{Binding Recording.CanImportSession}"
+                  ToolTip.Tip="Import session archive">
+                <LucideIcon Kind="FileInput" Size="14" />
+              </Button>
+              <Button
+                  Grid.Column="2"
                   AutomationProperties.Name="Refresh recorded sessions"
                   Classes="treeAction"
                   Command="{Binding Recording.RefreshCommand}"
@@ -2549,18 +2558,29 @@
               <LucideIcon HorizontalAlignment="Center" Kind="ClockArrowLeft" Size="26" Foreground="{DynamicResource TextTertiaryBrush}" />
               <TextBlock FontWeight="SemiBold" Text="No recorded sessions" />
             </StackPanel>
-            <Button
-                Grid.Row="2"
-                Margin="10"
-                AutomationProperties.Name="Delete selected recorded session"
-                Classes="command"
-                Command="{Binding Recording.OpenDeleteSessionCommand}"
-                IsEnabled="{Binding Recording.CanDeleteSelectedSession}">
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <LucideIcon Kind="Trash" Size="13" />
-                <TextBlock Text="Delete session" />
-              </StackPanel>
-            </Button>
+            <Grid Grid.Row="2" Margin="10" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="6">
+              <Button
+                  AutomationProperties.Name="Export selected recorded session"
+                  Classes="command"
+                  Command="{Binding Recording.OpenExportSessionCommand}"
+                  IsEnabled="{Binding Recording.CanExportSelectedSession}">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <LucideIcon Kind="Download" Size="13" />
+                  <TextBlock Text="Export" />
+                </StackPanel>
+              </Button>
+              <Button
+                  Grid.Column="2"
+                  AutomationProperties.Name="Delete selected recorded session"
+                  Classes="command"
+                  Command="{Binding Recording.OpenDeleteSessionCommand}"
+                  IsEnabled="{Binding Recording.CanDeleteSelectedSession}">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <LucideIcon Kind="Trash" Size="13" />
+                  <TextBlock Text="Delete" />
+                </StackPanel>
+              </Button>
+            </Grid>
           </Grid>
         </Border>
 
@@ -6102,6 +6122,33 @@
         Grid.RowSpan="3"
         desktop:ModalDialog.IsEnabled="True"
         ZIndex="107"
+        IsVisible="{Binding Recording.IsExportConfirmationOpen}"
+        Background="#66000000">
+      <Border
+          Width="460"
+          Padding="20"
+          HorizontalAlignment="Center"
+          VerticalAlignment="Center"
+          Background="{DynamicResource RaisedSurfaceBrush}"
+          BorderBrush="{DynamicResource WarningBrush}"
+          BorderThickness="1"
+          CornerRadius="6"
+          KeyboardNavigation.TabNavigation="Cycle">
+        <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="14">
+          <TextBlock FontSize="{DynamicResource TypeTitleSize}" FontWeight="SemiBold" Text="Export recorded session?" />
+          <TextBlock Grid.Row="1" Text="The archive is not encrypted. It includes query text, cluster and database names, errors, annotations, and retained result values." TextWrapping="Wrap" />
+          <Grid Grid.Row="2" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+            <Button Grid.Column="1" Classes="command" Click="OnCancelRecordedSessionExportClick" Content="Cancel" />
+            <Button Grid.Column="2" AutomationProperties.Name="Choose recorded session export file" Classes="primaryCommand" Click="OnConfirmRecordedSessionExportClick" Content="Choose file" />
+          </Grid>
+        </Grid>
+      </Border>
+    </Border>
+
+    <Border
+        Grid.RowSpan="3"
+        desktop:ModalDialog.IsEnabled="True"
+        ZIndex="108"
         IsVisible="{Binding Recording.IsDeleteConfirmationOpen}"
         Background="#66000000">
       <Border
@@ -6128,7 +6175,7 @@
     <Border
         Grid.RowSpan="3"
         desktop:ModalDialog.IsEnabled="True"
-        ZIndex="108"
+        ZIndex="109"
         IsVisible="{Binding Recording.IsDeleteExecutionConfirmationOpen}"
         Background="#66000000">
       <Border
@@ -6156,7 +6203,7 @@
     <Border
         Grid.RowSpan="3"
         desktop:ModalDialog.IsEnabled="True"
-        ZIndex="109"
+        ZIndex="110"
         IsVisible="{Binding Recording.IsChainGenerationDialogOpen}"
         Background="#66000000">
       <Border

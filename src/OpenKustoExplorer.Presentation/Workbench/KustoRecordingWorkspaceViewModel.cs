@@ -17,6 +17,7 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
     private readonly HashSet<string> activeManualInterestValues = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<Guid> discardedExecutionIds = [];
     private readonly Dictionary<Guid, Guid> pendingExecutionPeriods = [];
+    private readonly IKustoRecordedSessionArchiveService? archiveService;
     private readonly IKustoRecordedChainQueryGenerator? chainGenerator;
     private readonly IKustoRecordedChainSearcher? chainSearcher;
     private readonly IKustoPredicateInterestExtractor? interestExtractor;
@@ -33,6 +34,7 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
     private bool isDatabaseRecoveryOpen;
     private bool isDeleteConfirmationOpen;
     private bool isDeleteExecutionConfirmationOpen;
+    private bool isExportConfirmationOpen;
     private bool isLoading;
     private bool isRenameExecutionOpen;
     private bool isRecordingDialogOpen;
@@ -55,7 +57,7 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
     /// Initializes a new instance of the <see cref="KustoRecordingWorkspaceViewModel"/> class without recording services.
     /// </summary>
     public KustoRecordingWorkspaceViewModel()
-        : this(null, null, null, null, null, null, TimeProvider.System)
+        : this(null, null, null, null, null, null, TimeProvider.System, null)
     {
     }
 
@@ -69,6 +71,7 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
     /// <param name="relationPlanner">The relational plan minimizer.</param>
     /// <param name="chainGenerator">The validated KQL generator.</param>
     /// <param name="timeProvider">The application clock.</param>
+    /// <param name="archiveService">The optional portable session archive service.</param>
     public KustoRecordingWorkspaceViewModel(
         IKustoRecordedSessionStore? store,
         IKustoPredicateInterestExtractor? interestExtractor,
@@ -76,7 +79,8 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
         IKustoRecordedChainSearcher? chainSearcher,
         IKustoRecordedRelationPlanner? relationPlanner,
         IKustoRecordedChainQueryGenerator? chainGenerator,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IKustoRecordedSessionArchiveService? archiveService = null)
     {
         this.store = store;
         this.interestExtractor = interestExtractor;
@@ -85,6 +89,7 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
         this.relationPlanner = relationPlanner;
         this.chainGenerator = chainGenerator;
         this.timeProvider = timeProvider ?? TimeProvider.System;
+        this.archiveService = archiveService;
         Sessions = new ObservableCollection<KustoRecordedSessionSummaryViewModel>();
         OpenRecordingCommand = new AsyncRelayCommand(OpenRecordingAsync, () => IsAvailable && !HasActiveRecording);
         CloseRecordingCommand = new RelayCommand(CloseRecordingDialog);
@@ -93,6 +98,8 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
         ResumeRecordingCommand = new AsyncRelayCommand(ResumeRecordingAsync, () => IsPaused);
         StopRecordingCommand = new AsyncRelayCommand(StopRecordingAsync, () => HasActiveRecording);
         RefreshCommand = new AsyncRelayCommand(RefreshAsync, () => IsAvailable && !IsLoading);
+        OpenExportSessionCommand = new RelayCommand(OpenExportSession, () => CanExportSelectedSession);
+        CancelExportSessionCommand = new RelayCommand(() => IsExportConfirmationOpen = false);
         CancelDatabaseRecoveryCommand = new RelayCommand(CancelDatabaseRecovery);
         ResetDatabaseCommand = new AsyncRelayCommand(ResetDatabaseAsync, () => CanResetDatabase);
         SelectSessionCommand = new AsyncRelayCommand<KustoRecordedSessionSummaryViewModel>(SelectSessionAsync);
@@ -298,6 +305,9 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
             if (SetProperty(ref isLoading, value))
             {
                 RefreshCommand.NotifyCanExecuteChanged();
+                OnPropertyChanged(nameof(CanImportSession));
+                OnPropertyChanged(nameof(CanExportSelectedSession));
+                OpenExportSessionCommand.NotifyCanExecuteChanged();
                 OnPropertyChanged(nameof(CanResetDatabase));
                 ResetDatabaseCommand.NotifyCanExecuteChanged();
             }
@@ -316,7 +326,10 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
             if (SetProperty(ref selectedSessionSummary, value))
             {
                 OnPropertyChanged(nameof(CanDeleteSelectedSession));
+                OnPropertyChanged(nameof(CanExportSelectedSession));
+                OnPropertyChanged(nameof(SuggestedArchiveFileName));
                 OpenDeleteSessionCommand.NotifyCanExecuteChanged();
+                OpenExportSessionCommand.NotifyCanExecuteChanged();
                 DeleteSessionCommand.NotifyCanExecuteChanged();
                 AddChainEvidenceCommand.NotifyCanExecuteChanged();
             }
@@ -393,6 +406,36 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
     /// <summary>Gets a value indicating whether the selected session can be deleted.</summary>
     public bool CanDeleteSelectedSession => SelectedSessionSummary is not null
         && SelectedSessionSummary.Id != activeSessionId;
+
+    /// <summary>Gets a value indicating whether a recorded-session archive can be imported.</summary>
+    public bool CanImportSession => archiveService is not null
+        && store is not null
+        && !HasActiveRecording
+        && !IsLoading;
+
+    /// <summary>Gets a value indicating whether the selected session can be exported.</summary>
+    public bool CanExportSelectedSession => CanImportSession && SelectedSessionSummary is not null;
+
+    /// <summary>Gets the portable archive file name suggested for the selected session.</summary>
+    public string SuggestedArchiveFileName
+    {
+        get
+        {
+            string sessionName = SelectedSessionSummary?.Name ?? "recorded-session";
+            HashSet<char> invalidCharacters = Path.GetInvalidFileNameChars().ToHashSet();
+            string sanitized = new(sessionName
+                .Select(character => invalidCharacters.Contains(character) ? '_' : character)
+                .ToArray());
+            return $"{(string.IsNullOrWhiteSpace(sanitized) ? "recorded-session" : sanitized)}.okesession";
+        }
+    }
+
+    /// <summary>Gets a value indicating whether the sensitive-data export confirmation is visible.</summary>
+    public bool IsExportConfirmationOpen
+    {
+        get => isExportConfirmationOpen;
+        private set => SetProperty(ref isExportConfirmationOpen, value);
+    }
 
     /// <summary>Gets a value indicating whether the selected recorded query can be deleted.</summary>
     public bool CanDeleteSelectedExecution => SelectedExecution is not null
@@ -548,6 +591,12 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
 
     /// <summary>Gets the command that refreshes the session catalog.</summary>
     public IAsyncRelayCommand RefreshCommand { get; }
+
+    /// <summary>Gets the command that opens recorded-session export confirmation.</summary>
+    public IRelayCommand OpenExportSessionCommand { get; }
+
+    /// <summary>Gets the command that cancels recorded-session export.</summary>
+    public IRelayCommand CancelExportSessionCommand { get; }
 
     /// <summary>Gets the command that dismisses incompatible-database recovery.</summary>
     public IRelayCommand CancelDatabaseRecoveryCommand { get; }
@@ -952,6 +1001,62 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
             SelectedSession.PertinentValues.Select(value => value.ValueText));
     }
 
+    /// <summary>Exports the selected finalized session to a portable archive stream.</summary>
+    /// <param name="destination">The writable archive destination.</param>
+    /// <param name="cancellationToken">Cancels the export.</param>
+    /// <returns>A task that completes after the archive is written.</returns>
+    public async Task ExportSelectedSessionAsync(
+        Stream destination,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
+        if (!CanExportSelectedSession
+            || archiveService is null
+            || SelectedSessionSummary is not KustoRecordedSessionSummaryViewModel selected)
+        {
+            throw new InvalidOperationException("Select a finalized recorded session before exporting it.");
+        }
+
+        IsLoading = true;
+        try
+        {
+            await archiveService.ExportAsync(selected.Id, destination, cancellationToken);
+        }
+        finally
+        {
+            IsLoading = false;
+        }
+    }
+
+    /// <summary>Imports a portable archive as an independent recorded-session copy.</summary>
+    /// <param name="source">The readable archive source.</param>
+    /// <param name="cancellationToken">Cancels the import.</param>
+    /// <returns>The imported session summary.</returns>
+    public async Task<KustoRecordedSessionSummary> ImportSessionCopyAsync(
+        Stream source,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (!CanImportSession || archiveService is null)
+        {
+            throw new InvalidOperationException("Stop the active recording before importing a session.");
+        }
+
+        KustoRecordedSessionSummary imported;
+        IsLoading = true;
+        try
+        {
+            imported = await archiveService.ImportCopyAsync(source, cancellationToken);
+        }
+        finally
+        {
+            IsLoading = false;
+        }
+
+        await RefreshAsync(imported.Id, cancellationToken);
+        return imported;
+    }
+
     /// <summary>
     /// Opens the rename dialog for one recorded query.
     /// </summary>
@@ -1111,6 +1216,14 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
     {
         IsRecordingDialogOpen = false;
         RecordingErrorText = string.Empty;
+    }
+
+    private void OpenExportSession()
+    {
+        if (CanExportSelectedSession)
+        {
+            IsExportConfirmationOpen = true;
+        }
     }
 
     private bool CanAddChainEvidence()
@@ -1316,7 +1429,12 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
         }
     }
 
-    private async Task RefreshAsync(CancellationToken cancellationToken)
+    private Task RefreshAsync(CancellationToken cancellationToken)
+    {
+        return RefreshAsync(null, cancellationToken);
+    }
+
+    private async Task RefreshAsync(Guid? requestedSessionId, CancellationToken cancellationToken)
     {
         if (store is null)
         {
@@ -1326,7 +1444,7 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
         IsLoading = true;
         try
         {
-            Guid? selectedId = activeSessionId ?? SelectedSessionSummary?.Id;
+            Guid? selectedId = requestedSessionId ?? activeSessionId ?? SelectedSessionSummary?.Id;
             IReadOnlyList<KustoRecordedSessionSummary> summaries = await store
                 .GetSessionsAsync(cancellationToken);
             IsDatabaseRecoveryOpen = false;
@@ -1794,12 +1912,15 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
         OnPropertyChanged(nameof(ActiveSessionName));
         OnPropertyChanged(nameof(RecordingAutomationText));
         OnPropertyChanged(nameof(CanDeleteSelectedSession));
+        OnPropertyChanged(nameof(CanImportSession));
+        OnPropertyChanged(nameof(CanExportSelectedSession));
         OpenRecordingCommand.NotifyCanExecuteChanged();
         PauseRecordingCommand.NotifyCanExecuteChanged();
         ResumeRecordingCommand.NotifyCanExecuteChanged();
         StopRecordingCommand.NotifyCanExecuteChanged();
         OpenDeleteSessionCommand.NotifyCanExecuteChanged();
         DeleteSessionCommand.NotifyCanExecuteChanged();
+        OpenExportSessionCommand.NotifyCanExecuteChanged();
         AddChainEvidenceCommand.NotifyCanExecuteChanged();
         NotifyStartStateChanged();
     }

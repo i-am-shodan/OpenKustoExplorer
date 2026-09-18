@@ -838,6 +838,75 @@ public sealed class SqliteKustoRecordedSessionStore :
         }
     }
 
+    /// <summary>Imports a validated session aggregate as an independent copy.</summary>
+    /// <param name="source">The source session aggregate.</param>
+    /// <param name="cancellationToken">Cancels and rolls back the import.</param>
+    /// <returns>The imported session summary.</returns>
+    internal async Task<KustoRecordedSessionSummary> ImportSessionCopyAsync(
+        KustoRecordedSession source,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        EnsureImportedSessionFitsLimits(source);
+        Guid importedSessionId = Guid.NewGuid();
+        Dictionary<Guid, Guid> periodIds = source.Periods.ToDictionary(period => period.Id, _ => Guid.NewGuid());
+        Dictionary<Guid, Guid> executionIds = source.Executions.ToDictionary(
+            execution => execution.Id,
+            _ => Guid.NewGuid());
+        Dictionary<Guid, Guid> markIds = source.Marks.ToDictionary(mark => mark.Id, _ => Guid.NewGuid());
+        KustoRecordedSessionSummary? importedSummary = null;
+
+        await ExecuteWriteAsync(
+            (connection, transaction) =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                EnsureDatabaseCapacity(connection, transaction);
+                EnsureSessionCapacity(connection, transaction);
+                string importedName = CreateImportedSessionName(
+                    connection,
+                    transaction,
+                    source.Summary.Name);
+                WriteImportedSession(connection, transaction, importedSessionId, importedName, source.Summary);
+                WriteImportedPeriods(connection, transaction, importedSessionId, source.Periods, periodIds);
+                WriteImportedExecutions(
+                    connection,
+                    transaction,
+                    importedSessionId,
+                    source.Executions,
+                    periodIds,
+                    executionIds,
+                    cancellationToken);
+                WriteImportedMarks(
+                    connection,
+                    transaction,
+                    importedSessionId,
+                    source.Marks,
+                    executionIds,
+                    markIds);
+                WriteImportedInterests(
+                    connection,
+                    transaction,
+                    importedSessionId,
+                    source.Interests,
+                    executionIds,
+                    markIds);
+                WriteImportedEndpoints(
+                    connection,
+                    transaction,
+                    importedSessionId,
+                    source.Endpoints,
+                    executionIds);
+                EnsureImportedDatabaseCapacity(connection, transaction);
+                importedSummary = ReadSessionSummary(connection, transaction, importedSessionId)
+                    ?? throw new InvalidOperationException("The imported recorded session could not be reloaded.");
+                return Task.CompletedTask;
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        return importedSummary
+            ?? throw new InvalidOperationException("The recorded session import did not complete.");
+    }
+
     private static KustoQueryResult LimitRecordedResult(KustoQueryResult result, int maximumBytes)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(maximumBytes);
@@ -1099,6 +1168,255 @@ public sealed class SqliteKustoRecordedSessionStore :
             command.Parameters["$valueHash"].Value = KustoRecordedValueCanonicalizer.CreateHash(identity);
             command.Parameters["$literalStart"].Value = interest.LiteralStart;
             command.Parameters["$literalLength"].Value = interest.LiteralLength;
+            command.ExecuteNonQuery();
+        }
+    }
+
+    private static void WriteImportedSession(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        Guid sessionId,
+        string name,
+        KustoRecordedSessionSummary summary)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO recorded_sessions (id, name, normalized_name, created_at_utc, last_updated_at_utc)
+            VALUES ($id, $name, $normalizedName, $created, $updated);
+            """;
+        command.Parameters.AddWithValue("$id", FormatGuid(sessionId));
+        command.Parameters.AddWithValue("$name", name);
+        command.Parameters.AddWithValue("$normalizedName", NormalizeName(name));
+        command.Parameters.AddWithValue("$created", FormatTimestamp(summary.CreatedAtUtc));
+        command.Parameters.AddWithValue("$updated", FormatTimestamp(summary.LastUpdatedAtUtc));
+        command.ExecuteNonQuery();
+    }
+
+    private static void WriteImportedPeriods(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        Guid sessionId,
+        IReadOnlyList<KustoRecordingPeriod> periods,
+        Dictionary<Guid, Guid> periodIds)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO recording_periods (id, session_id, started_at_utc, stopped_at_utc)
+            VALUES ($id, $sessionId, $started, $stopped);
+            """;
+        command.Parameters.Add("$id", SqliteType.Text);
+        command.Parameters.AddWithValue("$sessionId", FormatGuid(sessionId));
+        command.Parameters.Add("$started", SqliteType.Text);
+        command.Parameters.Add("$stopped", SqliteType.Text);
+        foreach (KustoRecordingPeriod period in periods)
+        {
+            command.Parameters["$id"].Value = FormatGuid(periodIds[period.Id]);
+            command.Parameters["$started"].Value = FormatTimestamp(period.StartedAtUtc);
+            command.Parameters["$stopped"].Value = period.StoppedAtUtc is DateTimeOffset stoppedAtUtc
+                ? FormatTimestamp(stoppedAtUtc)
+                : DBNull.Value;
+            command.ExecuteNonQuery();
+        }
+    }
+
+    private static void WriteImportedExecutions(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        Guid sessionId,
+        IReadOnlyList<KustoRecordedExecution> executions,
+        Dictionary<Guid, Guid> periodIds,
+        Dictionary<Guid, Guid> executionIds,
+        CancellationToken cancellationToken)
+    {
+        foreach (KustoRecordedExecution execution in executions)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Guid executionId = executionIds[execution.Id];
+            using (SqliteCommand command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = """
+                    INSERT INTO recorded_executions (
+                        id, session_id, period_id, sequence, document_id, document_title,
+                        cluster_uri, database_name, query_text, started_at_utc, completed_at_utc,
+                        status, error_message, duration_milliseconds, completeness,
+                        source_table_name, is_composable, display_name)
+                    VALUES (
+                        $id, $sessionId, $periodId, $sequence, $documentId, $documentTitle,
+                        $clusterUri, $databaseName, $queryText, $started, $completed,
+                        $status, $error, $duration, $completeness,
+                        $sourceTableName, $isComposable, $displayName);
+                    """;
+                command.Parameters.AddWithValue("$id", FormatGuid(executionId));
+                command.Parameters.AddWithValue("$sessionId", FormatGuid(sessionId));
+                command.Parameters.AddWithValue("$periodId", FormatGuid(periodIds[execution.PeriodId]));
+                command.Parameters.AddWithValue("$sequence", execution.Sequence);
+                command.Parameters.AddWithValue("$documentId", FormatGuid(execution.DocumentId));
+                command.Parameters.AddWithValue("$documentTitle", execution.DocumentTitle);
+                command.Parameters.AddWithValue("$clusterUri", execution.ClusterUri.AbsoluteUri);
+                command.Parameters.AddWithValue("$databaseName", execution.DatabaseName);
+                command.Parameters.AddWithValue("$queryText", execution.QueryText);
+                command.Parameters.AddWithValue("$started", FormatTimestamp(execution.StartedAtUtc));
+                object completedValue = execution.CompletedAtUtc is DateTimeOffset completedAtUtc
+                    ? FormatTimestamp(completedAtUtc)
+                    : DBNull.Value;
+                command.Parameters.AddWithValue("$completed", completedValue);
+                command.Parameters.AddWithValue("$status", (int)execution.Status);
+                command.Parameters.AddWithValue("$error", (object?)execution.ErrorMessage ?? DBNull.Value);
+                object durationValue = execution.Result is null
+                    ? DBNull.Value
+                    : execution.Result.Duration.TotalMilliseconds;
+                command.Parameters.AddWithValue("$duration", durationValue);
+                command.Parameters.AddWithValue(
+                    "$completeness",
+                    (int)(execution.Result?.Completeness ?? KustoQueryResultCompleteness.Complete));
+                command.Parameters.AddWithValue(
+                    "$sourceTableName",
+                    (object?)execution.Relation?.SourceTableName ?? DBNull.Value);
+                command.Parameters.AddWithValue("$isComposable", execution.Relation?.IsComposable == true ? 1 : 0);
+                command.Parameters.AddWithValue("$displayName", (object?)execution.DisplayName ?? DBNull.Value);
+                command.ExecuteNonQuery();
+            }
+
+            WriteRelationColumns(connection, transaction, executionId, execution.Relation);
+            if (execution.Result is not null)
+            {
+                WriteResult(connection, transaction, executionId, execution.Result);
+            }
+        }
+    }
+
+    private static void WriteImportedMarks(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        Guid sessionId,
+        IReadOnlyList<KustoRecordedMark> marks,
+        Dictionary<Guid, Guid> executionIds,
+        Dictionary<Guid, Guid> markIds)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO recorded_marks (
+                id, session_id, kind, execution_id, table_ordinal,
+                row_ordinal, column_ordinal, created_at_utc)
+            VALUES (
+                $id, $sessionId, $kind, $executionId, $tableOrdinal,
+                $rowOrdinal, $columnOrdinal, $createdAtUtc);
+            """;
+        command.Parameters.Add("$id", SqliteType.Text);
+        command.Parameters.AddWithValue("$sessionId", FormatGuid(sessionId));
+        command.Parameters.Add("$kind", SqliteType.Integer);
+        command.Parameters.Add("$executionId", SqliteType.Text);
+        command.Parameters.Add("$tableOrdinal", SqliteType.Integer);
+        command.Parameters.Add("$rowOrdinal", SqliteType.Integer);
+        command.Parameters.Add("$columnOrdinal", SqliteType.Integer);
+        command.Parameters.Add("$createdAtUtc", SqliteType.Text);
+        foreach (KustoRecordedMark mark in marks)
+        {
+            command.Parameters["$id"].Value = FormatGuid(markIds[mark.Id]);
+            command.Parameters["$kind"].Value = (int)mark.Kind;
+            command.Parameters["$executionId"].Value = FormatGuid(executionIds[mark.Coordinate.ExecutionId]);
+            command.Parameters["$tableOrdinal"].Value = mark.Coordinate.TableOrdinal;
+            command.Parameters["$rowOrdinal"].Value = mark.Coordinate.RowOrdinal;
+            command.Parameters["$columnOrdinal"].Value = mark.Coordinate.ColumnOrdinal;
+            command.Parameters["$createdAtUtc"].Value = FormatTimestamp(mark.CreatedAtUtc);
+            command.ExecuteNonQuery();
+        }
+    }
+
+    private static void WriteImportedInterests(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        Guid sessionId,
+        IReadOnlyList<KustoRecordedInterest> interests,
+        Dictionary<Guid, Guid> executionIds,
+        Dictionary<Guid, Guid> markIds)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO recorded_value_interests (
+                id, session_id, declared_execution_id, source, column_name,
+                type_name, canonical_value, value_hash, coordinate_execution_id,
+                table_ordinal, row_ordinal, column_ordinal, literal_start,
+                literal_length, mark_id, is_suppressed)
+            VALUES (
+                $id, $sessionId, $declaredExecutionId, $source, $columnName,
+                $typeName, $canonicalValue, $valueHash, $coordinateExecutionId,
+                $tableOrdinal, $rowOrdinal, $columnOrdinal, $literalStart,
+                $literalLength, $markId, $isSuppressed);
+            """;
+        command.Parameters.Add("$id", SqliteType.Text);
+        command.Parameters.AddWithValue("$sessionId", FormatGuid(sessionId));
+        command.Parameters.Add("$declaredExecutionId", SqliteType.Text);
+        command.Parameters.Add("$source", SqliteType.Integer);
+        command.Parameters.Add("$columnName", SqliteType.Text);
+        command.Parameters.Add("$typeName", SqliteType.Text);
+        command.Parameters.Add("$canonicalValue", SqliteType.Text);
+        command.Parameters.Add("$valueHash", SqliteType.Text);
+        command.Parameters.Add("$coordinateExecutionId", SqliteType.Text);
+        command.Parameters.Add("$tableOrdinal", SqliteType.Integer);
+        command.Parameters.Add("$rowOrdinal", SqliteType.Integer);
+        command.Parameters.Add("$columnOrdinal", SqliteType.Integer);
+        command.Parameters.Add("$literalStart", SqliteType.Integer);
+        command.Parameters.Add("$literalLength", SqliteType.Integer);
+        command.Parameters.Add("$markId", SqliteType.Text);
+        command.Parameters.Add("$isSuppressed", SqliteType.Integer);
+        foreach (KustoRecordedInterest interest in interests)
+        {
+            command.Parameters["$id"].Value = FormatGuid(Guid.NewGuid());
+            command.Parameters["$declaredExecutionId"].Value = FormatGuid(executionIds[interest.DeclaredExecutionId]);
+            command.Parameters["$source"].Value = (int)interest.Source;
+            command.Parameters["$columnName"].Value = interest.ColumnName;
+            command.Parameters["$typeName"].Value = interest.Identity.TypeName;
+            command.Parameters["$canonicalValue"].Value = interest.Identity.CanonicalValue;
+            command.Parameters["$valueHash"].Value = KustoRecordedValueCanonicalizer.CreateHash(interest.Identity);
+            command.Parameters["$coordinateExecutionId"].Value = interest.Coordinate is null
+                ? DBNull.Value
+                : FormatGuid(executionIds[interest.Coordinate.ExecutionId]);
+            command.Parameters["$tableOrdinal"].Value = (object?)interest.Coordinate?.TableOrdinal ?? DBNull.Value;
+            command.Parameters["$rowOrdinal"].Value = (object?)interest.Coordinate?.RowOrdinal ?? DBNull.Value;
+            command.Parameters["$columnOrdinal"].Value = (object?)interest.Coordinate?.ColumnOrdinal ?? DBNull.Value;
+            command.Parameters["$literalStart"].Value = (object?)interest.LiteralStart ?? DBNull.Value;
+            command.Parameters["$literalLength"].Value = (object?)interest.LiteralLength ?? DBNull.Value;
+            command.Parameters["$markId"].Value = interest.MarkId is Guid markId
+                ? FormatGuid(markIds[markId])
+                : DBNull.Value;
+            command.Parameters["$isSuppressed"].Value = interest.IsSuppressed ? 1 : 0;
+            command.ExecuteNonQuery();
+        }
+    }
+
+    private static void WriteImportedEndpoints(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        Guid sessionId,
+        IReadOnlyList<KustoChainEndpoint> endpoints,
+        Dictionary<Guid, Guid> executionIds)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO recorded_chain_endpoints (
+                session_id, role, execution_id, table_ordinal, row_ordinal, column_ordinal)
+            VALUES ($sessionId, $role, $executionId, $tableOrdinal, $rowOrdinal, $columnOrdinal);
+            """;
+        command.Parameters.AddWithValue("$sessionId", FormatGuid(sessionId));
+        command.Parameters.Add("$role", SqliteType.Integer);
+        command.Parameters.Add("$executionId", SqliteType.Text);
+        command.Parameters.Add("$tableOrdinal", SqliteType.Integer);
+        command.Parameters.Add("$rowOrdinal", SqliteType.Integer);
+        command.Parameters.Add("$columnOrdinal", SqliteType.Integer);
+        foreach (KustoChainEndpoint endpoint in endpoints)
+        {
+            command.Parameters["$role"].Value = (int)endpoint.Role;
+            command.Parameters["$executionId"].Value = FormatGuid(executionIds[endpoint.Coordinate.ExecutionId]);
+            command.Parameters["$tableOrdinal"].Value = endpoint.Coordinate.TableOrdinal;
+            command.Parameters["$rowOrdinal"].Value = endpoint.Coordinate.RowOrdinal;
+            command.Parameters["$columnOrdinal"].Value = endpoint.Coordinate.ColumnOrdinal;
             command.ExecuteNonQuery();
         }
     }
@@ -1528,7 +1846,16 @@ public sealed class SqliteKustoRecordedSessionStore :
 
     private static KustoRecordedSessionSummary? ReadSessionSummary(SqliteConnection connection, Guid sessionId)
     {
+        return ReadSessionSummary(connection, null, sessionId);
+    }
+
+    private static KustoRecordedSessionSummary? ReadSessionSummary(
+        SqliteConnection connection,
+        SqliteTransaction? transaction,
+        Guid sessionId)
+    {
         using SqliteCommand command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = $"{SelectSessionSummariesSql} WHERE s.id = $sessionId;";
         command.Parameters.AddWithValue("$sessionId", FormatGuid(sessionId));
         using SqliteDataReader reader = command.ExecuteReader();
@@ -1741,7 +2068,7 @@ public sealed class SqliteKustoRecordedSessionStore :
             SELECT id, declared_execution_id, source, column_name, type_name,
                    canonical_value, coordinate_execution_id, table_ordinal,
                    row_ordinal, column_ordinal, literal_start, literal_length,
-                   is_suppressed
+                     is_suppressed, mark_id
             FROM recorded_value_interests
             WHERE session_id = $sessionId
             ORDER BY rowid;
@@ -1768,7 +2095,8 @@ public sealed class SqliteKustoRecordedSessionStore :
                 coordinate,
                 reader.IsDBNull(10) ? null : reader.GetInt32(10),
                 reader.IsDBNull(11) ? null : reader.GetInt32(11),
-                reader.GetInt32(12) != 0));
+                reader.GetInt32(12) != 0,
+                reader.IsDBNull(13) ? null : Guid.Parse(reader.GetString(13))));
         }
 
         return interests.AsReadOnly();
@@ -1826,6 +2154,47 @@ public sealed class SqliteKustoRecordedSessionStore :
         return endpoints.AsReadOnly();
     }
 
+    private static string CreateImportedSessionName(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string sourceName)
+    {
+        string trimmedName = sourceName.Trim();
+        if (!SessionNameExists(connection, transaction, trimmedName))
+        {
+            return trimmedName;
+        }
+
+        string importedName = $"{trimmedName} (imported)";
+        if (!SessionNameExists(connection, transaction, importedName))
+        {
+            return importedName;
+        }
+
+        for (int suffix = 2; suffix <= MaximumSessionCount + 1; suffix++)
+        {
+            importedName = $"{trimmedName} (imported {suffix})";
+            if (!SessionNameExists(connection, transaction, importedName))
+            {
+                return importedName;
+            }
+        }
+
+        throw new InvalidOperationException("A unique imported session name could not be created.");
+    }
+
+    private static bool SessionNameExists(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string name)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT COUNT(*) FROM recorded_sessions WHERE normalized_name = $normalizedName;";
+        command.Parameters.AddWithValue("$normalizedName", NormalizeName(name));
+        return (long)(command.ExecuteScalar() ?? 0L) > 0;
+    }
+
     private void EnsureSessionCapacity(SqliteConnection connection, SqliteTransaction transaction)
     {
         using SqliteCommand command = connection.CreateCommand();
@@ -1836,6 +2205,59 @@ public sealed class SqliteKustoRecordedSessionStore :
         {
             throw new InvalidOperationException(
                 $"Recorded session storage contains {count:N0} sessions. Delete a session before creating another.");
+        }
+    }
+
+    private void EnsureImportedSessionFitsLimits(KustoRecordedSession session)
+    {
+        if (session.Executions.Count > maximumExecutionsPerSession)
+        {
+            throw new InvalidOperationException(
+                $"The archived session contains {session.Executions.Count:N0} recorded queries; "
+                + $"the configured limit is {maximumExecutionsPerSession:N0}.");
+        }
+
+        foreach (KustoRecordedExecution execution in session.Executions)
+        {
+            if (Encoding.UTF8.GetByteCount(execution.QueryText) > MaximumRecordedQueryBytes)
+            {
+                throw new InvalidOperationException(
+                    $"Recorded query {execution.Sequence:N0} exceeds the "
+                    + $"{MaximumRecordedQueryBytes / 1024:N0} KiB query limit.");
+            }
+
+            if (execution.Result is null)
+            {
+                continue;
+            }
+
+            int rowCount = execution.Result.Tables.Sum(table => table.Rows.Count);
+            if (rowCount > MaximumRecordedRowsPerExecution)
+            {
+                throw new InvalidOperationException(
+                    $"Recorded query {execution.Sequence:N0} exceeds the "
+                    + $"{MaximumRecordedRowsPerExecution:N0}-row result limit.");
+            }
+
+            long estimatedBytes = execution.Result.Tables.Sum(
+                table => table.Rows.Sum(row => EstimateRecordedRowBytes(table.Columns, row)));
+            if (estimatedBytes > maximumResultBytesPerExecution)
+            {
+                throw new InvalidOperationException(
+                    $"Recorded query {execution.Sequence:N0} exceeds the configured result-size limit.");
+            }
+        }
+    }
+
+    private void EnsureImportedDatabaseCapacity(
+        SqliteConnection connection,
+        SqliteTransaction transaction)
+    {
+        if (ReadDatabaseUsedBytes(connection, transaction) > maximumDatabaseBytes)
+        {
+            throw new InvalidOperationException(
+                "The imported session would exceed recorded session storage capacity. "
+                + "Delete recorded queries or sessions before importing it.");
         }
     }
 

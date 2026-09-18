@@ -18,6 +18,7 @@ public sealed class KustoRecordedInterest
     /// <param name="literalStart">The optional predicate literal offset.</param>
     /// <param name="literalLength">The optional predicate literal length.</param>
     /// <param name="isSuppressed">Whether this inferred interest is suppressed.</param>
+    /// <param name="markId">The optional mark that declared this interest.</param>
     public KustoRecordedInterest(
         Guid id,
         Guid sessionId,
@@ -28,11 +29,17 @@ public sealed class KustoRecordedInterest
         KustoRecordedValueCoordinate? coordinate,
         int? literalStart,
         int? literalLength,
-        bool isSuppressed)
+        bool isSuppressed,
+        Guid? markId = null)
     {
         ArgumentOutOfRangeException.ThrowIfEqual(id, Guid.Empty);
         ArgumentOutOfRangeException.ThrowIfEqual(sessionId, Guid.Empty);
         ArgumentOutOfRangeException.ThrowIfEqual(declaredExecutionId, Guid.Empty);
+        if (markId == Guid.Empty)
+        {
+            throw new ArgumentOutOfRangeException(nameof(markId));
+        }
+
         ArgumentException.ThrowIfNullOrWhiteSpace(columnName);
         ArgumentNullException.ThrowIfNull(identity);
         if (!Enum.IsDefined(source))
@@ -50,6 +57,7 @@ public sealed class KustoRecordedInterest
         LiteralStart = literalStart;
         LiteralLength = literalLength;
         IsSuppressed = isSuppressed;
+        MarkId = markId;
     }
 
     /// <summary>Gets the interest identifier.</summary>
@@ -81,4 +89,7 @@ public sealed class KustoRecordedInterest
 
     /// <summary>Gets a value indicating whether this inferred interest is suppressed.</summary>
     public bool IsSuppressed { get; }
+
+    /// <summary>Gets the optional mark that declared this interest.</summary>
+    public Guid? MarkId { get; }
 }
