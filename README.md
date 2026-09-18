@@ -13,7 +13,7 @@
   <img alt=".NET 10" src="https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet" />
   <img alt="Avalonia 12" src="https://img.shields.io/badge/Avalonia-12-0B6AA2" />
   <img alt="Native AOT" src="https://img.shields.io/badge/Native_AOT-ready-1F883D" />
-  <img alt="Windows and Linux" src="https://img.shields.io/badge/desktop-Windows_%7C_Linux-2F81F7" />
+  <img alt="Windows, Linux, and macOS" src="https://img.shields.io/badge/desktop-Windows_%7C_Linux_%7C_macOS-2F81F7" />
   <img alt="KQL" src="https://img.shields.io/badge/language-KQL-59D0C5" />
 </p>
 
@@ -213,7 +213,7 @@ Azure MCP additionally requires Node.js with `npx` and an authenticated Azure cr
 ### Prerequisites
 
 - .NET SDK `10.0.302` (pinned by [global.json](global.json))
-- Windows 11 or a supported x64 Linux desktop
+- Windows 11, macOS 14 or later on Apple Silicon or Intel, or a supported x64 Linux desktop
 - An Azure Data Explorer endpoint and Microsoft identity for remote query execution
 
 AI provider and Azure MCP dependencies are optional at runtime; the core query, dashboard, automation, session, and graph workflows do not require an account or network connection.
@@ -254,7 +254,7 @@ Additional bindings follow the [Kusto.Explorer keyboard shortcut reference](http
 
 ## Local Data And Security
 
-Application state lives under the platform's local application-data directory. On Windows, that is `%LocalAppData%\OpenKustoExplorer`.
+Application state lives under the platform's local application-data directory. On Windows, that is `%LocalAppData%\OpenKustoExplorer`; on macOS, it is `~/Library/Application Support/OpenKustoExplorer`.
 
 | File | Contents |
 | --- | --- |
@@ -308,7 +308,7 @@ dotnet build OpenKustoExplorer.slnx --configuration Release --no-restore -warnas
 dotnet test OpenKustoExplorer.slnx --configuration Release --no-build --no-restore
 ```
 
-CI runs a fail-closed direct/transitive NuGet vulnerability audit, formatting, warning-free builds, tests, Native AOT smoke execution, and desktop publication on Windows and Linux. CodeQL separately analyzes C# security and quality on pull requests, main pushes, and a weekly schedule. Dependabot checks centrally managed NuGet packages and GitHub Actions weekly, grouping compatible minor/patch updates while leaving major updates for individual review. Every successful push event to `main` then creates one stable GitHub release and matching source tag; pull requests, manual CI runs, and failed builds create neither.
+CI runs a fail-closed direct/transitive NuGet vulnerability audit, formatting, warning-free builds, tests, Native AOT smoke execution, and desktop publication on Windows, Linux, Apple Silicon macOS, and Intel macOS. CodeQL separately analyzes C# security and quality on pull requests, main pushes, and a weekly schedule. Dependabot checks centrally managed NuGet packages and GitHub Actions weekly, grouping compatible minor/patch updates while leaving major updates for individual review. Every successful push event to `main` then creates one stable GitHub release and matching source tag; pull requests, manual CI runs, and failed builds create neither.
 
 ### Performance Tracing
 
@@ -333,7 +333,7 @@ pwsh ./scripts/Bump-MajorVersion.ps1
 
 Review and commit the resulting `Directory.Build.props` change in that pull request. For example, a `1.x` floor becomes `2.0.0`; that merge publishes `v2.0.0`, and subsequent successful main pushes publish `v2.0.1`, `v2.0.2`, and so on. Use `-WhatIf` to preview the change. A merge commit or squash merge naturally places the new floor on the release commit. When using rebase merge, make the version-floor change the final commit so that earlier rebased commits do not intentionally advance the patch component. Do not run the bump only after the breaking changes have already merged, because their automatic patch release will already have been created.
 
-The release job begins only after both platform quality jobs pass. It attaches versioned Windows and Linux Native AOT archives plus separate symbol archives, creates the source tag at the triggering main commit, and reconciles the highest stable SemVer as GitHub's latest release. CI never edits or commits version files back to `main`. Repository policy must allow the release job's scoped `contents: write` permission, and published main history should not be force-rewritten.
+The release job begins only after all four platform and architecture quality jobs pass. It attaches versioned Windows, Linux, Apple Silicon macOS, and Intel macOS Native AOT archives plus separate symbol archives, creates the source tag at the triggering main commit, and reconciles the highest stable SemVer as GitHub's latest release. CI never edits or commits version files back to `main`. Repository policy must allow the release job's scoped `contents: write` permission, and published main history should not be force-rewritten.
 
 ## Publish Native AOT Manually
 
@@ -358,6 +358,25 @@ dotnet publish src/OpenKustoExplorer.Desktop \
   --output artifacts/desktop \
   -warnaserror
 ```
+
+macOS must be published on macOS. Use `osx-arm64` for Apple Silicon or `osx-x64` for Intel, then stage the Native AOT output as a Finder-launchable application bundle:
+
+```bash
+runtime=osx-arm64
+version="$(pwsh ./scripts/Resolve-ReleaseVersion.ps1 -VersionFloorOnly)"
+dotnet publish src/OpenKustoExplorer.Desktop \
+  --configuration Release \
+  --runtime "${runtime}" \
+  --output artifacts/desktop \
+  -warnaserror
+pwsh ./scripts/New-MacOSApplicationBundle.ps1 \
+  -PublishRoot artifacts/desktop \
+  -BinaryStagingRoot artifacts/release-staging/binaries \
+  -SymbolStagingRoot artifacts/release-staging/symbols \
+  -Version "${version}"
+```
+
+The staged application is `artifacts/release-staging/binaries/OpenKustoExplorer.app`. Official macOS release ZIPs place this application at the archive root and publish Native AOT symbols separately for the matching architecture. The application is currently neither Developer ID signed nor notarized, so macOS may require approval through Finder's **Open** action or **Privacy & Security** settings on first launch.
 
 The published bundle is self-contained; the target machine does not need a separate .NET runtime.
 

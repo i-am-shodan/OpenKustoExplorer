@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RunSettings>
+  <DataCollectionRunSettings>
+    <DataCollectors>
+      <DataCollector friendlyName="XPlat Code Coverage">
+        <Configuration>
+          <Format>cobertura</Format>
+          <Include>[OpenKustoExplorer.Application]*,[OpenKustoExplorer]*,[OpenKustoExplorer.Domain]*,[OpenKustoExplorer.Graph]*,[OpenKustoExplorer.Infrastructure]*,[OpenKustoExplorer.Presentation]*</Include>
+          <Exclude>[OpenKustoExplorer.*.Tests]*,[OpenKustoExplorer.AotSmoke]*</Exclude>
+          <IncludeTestAssembly>false</IncludeTestAssembly>
+          <SingleHit>false</SingleHit>
+          <UseSourceLink>false</UseSourceLink>
+          <DeterministicReport>true</DeterministicReport>
+        </Configuration>
+      </DataCollector>
+    </DataCollectors>
+  </DataCollectionRunSettings>
+</RunSettings>

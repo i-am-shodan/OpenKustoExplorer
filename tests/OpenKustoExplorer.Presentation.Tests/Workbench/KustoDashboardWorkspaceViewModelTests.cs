@@ -190,6 +190,140 @@ public sealed class KustoDashboardWorkspaceViewModelTests
         Assert.Contains("column 2", widget.LayoutAutomationText, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Verifies dashboard editor validation, editing, themes, and deletion share persisted state.
+    /// </summary>
+    [Fact]
+    public void DashboardEditorCreatesEditsAndDeletesDashboard()
+    {
+        StubKustoDashboardStore store = new();
+        using KustoDashboardWorkspaceViewModel viewModel = new(store, new StubKustoQueryService());
+
+        viewModel.OpenCreateDashboardCommand.Execute(null);
+        Assert.True(viewModel.IsDashboardEditorOpen);
+        Assert.Equal("New dashboard", viewModel.DashboardEditorHeading);
+        Assert.Equal("Create", viewModel.DashboardEditorActionText);
+        viewModel.DashboardEditorTitle = "Operations";
+        viewModel.ApplyDashboardThemeCommand.Execute(viewModel.Themes[3]);
+        viewModel.SaveDashboardCommand.Execute(null);
+
+        Assert.False(viewModel.IsDashboardEditorOpen);
+        Assert.Equal("Operations", viewModel.SelectedDashboard?.Title);
+        Assert.Equal("#20252B", viewModel.SelectedDashboard?.BackgroundColor);
+
+        viewModel.OpenCreateDashboardCommand.Execute(null);
+        viewModel.DashboardEditorTitle = " operations ";
+        viewModel.SaveDashboardCommand.Execute(null);
+
+        Assert.True(viewModel.IsDashboardEditorOpen);
+        Assert.True(viewModel.HasDashboardEditorError);
+        Assert.Equal("Choose a unique dashboard name.", viewModel.DashboardEditorErrorText);
+        viewModel.CloseDashboardEditorCommand.Execute(null);
+        Assert.False(viewModel.HasDashboardEditorError);
+
+        viewModel.OpenEditDashboardCommand.Execute(null);
+        Assert.Equal("Edit dashboard", viewModel.DashboardEditorHeading);
+        Assert.Equal("Save", viewModel.DashboardEditorActionText);
+        viewModel.DashboardEditorTitle = "Renamed";
+        viewModel.ApplyDashboardThemeCommand.Execute(viewModel.Themes[4]);
+        viewModel.SaveDashboardCommand.Execute(null);
+
+        Assert.Equal("Renamed", viewModel.SelectedDashboard?.Title);
+        Assert.Equal("#FFF2F5", viewModel.SelectedDashboard?.BackgroundColor);
+        viewModel.OpenDeleteDashboardCommand.Execute(null);
+        Assert.True(viewModel.IsDeleteDashboardOpen);
+        viewModel.CloseDeleteDashboardCommand.Execute(null);
+        Assert.False(viewModel.IsDeleteDashboardOpen);
+        viewModel.OpenDeleteDashboardCommand.Execute(null);
+        viewModel.ConfirmDeleteDashboardCommand.Execute(null);
+        Assert.Empty(viewModel.Dashboards);
+        Assert.True(viewModel.ShowEmptyState);
+        Assert.Null(viewModel.SelectedDashboard);
+        Assert.Empty(store.SavedCatalog!.Dashboards);
+    }
+
+    /// <summary>
+    /// Verifies editing can move a widget between dashboards and deletion persists the destination.
+    /// </summary>
+    [Fact]
+    public void WidgetEditorMovesThemesAndDeletesWidget()
+    {
+        StubKustoDashboardStore store = new();
+        using KustoDashboardWorkspaceViewModel viewModel = new(store, new StubKustoQueryService());
+        KustoDashboardViewModel sourceDashboard = viewModel.AddDashboard("Source");
+        viewModel.OpenNewWidget(
+            "Errors",
+            new Uri("https://adx.contoso.com"),
+            "Telemetry",
+            "Errors | count",
+            null);
+        viewModel.SaveWidgetCommand.Execute(null);
+        KustoDashboardWidgetViewModel sourceWidget = Assert.Single(sourceDashboard.Widgets);
+        KustoDashboardViewModel destinationDashboard = viewModel.AddDashboard("Destination");
+
+        viewModel.OpenEditWidgetCommand.Execute(sourceWidget);
+        Assert.Same(sourceDashboard, viewModel.SelectedDashboard);
+        Assert.Equal("Edit widget", viewModel.WidgetEditorHeading);
+        Assert.Equal("Save", viewModel.WidgetEditorActionText);
+        viewModel.WidgetEditorTitle = "Errors by region";
+        viewModel.WidgetEditorUsesVisualization = true;
+        viewModel.SelectedVisualizationOption = Assert.Single(
+            viewModel.VisualizationOptions,
+            item => item.Kind == KustoVisualizationKind.PieChart);
+        viewModel.ApplyWidgetThemeCommand.Execute(viewModel.Themes[2]);
+        viewModel.SelectedDashboard = destinationDashboard;
+        viewModel.SaveWidgetCommand.Execute(null);
+
+        Assert.Empty(sourceDashboard.Widgets);
+        KustoDashboardWidgetViewModel movedWidget = Assert.Single(destinationDashboard.Widgets);
+        Assert.Equal(sourceWidget.Id, movedWidget.Id);
+        Assert.Equal("Errors by region", movedWidget.Title);
+        Assert.Equal(KustoDashboardWidgetDisplayMode.Visualization, movedWidget.DisplayMode);
+        Assert.Equal(KustoVisualizationKind.PieChart, movedWidget.VisualizationKind);
+        Assert.Equal("#F0F7F2", movedWidget.BackgroundColor);
+
+        viewModel.OpenDeleteWidgetCommand.Execute(movedWidget);
+        Assert.True(viewModel.IsDeleteWidgetOpen);
+        viewModel.CloseDeleteWidgetCommand.Execute(null);
+        Assert.False(viewModel.IsDeleteWidgetOpen);
+        viewModel.OpenDeleteWidgetCommand.Execute(movedWidget);
+        viewModel.ConfirmDeleteWidgetCommand.Execute(null);
+        Assert.Empty(destinationDashboard.Widgets);
+        Assert.Empty(Assert.Single(store.SavedCatalog!.Dashboards, item => item.Title == "Destination").Widgets);
+    }
+
+    /// <summary>
+    /// Verifies invalid custom bounds disable saving and closing restores the persisted preset.
+    /// </summary>
+    /// <returns>A task representing the asynchronous unit test.</returns>
+    [Fact]
+    public async Task CustomRangeValidationRejectsReversedBoundsAndCanClose()
+    {
+        using KustoDashboardWorkspaceViewModel viewModel = new(
+            new StubKustoDashboardStore(),
+            new StubKustoQueryService(),
+            localTimeZone: TimeZoneInfo.Utc);
+        viewModel.AddDashboard("Operations");
+        viewModel.SelectedTimeRangeOption = viewModel.TimeRangeOptions[^1];
+        await viewModel.ApplyTimeRangeSelectionCommand.ExecutionTask!;
+
+        viewModel.CustomTimeRangeStartDate = new DateTimeOffset(2026, 9, 2, 0, 0, 0, TimeSpan.Zero);
+        viewModel.CustomTimeRangeStartTime = TimeSpan.FromHours(10);
+        viewModel.CustomTimeRangeEndDate = new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero);
+        viewModel.CustomTimeRangeEndTime = TimeSpan.FromHours(9);
+
+        Assert.True(viewModel.HasCustomTimeRangeError);
+        Assert.False(viewModel.CanSaveCustomTimeRange);
+        Assert.False(viewModel.SaveCustomTimeRangeCommand.CanExecute(null));
+
+        viewModel.CustomTimeRangeEndDate = new DateTimeOffset(2026, 9, 3, 0, 0, 0, TimeSpan.Zero);
+        Assert.False(viewModel.HasCustomTimeRangeError);
+        Assert.True(viewModel.CanSaveCustomTimeRange);
+        viewModel.CloseCustomTimeRangeCommand.Execute(null);
+        Assert.False(viewModel.IsCustomTimeRangeOpen);
+        Assert.Equal("Last 24 hours", viewModel.SelectedTimeRangeOption.Label);
+    }
+
     private static KustoDashboardWidget CreateWidget(
         string title,
         string queryText,

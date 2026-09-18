@@ -72,6 +72,12 @@ jobs:
             rid: win-x64
           - os: ubuntu-latest
             rid: linux-x64
+          - os: macos-15
+            rid: osx-arm64
+            architecture: arm64
+          - os: macos-15-intel
+            rid: osx-x64
+            architecture: x86_64
 
     steps:
       - name: Check out repository
@@ -88,6 +94,15 @@ jobs:
 
       - name: Restore
         run: dotnet restore OpenKustoExplorer.slnx
+
+      - name: Test coverage scripts
+        shell: pwsh
+        run: ./scripts/Test-CodeCoverageScripts.ps1
+
+      - name: Test macOS application bundle script
+        if: runner.os == 'macOS'
+        shell: pwsh
+        run: ./scripts/Test-MacOSApplicationBundle.ps1
 
       - name: Verify formatting
         run: dotnet format OpenKustoExplorer.slnx --verify-no-changes --no-restore
@@ -106,7 +121,27 @@ jobs:
           }
 
       - name: Run tests
+        if: runner.os == 'Linux'
         run: dotnet test OpenKustoExplorer.slnx --configuration Release --no-build --no-restore --logger "console;verbosity=minimal"
+
+      - name: Run tests with coverage
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./scripts/Measure-CodeCoverage.ps1 -Configuration Release -UseExistingBuild -MinimumLineRate 75
+          Get-Content artifacts/coverage/summary.md | Add-Content $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload coverage report
+        if: ${{ always() && runner.os == 'Windows' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: code-coverage
+          path: |
+            artifacts/coverage/raw/**/coverage.cobertura.xml
+            artifacts/coverage/summary.json
+            artifacts/coverage/summary.md
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Publish Native AOT smoke harness
         run: dotnet publish tests/OpenKustoExplorer.AotSmoke/OpenKustoExplorer.AotSmoke.csproj --configuration Release --runtime ${{ matrix.rid }} --output artifacts/aot-smoke -warnaserror -p:Version=${{ needs.version.outputs.version }}
@@ -120,10 +155,36 @@ jobs:
         if: runner.os == 'Linux'
         run: ./artifacts/aot-smoke/OpenKustoExplorer.AotSmoke
 
+      - name: Run macOS Native AOT smoke harness
+        if: runner.os == 'macOS'
+        run: ./artifacts/aot-smoke/OpenKustoExplorer.AotSmoke
+
       - name: Publish desktop Native AOT bundle
         run: dotnet publish src/OpenKustoExplorer.Desktop/OpenKustoExplorer.Desktop.csproj --configuration Release --runtime ${{ matrix.rid }} --output artifacts/desktop -warnaserror -p:Version=${{ needs.version.outputs.version }}
 
+      - name: Stage macOS application bundle
+        if: runner.os == 'macOS'
+        shell: pwsh
+        run: |
+          ./scripts/New-MacOSApplicationBundle.ps1 `
+            -PublishRoot 'artifacts/desktop' `
+            -BinaryStagingRoot 'artifacts/release-staging/binaries' `
+            -SymbolStagingRoot 'artifacts/release-staging/symbols' `
+            -Version '${{ needs.version.outputs.version }}'
+
+      - name: Package macOS archives
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version='${{ needs.version.outputs.version }}'
+          mkdir -p artifacts/release
+          chmod +x artifacts/release-staging/binaries/OpenKustoExplorer.app/Contents/MacOS/OpenKustoExplorer
+          (cd artifacts/release-staging/binaries && zip -q -r "../../release/OpenKustoExplorer-${version}-${{ matrix.rid }}.zip" .)
+          (cd artifacts/release-staging/symbols && zip -q -r "../../release/OpenKustoExplorer-${version}-${{ matrix.rid }}-symbols.zip" .)
+
       - name: Upload desktop bundle
+        if: runner.os != 'macOS'
         uses: actions/upload-artifact@v7
         with:
           name: OpenKustoExplorer-${{ matrix.rid }}
@@ -136,6 +197,7 @@ jobs:
           compression-level: 9
 
       - name: Upload desktop symbols and documentation
+        if: runner.os != 'macOS'
         uses: actions/upload-artifact@v7
         with:
           name: OpenKustoExplorer-${{ matrix.rid }}-symbols
@@ -146,8 +208,26 @@ jobs:
           if-no-files-found: error
           compression-level: 9
 
+      - name: Upload macOS application bundle
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v7
+        with:
+          name: OpenKustoExplorer-${{ matrix.rid }}
+          path: artifacts/release/OpenKustoExplorer-${{ needs.version.outputs.version }}-${{ matrix.rid }}.zip
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Upload macOS symbols and documentation
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v7
+        with:
+          name: OpenKustoExplorer-${{ matrix.rid }}-symbols
+          path: artifacts/release/OpenKustoExplorer-${{ needs.version.outputs.version }}-${{ matrix.rid }}-symbols.zip
+          if-no-files-found: error
+          compression-level: 0
+
       - name: Stage release files
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && runner.os != 'macOS'
         shell: pwsh
         run: |
           $publishRoot = (Resolve-Path 'artifacts/desktop').Path
@@ -226,6 +306,32 @@ jobs:
           test -x artifacts/archive-check/binaries/OpenKustoExplorer
           test -n "$(find artifacts/archive-check/symbols -type f -print -quit)"
 
+      - name: Verify macOS release archives
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version='${{ needs.version.outputs.version }}'
+          rm -rf artifacts/archive-check
+          mkdir -p artifacts/archive-check/binaries artifacts/archive-check/symbols
+          unzip -q "artifacts/release/OpenKustoExplorer-${version}-${{ matrix.rid }}.zip" -d artifacts/archive-check/binaries
+          unzip -q "artifacts/release/OpenKustoExplorer-${version}-${{ matrix.rid }}-symbols.zip" -d artifacts/archive-check/symbols
+          application='artifacts/archive-check/binaries/OpenKustoExplorer.app/Contents/MacOS/OpenKustoExplorer'
+          plist='artifacts/archive-check/binaries/OpenKustoExplorer.app/Contents/Info.plist'
+          test -s "${application}"
+          test -x "${application}"
+          test -s artifacts/archive-check/binaries/OpenKustoExplorer.app/Contents/Resources/OpenKustoExplorer.icns
+          plutil -lint "${plist}"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "${plist}")" = 'OpenKustoExplorer'
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleName' "${plist}")" = 'Kusto Explorer'
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "${plist}")" = 'Open Kusto Explorer'
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${plist}")" = 'io.github.i-am-shodan.OpenKustoExplorer'
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${plist}")" = "${version}"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "${plist}")" = "${version}"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "${plist}")" = '14.0'
+          test "$(lipo -archs "${application}")" = '${{ matrix.architecture }}'
+          test -n "$(find artifacts/archive-check/symbols/OpenKustoExplorer.dSYM -type f -print -quit)"
+
       - name: Upload release packages
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v7
@@ -268,7 +374,11 @@ jobs:
             "OpenKustoExplorer-$version-win-x64.zip",
             "OpenKustoExplorer-$version-win-x64-symbols.zip",
             "OpenKustoExplorer-$version-linux-x64.zip",
-            "OpenKustoExplorer-$version-linux-x64-symbols.zip"
+            "OpenKustoExplorer-$version-linux-x64-symbols.zip",
+            "OpenKustoExplorer-$version-osx-arm64.zip",
+            "OpenKustoExplorer-$version-osx-arm64-symbols.zip",
+            "OpenKustoExplorer-$version-osx-x64.zip",
+            "OpenKustoExplorer-$version-osx-x64-symbols.zip"
           )
 
           foreach ($fileName in $expected) {
@@ -292,6 +402,10 @@ jobs:
             "artifacts/release/OpenKustoExplorer-${RELEASE_VERSION}-win-x64-symbols.zip"
             "artifacts/release/OpenKustoExplorer-${RELEASE_VERSION}-linux-x64.zip"
             "artifacts/release/OpenKustoExplorer-${RELEASE_VERSION}-linux-x64-symbols.zip"
+            "artifacts/release/OpenKustoExplorer-${RELEASE_VERSION}-osx-arm64.zip"
+            "artifacts/release/OpenKustoExplorer-${RELEASE_VERSION}-osx-arm64-symbols.zip"
+            "artifacts/release/OpenKustoExplorer-${RELEASE_VERSION}-osx-x64.zip"
+            "artifacts/release/OpenKustoExplorer-${RELEASE_VERSION}-osx-x64-symbols.zip"
           )
 
           git fetch --force --tags origin

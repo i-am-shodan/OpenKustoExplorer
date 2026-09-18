@@ -60,7 +60,12 @@ internal sealed class KustoCompletionItemContent : Grid
         Children.Add(categoryText);
     }
 
-    private static CompletionCategory GetCategory(string kind)
+    /// <summary>
+    /// Gets the visual category for a completion kind.
+    /// </summary>
+    /// <param name="kind">The Kusto completion kind.</param>
+    /// <returns>The category presentation.</returns>
+    internal static CompletionCategory GetCategory(string kind)
     {
         return kind switch
         {
@@ -87,7 +92,13 @@ internal sealed class KustoCompletionItemContent : Grid
         };
     }
 
-    private sealed record CompletionCategory(
+    /// <summary>
+    /// Describes the visual presentation of a completion category.
+    /// </summary>
+    /// <param name="Icon">The category icon.</param>
+    /// <param name="Label">The concise category label.</param>
+    /// <param name="StyleClass">The semantic style class.</param>
+    internal sealed record CompletionCategory(
         LucideIconKind Icon,
         string Label,
         string StyleClass);
