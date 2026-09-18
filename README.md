@@ -212,7 +212,7 @@ Azure MCP additionally requires Node.js with `npx` and an authenticated Azure cr
 
 ### Prerequisites
 
-- .NET SDK `10.0.302` (pinned by [global.json](global.json))
+- .NET SDK `10.0.401` (pinned by [global.json](global.json))
 - Windows 11, macOS 14 or later on Apple Silicon or Intel, or a supported x64 Linux desktop
 - An Azure Data Explorer endpoint and Microsoft identity for remote query execution
 
