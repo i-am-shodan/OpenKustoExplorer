@@ -4,14 +4,11 @@ param()
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-if (-not $IsMacOS) {
-    Write-Host 'macOS application bundle tests skipped because the current platform is not macOS.'
-    return
-}
-
 $bundleScript = Join-Path $PSScriptRoot 'New-MacOSApplicationBundle.ps1'
+$bundleSupportScript = Join-Path $PSScriptRoot 'MacOSApplicationBundle.Common.ps1'
 $iconSource = Join-Path $PSScriptRoot '../src/OpenKustoExplorer.Desktop/Assets/OpenKustoExplorer.png'
 $utf8 = [Text.UTF8Encoding]::new($false, $true)
+. $bundleSupportScript
 
 function Assert-Equal {
     param(
@@ -113,12 +110,84 @@ function Get-PlistString {
     return $valueNode.InnerText
 }
 
+function Assert-ScriptParses {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Path
+    )
+
+    $tokens = $null
+    $parseErrors = $null
+    $null = [Management.Automation.Language.Parser]::ParseFile(
+        $Path,
+        [ref] $tokens,
+        [ref] $parseErrors)
+
+    if ($parseErrors.Count -gt 0) {
+        throw "'$Path' contains PowerShell parse errors: $($parseErrors.Message -join '; ')"
+    }
+}
+
+function Assert-InfoPlist {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Path,
+
+        [Parameter(Mandatory)]
+        [string] $ApplicationVersion
+    )
+
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    if ($bytes.Length -ge 3 -and
+        $bytes[0] -eq 0xEF -and
+        $bytes[1] -eq 0xBB -and
+        $bytes[2] -eq 0xBF) {
+        throw 'Info.plist contains an unexpected UTF-8 byte order mark.'
+    }
+
+    $content = $utf8.GetString($bytes)
+    $expectedDocType = `
+        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
+    if (-not $content.Contains($expectedDocType, [StringComparison]::Ordinal)) {
+        throw 'Info.plist does not contain the canonical Apple property list DOCTYPE.'
+    }
+
+    if ($content.Contains('[]>', [StringComparison]::Ordinal)) {
+        throw 'Info.plist contains an empty internal DTD subset.'
+    }
+
+    if ($content.Contains("`r", [StringComparison]::Ordinal)) {
+        throw 'Info.plist contains non-canonical carriage return line endings.'
+    }
+
+    [xml] $plist = $content
+    Assert-Equal '1.0' $plist.DocumentElement.GetAttribute('version') 'Property list version'
+    Assert-Equal 'OpenKustoExplorer' (Get-PlistString $plist 'CFBundleExecutable') 'Bundle executable'
+    Assert-Equal 'Kusto Explorer' (Get-PlistString $plist 'CFBundleName') 'Bundle name'
+    Assert-Equal 'Open Kusto Explorer' (Get-PlistString $plist 'CFBundleDisplayName') 'Bundle display name'
+    Assert-Equal 'io.github.i-am-shodan.OpenKustoExplorer' `
+        (Get-PlistString $plist 'CFBundleIdentifier') `
+        'Bundle identifier'
+    Assert-Equal $ApplicationVersion `
+        (Get-PlistString $plist 'CFBundleShortVersionString') `
+        'Display version'
+    Assert-Equal $ApplicationVersion (Get-PlistString $plist 'CFBundleVersion') 'Bundle version'
+    Assert-Equal '14.0' (Get-PlistString $plist 'LSMinimumSystemVersion') 'Minimum macOS version'
+    Assert-Equal 'true' `
+        $plist.SelectSingleNode(
+            "/plist/dict/key[text()='NSHighResolutionCapable']/following-sibling::*[1]").Name `
+        'High-resolution capability'
+}
+
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) "OpenKustoExplorer-macos-bundle-$([Guid]::NewGuid().ToString('N'))"
 $publishRoot = Join-Path $testRoot 'publish'
 $binaryRoot = Join-Path $testRoot 'binaries'
 $symbolRoot = Join-Path $testRoot 'symbols'
 
 try {
+    Assert-ScriptParses -Path $bundleScript
+    Assert-ScriptParses -Path $bundleSupportScript
+
     Set-TestFile -Path (Join-Path $publishRoot 'OpenKustoExplorer') -Content "#!/bin/sh`nexit 0`n"
     Set-TestFile -Path (Join-Path $publishRoot 'runtimes/osx/native/libExample.dylib') -Content 'native'
     Set-TestFile -Path (Join-Path $publishRoot 'OpenKustoExplorer.xml') -Content '<doc />'
@@ -127,6 +196,31 @@ try {
     Set-TestFile `
         -Path (Join-Path $publishRoot 'OpenKustoExplorer.dSYM/Contents/Resources/DWARF/OpenKustoExplorer') `
         -Content 'dwarf'
+
+    $publishedFiles = @(Get-ChildItem -LiteralPath $publishRoot -Recurse -File)
+    $symbolFiles = @(
+        $publishedFiles | Where-Object {
+            Test-MacOSSymbolFile -PublishRoot $publishRoot -File $_
+        }
+    )
+    $binaryFiles = @(
+        $publishedFiles | Where-Object {
+            $isSymbol = Test-MacOSSymbolFile -PublishRoot $publishRoot -File $_
+            -not $isSymbol
+        }
+    )
+    Assert-Equal 2 $binaryFiles.Count 'Platform-neutral binary file count'
+    Assert-Equal 4 $symbolFiles.Count 'Platform-neutral symbol file count'
+
+    $standalonePlistPath = Join-Path $testRoot 'Info.plist'
+    Write-InfoPlist -Path $standalonePlistPath -ApplicationVersion '1.2.3'
+    Assert-InfoPlist -Path $standalonePlistPath -ApplicationVersion '1.2.3'
+
+    if (-not $IsMacOS) {
+        Write-Host 'macOS bundle metadata tests passed; platform integration tests skipped.'
+        return
+    }
+
     Set-TestFile -Path (Join-Path $binaryRoot 'stale-binary.txt') -Content 'stale'
     Set-TestFile -Path (Join-Path $symbolRoot 'stale-symbol.txt') -Content 'stale'
 
@@ -177,20 +271,7 @@ try {
         throw "plutil rejected Info.plist: $($plutilOutput -join "`n")"
     }
 
-    [xml] $plist = Get-Content -LiteralPath $plistPath -Raw
-    Assert-Equal 'OpenKustoExplorer' (Get-PlistString $plist 'CFBundleExecutable') 'Bundle executable'
-    Assert-Equal 'Kusto Explorer' (Get-PlistString $plist 'CFBundleName') 'Bundle name'
-    Assert-Equal 'Open Kusto Explorer' (Get-PlistString $plist 'CFBundleDisplayName') 'Bundle display name'
-    Assert-Equal 'io.github.i-am-shodan.OpenKustoExplorer' `
-        (Get-PlistString $plist 'CFBundleIdentifier') `
-        'Bundle identifier'
-    Assert-Equal '1.2.3' (Get-PlistString $plist 'CFBundleShortVersionString') 'Display version'
-    Assert-Equal '1.2.3' (Get-PlistString $plist 'CFBundleVersion') 'Bundle version'
-    Assert-Equal '14.0' (Get-PlistString $plist 'LSMinimumSystemVersion') 'Minimum macOS version'
-    Assert-Equal 'true' `
-        $plist.SelectSingleNode(
-            "/plist/dict/key[text()='NSHighResolutionCapable']/following-sibling::*[1]").Name `
-        'High-resolution capability'
+    Assert-InfoPlist -Path $plistPath -ApplicationVersion '1.2.3'
 
     Assert-Throws -Scenario 'Invalid semantic version' -Action {
         & $bundleScript `

@@ -18,6 +18,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'MacOSApplicationBundle.Common.ps1')
 
 function Test-PathContains {
     param(
@@ -54,64 +55,6 @@ function Assert-SeparatePaths {
     if ((Test-PathContains -Parent $FirstPath -Child $SecondPath) -or
         (Test-PathContains -Parent $SecondPath -Child $FirstPath)) {
         throw "$FirstName '$FirstPath' and $SecondName '$SecondPath' must not overlap."
-    }
-}
-
-function Write-InfoPlist {
-    param(
-        [Parameter(Mandatory)]
-        [string] $Path,
-
-        [Parameter(Mandatory)]
-        [string] $ApplicationVersion
-    )
-
-    $settings = [Xml.XmlWriterSettings]::new()
-    $settings.Encoding = [Text.UTF8Encoding]::new($false)
-    $settings.Indent = $true
-    $settings.NewLineChars = "`n"
-    $settings.NewLineHandling = [Xml.NewLineHandling]::Replace
-
-    $writer = [Xml.XmlWriter]::Create($Path, $settings)
-    try {
-        $writer.WriteStartDocument()
-        $writer.WriteDocType(
-            'plist',
-            '-//Apple//DTD PLIST 1.0//EN',
-            'http://www.apple.com/DTDs/PropertyList-1.0.dtd',
-            $null)
-        $writer.WriteStartElement('plist')
-        $writer.WriteAttributeString('version', '1.0')
-        $writer.WriteStartElement('dict')
-
-        $values = [ordered]@{
-            CFBundleDevelopmentRegion = 'en'
-            CFBundleDisplayName = 'Open Kusto Explorer'
-            CFBundleExecutable = 'OpenKustoExplorer'
-            CFBundleIconFile = 'OpenKustoExplorer.icns'
-            CFBundleIdentifier = 'io.github.i-am-shodan.OpenKustoExplorer'
-            CFBundleInfoDictionaryVersion = '6.0'
-            CFBundleName = 'Kusto Explorer'
-            CFBundlePackageType = 'APPL'
-            CFBundleShortVersionString = $ApplicationVersion
-            CFBundleVersion = $ApplicationVersion
-            LSMinimumSystemVersion = '14.0'
-        }
-
-        foreach ($entry in $values.GetEnumerator()) {
-            $writer.WriteElementString('key', $entry.Key)
-            $writer.WriteElementString('string', $entry.Value)
-        }
-
-        $writer.WriteElementString('key', 'NSHighResolutionCapable')
-        $writer.WriteStartElement('true')
-        $writer.WriteEndElement()
-        $writer.WriteEndElement()
-        $writer.WriteEndElement()
-        $writer.WriteEndDocument()
-    }
-    finally {
-        $writer.Dispose()
     }
 }
 
@@ -185,16 +128,13 @@ if (-not (Test-Path -LiteralPath $applicationSource -PathType Leaf) -or
 
 $symbolFiles = @(
     $publishedFiles | Where-Object {
-        $relativePath = [IO.Path]::GetRelativePath($publishPath, $_.FullName)
-        ($_.Extension -in '.pdb', '.dbg', '.xml') -or
-            ($relativePath -match '(^|[/\\])[^/\\]+\.dSYM([/\\]|$)')
+        Test-MacOSSymbolFile -PublishRoot $publishPath -File $_
     }
 )
 $binaryFiles = @(
     $publishedFiles | Where-Object {
-        $relativePath = [IO.Path]::GetRelativePath($publishPath, $_.FullName)
-        ($_.Extension -notin '.pdb', '.dbg', '.xml') -and
-            ($relativePath -notmatch '(^|[/\\])[^/\\]+\.dSYM([/\\]|$)')
+        $isSymbol = Test-MacOSSymbolFile -PublishRoot $publishPath -File $_
+        -not $isSymbol
     }
 )
 

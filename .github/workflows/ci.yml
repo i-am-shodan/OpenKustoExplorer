@@ -100,7 +100,6 @@ jobs:
         run: ./scripts/Test-CodeCoverageScripts.ps1
 
       - name: Test macOS application bundle script
-        if: runner.os == 'macOS'
         shell: pwsh
         run: ./scripts/Test-MacOSApplicationBundle.ps1
 
