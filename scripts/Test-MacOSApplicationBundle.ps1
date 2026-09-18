@@ -163,7 +163,7 @@ try {
 
     $applicationMode = [IO.File]::GetUnixFileMode($applicationPath)
     Assert-Equal `
-        [IO.UnixFileMode]::UserExecute `
+        ([IO.UnixFileMode]::UserExecute) `
         ($applicationMode -band [IO.UnixFileMode]::UserExecute) `
         'Application executable permission'
 
