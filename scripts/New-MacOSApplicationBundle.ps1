@@ -186,15 +186,15 @@ if (-not (Test-Path -LiteralPath $applicationSource -PathType Leaf) -or
 $symbolFiles = @(
     $publishedFiles | Where-Object {
         $relativePath = [IO.Path]::GetRelativePath($publishPath, $_.FullName)
-        $_.Extension -in '.pdb', '.dbg', '.xml'
-            -or $relativePath -match '(^|[/\\])[^/\\]+\.dSYM([/\\]|$)'
+        ($_.Extension -in '.pdb', '.dbg', '.xml') -or
+            ($relativePath -match '(^|[/\\])[^/\\]+\.dSYM([/\\]|$)')
     }
 )
 $binaryFiles = @(
     $publishedFiles | Where-Object {
         $relativePath = [IO.Path]::GetRelativePath($publishPath, $_.FullName)
-        $_.Extension -notin '.pdb', '.dbg', '.xml'
-            -and $relativePath -notmatch '(^|[/\\])[^/\\]+\.dSYM([/\\]|$)'
+        ($_.Extension -notin '.pdb', '.dbg', '.xml') -and
+            ($relativePath -notmatch '(^|[/\\])[^/\\]+\.dSYM([/\\]|$)')
     }
 )
 
