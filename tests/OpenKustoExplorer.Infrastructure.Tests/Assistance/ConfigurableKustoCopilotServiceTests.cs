@@ -7,6 +7,7 @@ using OpenKustoExplorer.Graph;
 using OpenKustoExplorer.Infrastructure.Assistance;
 using OpenKustoExplorer.Infrastructure.Graph;
 using OpenKustoExplorer.Infrastructure.Sessions;
+using OpenKustoExplorer.Portable.Sessions;
 
 namespace OpenKustoExplorer.Infrastructure.Tests.Assistance;
 

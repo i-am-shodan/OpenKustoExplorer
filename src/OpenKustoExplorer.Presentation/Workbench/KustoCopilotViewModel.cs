@@ -861,7 +861,11 @@ public sealed class KustoCopilotViewModel : ObservableObject
         {
             IReadOnlyList<KustoCopilotModel> availableModels = await service.GetModelsAsync(cancellationToken);
             Models.Clear();
-            Models.Add(new KustoCopilotModel("auto", "Automatic"));
+            bool supportsAutomaticModel = service.ProviderKind == KustoAIProviderKind.GitHubCopilot;
+            if (supportsAutomaticModel)
+            {
+                Models.Add(new KustoCopilotModel("auto", "Automatic"));
+            }
 
             foreach (KustoCopilotModel model in availableModels.Where(model => !string.Equals(
                 model.Id,
@@ -871,14 +875,19 @@ public sealed class KustoCopilotViewModel : ObservableObject
                 Models.Add(model);
             }
 
-            PreserveModel(previousSelection);
-            if (service.ProviderKind == KustoAIProviderKind.GitHubCopilot)
+            if (supportsAutomaticModel)
             {
+                PreserveModel(previousSelection);
                 PreserveModel(defaultModel);
             }
 
+            if (Models.Count == 0)
+            {
+                throw new InvalidOperationException($"{service.ProviderDisplayName} returned no models.");
+            }
+
             KustoCopilotModel? configuredDefault = !isModelOverridden
-                && service.ProviderKind == KustoAIProviderKind.GitHubCopilot
+                && supportsAutomaticModel
                     ? FindModel(defaultModel.Id)
                     : null;
             KustoCopilotModel selected = configuredDefault

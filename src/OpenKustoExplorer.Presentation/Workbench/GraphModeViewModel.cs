@@ -39,6 +39,7 @@ public sealed class GraphModeViewModel : ObservableObject
     private bool isCypherRunning;
     private bool isFindingRoutes;
     private bool isGraphEditorOpen;
+    private bool isLoaded;
     private bool isFocusedViewport;
     private bool isBusy;
     private bool isNodeLabelEditorOpen;
@@ -1492,6 +1493,7 @@ public sealed class GraphModeViewModel : ObservableObject
             State = await graphStore.GetStateAsync(catalog.ActiveGraph.Snapshot, cancellationToken);
             await LoadTimelineAsync(cancellationToken);
             await LoadCurrentGraphAsync(cancellationToken);
+            isLoaded = true;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -1505,6 +1507,22 @@ public sealed class GraphModeViewModel : ObservableObject
         {
             IsBusy = false;
         }
+    }
+
+    /// <summary>
+    /// Ensures graph state is loaded for workspace activation.
+    /// </summary>
+    /// <param name="cancellationToken">A token that cancels the initial load.</param>
+    /// <returns>Whether state was refreshed instead of served from memory.</returns>
+    internal async Task<bool> EnsureLoadedAsync(CancellationToken cancellationToken)
+    {
+        if (isLoaded)
+        {
+            return false;
+        }
+
+        await RefreshAsync(cancellationToken);
+        return true;
     }
 
     private static string FormatCount(long count, string singularNoun)

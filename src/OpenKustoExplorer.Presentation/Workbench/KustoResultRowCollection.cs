@@ -13,9 +13,21 @@ internal sealed class KustoResultRowCollection : ObservableCollection<KustoResul
     /// Replaces all visible rows without raising per-row collection changes.
     /// </summary>
     /// <param name="rows">The complete visible row projection.</param>
-    internal void ReplaceWith(IReadOnlyList<KustoResultRowViewModel> rows)
+    /// <returns><see langword="true"/> when the visible row sequence changed.</returns>
+    internal bool ReplaceWith(IReadOnlyList<KustoResultRowViewModel> rows)
     {
         ArgumentNullException.ThrowIfNull(rows);
+        bool isUnchanged = Count == rows.Count;
+        for (int index = 0; isUnchanged && index < rows.Count; index++)
+        {
+            isUnchanged = ReferenceEquals(Items[index], rows[index]);
+        }
+
+        if (isUnchanged)
+        {
+            return false;
+        }
+
         CheckReentrancy();
         Items.Clear();
 
@@ -27,5 +39,6 @@ internal sealed class KustoResultRowCollection : ObservableCollection<KustoResul
         OnPropertyChanged(new PropertyChangedEventArgs(nameof(Count)));
         OnPropertyChanged(new PropertyChangedEventArgs("Item[]"));
         OnCollectionChanged(new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
+        return true;
     }
 }

@@ -12,8 +12,9 @@ public sealed class FileKustoDashboardStoreTests
     /// <summary>
     /// Verifies widget queries, refresh, visualization, layout, and colors round-trip through JSON.
     /// </summary>
+    /// <returns>A task that completes after the catalog is exchanged.</returns>
     [Fact]
-    public void SaveLoadAndExchangeRoundTripDashboard()
+    public async Task SaveLoadAndExchangeRoundTripDashboard()
     {
         string directoryPath = Path.Combine(Path.GetTempPath(), $"OpenKustoExplorer-{Guid.NewGuid():N}");
         string filePath = Path.Combine(directoryPath, "dashboards.json");
@@ -64,7 +65,7 @@ public sealed class FileKustoDashboardStoreTests
         try
         {
             FileKustoDashboardStore store = new(filePath);
-            store.Save(new KustoDashboardCatalog([dashboard]));
+            await store.SaveAsync(new KustoDashboardCatalog([dashboard]));
 
             KustoDashboard restored = Assert.Single(store.Load().Dashboards);
             using MemoryStream stream = new();

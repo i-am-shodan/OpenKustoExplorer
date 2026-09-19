@@ -1,0 +1,11 @@
+<Window
+    x:Class="OpenKustoExplorer.Desktop.MainWindow"
+    xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="Open Kusto Explorer"
+    Width="1440"
+    Height="900"
+    MinWidth="760"
+    MinHeight="600"
+    Icon="/Assets/OpenKustoExplorer.ico"
+    WindowStartupLocation="CenterScreen" />

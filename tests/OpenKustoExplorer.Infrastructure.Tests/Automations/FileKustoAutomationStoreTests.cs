@@ -12,8 +12,9 @@ public sealed class FileKustoAutomationStoreTests
     /// <summary>
     /// Verifies schedules, successful visualized results, and failures round-trip through JSON.
     /// </summary>
+    /// <returns>A task that completes after the catalog is reloaded.</returns>
     [Fact]
-    public void SaveAndLoadRoundTripsAutomationHistory()
+    public async Task SaveAndLoadRoundTripsAutomationHistory()
     {
         string directoryPath = CreateTemporaryDirectory();
         string filePath = Path.Combine(directoryPath, "automations.json");
@@ -82,7 +83,7 @@ public sealed class FileKustoAutomationStoreTests
         try
         {
             FileKustoAutomationStore store = new(filePath);
-            store.Save(new KustoAutomationCatalog([automation]));
+            await store.SaveAsync(new KustoAutomationCatalog([automation]));
 
             KustoAutomation restored = Assert.Single(store.Load().Automations);
 
@@ -185,8 +186,9 @@ public sealed class FileKustoAutomationStoreTests
     /// <summary>
     /// Verifies version-two catalogs load with the webhook channel disabled.
     /// </summary>
+    /// <returns>A task that completes after the version-two catalog is loaded.</returns>
     [Fact]
-    public void LoadAcceptsVersionTwoWithoutWebhook()
+    public async Task LoadAcceptsVersionTwoWithoutWebhook()
     {
         string directoryPath = CreateTemporaryDirectory();
         string filePath = Path.Join(directoryPath, "automations.json");
@@ -207,10 +209,10 @@ public sealed class FileKustoAutomationStoreTests
         try
         {
             FileKustoAutomationStore store = new(filePath);
-            store.Save(new KustoAutomationCatalog([automation]));
-            string versionTwoJson = File.ReadAllText(filePath)
+            await store.SaveAsync(new KustoAutomationCatalog([automation]));
+            string versionTwoJson = (await File.ReadAllTextAsync(filePath))
                 .Replace("\"version\": 3", "\"version\": 2", StringComparison.Ordinal);
-            File.WriteAllText(filePath, versionTwoJson);
+            await File.WriteAllTextAsync(filePath, versionTwoJson);
 
             KustoAutomation restored = Assert.Single(store.Load().Automations);
 

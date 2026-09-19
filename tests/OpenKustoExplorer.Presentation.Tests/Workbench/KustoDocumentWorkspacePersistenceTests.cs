@@ -11,14 +11,15 @@ public sealed class KustoDocumentWorkspacePersistenceTests
     /// <summary>
     /// Verifies an unexpected store failure is exposed without escaping the persistence boundary.
     /// </summary>
+    /// <returns>A task that completes after the durable save fails.</returns>
     [Fact]
-    public void FlushReportsUnexpectedStoreFailure()
+    public async Task FlushReportsUnexpectedStoreFailure()
     {
         using KustoDocumentWorkspacePersistence persistence = new(new ThrowingDocumentStore());
         string? error = null;
         persistence.SaveErrorChanged += value => error = value;
 
-        persistence.Flush(new KustoDocumentWorkspace([], null));
+        await persistence.FlushAsync(new KustoDocumentWorkspace([], null));
 
         Assert.Contains("Queries are not saved", error, StringComparison.Ordinal);
         Assert.Contains("Unexpected store failure", error, StringComparison.Ordinal);
@@ -28,9 +29,11 @@ public sealed class KustoDocumentWorkspacePersistenceTests
     {
         public KustoDocumentWorkspace Load() => new([], null);
 
-        public void Save(KustoDocumentWorkspace workspace)
+        public Task SaveAsync(
+            KustoDocumentWorkspace workspace,
+            CancellationToken cancellationToken = default)
         {
-            throw new InvalidOperationException("Unexpected store failure");
+            return Task.FromException(new InvalidOperationException("Unexpected store failure"));
         }
     }
 }

@@ -496,7 +496,7 @@ public sealed class KustoGraphIngestionServiceTests
             this.useMissingTarget = useMissingTarget;
         }
 
-        public Task<KustoGraphExportSummary> ExecuteGraphAsync(
+        public async Task<KustoGraphExportSummary> ExecuteGraphAsync(
             KustoQueryRequest request,
             KustoGraphQueryPlan plan,
             IKustoGraphExportSink sink,
@@ -511,15 +511,25 @@ public sealed class KustoGraphIngestionServiceTests
                 new("name", "string"),
                 new("NodeType", "string"),
             ];
-            sink.BeginTable(KustoGraphExportTableKind.Nodes, plan.NodeTableName, nodeColumns);
-            sink.WriteRow(KustoGraphExportTableKind.Nodes, ["1", "alice-id", "Alice", sourceTypeName]);
-            sink.WriteRow(KustoGraphExportTableKind.Nodes, ["2", "server-id", "Server 1", "Host"]);
+            List<IReadOnlyList<string>> nodeRows =
+            [
+                ["1", "alice-id", "Alice", sourceTypeName],
+                ["2", "server-id", "Server 1", "Host"],
+            ];
             if (includeDuplicateIdentity)
             {
-                sink.WriteRow(KustoGraphExportTableKind.Nodes, ["3", duplicateCanonicalId, "Alice", "Person"]);
+                nodeRows.Add(["3", duplicateCanonicalId, "Alice", "Person"]);
             }
 
-            sink.EndTable(KustoGraphExportTableKind.Nodes);
+            await sink.WriteBatchAsync(
+                new KustoGraphExportBatch(
+                    KustoGraphExportTableKind.Nodes,
+                    nodeRows,
+                    true,
+                    true,
+                    plan.NodeTableName,
+                    nodeColumns),
+                cancellationToken);
 
             KustoResultColumn[] edgeColumns =
             [
@@ -528,11 +538,15 @@ public sealed class KustoGraphIngestionServiceTests
                 new("edge_type", "string"),
                 new("edge_id", "string"),
             ];
-            sink.BeginTable(KustoGraphExportTableKind.Edges, plan.EdgeTableName, edgeColumns);
-            sink.WriteRow(
-                KustoGraphExportTableKind.Edges,
-                ["1", useMissingTarget ? "404" : "2", "AuthenticatedTo", "edge-1"]);
-            sink.EndTable(KustoGraphExportTableKind.Edges);
+            await sink.WriteBatchAsync(
+                new KustoGraphExportBatch(
+                    KustoGraphExportTableKind.Edges,
+                    [["1", useMissingTarget ? "404" : "2", "AuthenticatedTo", "edge-1"]],
+                    true,
+                    true,
+                    plan.EdgeTableName,
+                    edgeColumns),
+                cancellationToken);
 
             if (failAfterStreaming)
             {
@@ -540,13 +554,13 @@ public sealed class KustoGraphIngestionServiceTests
             }
 
             int nodeCount = includeDuplicateIdentity ? 3 : 2;
-            return Task.FromResult(new KustoGraphExportSummary(nodeCount, 1, TimeSpan.FromMilliseconds(25)));
+            return new KustoGraphExportSummary(nodeCount, 1, TimeSpan.FromMilliseconds(25));
         }
     }
 
     private sealed class StubLogGraphQueryService : IKustoGraphQueryService
     {
-        public Task<KustoGraphExportSummary> ExecuteGraphAsync(
+        public async Task<KustoGraphExportSummary> ExecuteGraphAsync(
             KustoQueryRequest request,
             KustoGraphQueryPlan plan,
             IKustoGraphExportSink sink,
@@ -560,12 +574,20 @@ public sealed class KustoGraphIngestionServiceTests
                 new("nodeId", "string"),
                 new("label", "string"),
             ];
-            sink.BeginTable(KustoGraphExportTableKind.Nodes, plan.NodeTableName, nodeColumns);
-            sink.WriteRow(KustoGraphExportTableKind.Nodes, ["1207539687289059547", "31.56.96.51", "IP address"]);
-            sink.WriteRow(KustoGraphExportTableKind.Nodes, ["-3794469666640219336", "/product/27", "resource"]);
-            sink.WriteRow(KustoGraphExportTableKind.Nodes, ["6689426799178276641", "/product/42", "resource"]);
-            sink.WriteRow(KustoGraphExportTableKind.Nodes, ["7991813526547606428", "54.36.149.41", "IP address"]);
-            sink.EndTable(KustoGraphExportTableKind.Nodes);
+            await sink.WriteBatchAsync(
+                new KustoGraphExportBatch(
+                    KustoGraphExportTableKind.Nodes,
+                    [
+                        ["1207539687289059547", "31.56.96.51", "IP address"],
+                        ["-3794469666640219336", "/product/27", "resource"],
+                        ["6689426799178276641", "/product/42", "resource"],
+                        ["7991813526547606428", "54.36.149.41", "IP address"],
+                    ],
+                    true,
+                    true,
+                    plan.NodeTableName,
+                    nodeColumns),
+                cancellationToken);
 
             KustoResultColumn[] edgeColumns =
             [
@@ -576,13 +598,21 @@ public sealed class KustoGraphIngestionServiceTests
                 new("httpVerb", "string"),
                 new("resource", "string"),
             ];
-            sink.BeginTable(KustoGraphExportTableKind.Edges, plan.EdgeTableName, edgeColumns);
-            sink.WriteRow(KustoGraphExportTableKind.Edges, ["1207539687289059547", "-3794469666640219336", "31.56.96.51", "2019-01-22T00:24:16.0000000Z", "GET", "/product/27"]);
-            sink.WriteRow(KustoGraphExportTableKind.Edges, ["1207539687289059547", "6689426799178276641", "31.56.96.51", "2019-01-22T00:25:17.0000000Z", "GET", "/product/42"]);
-            sink.WriteRow(KustoGraphExportTableKind.Edges, ["7991813526547606428", "-3794469666640219336", "54.36.149.41", "2019-01-22T00:26:14.0000000Z", "GET", "/product/27"]);
-            sink.EndTable(KustoGraphExportTableKind.Edges);
+            await sink.WriteBatchAsync(
+                new KustoGraphExportBatch(
+                    KustoGraphExportTableKind.Edges,
+                    [
+                        ["1207539687289059547", "-3794469666640219336", "31.56.96.51", "2019-01-22T00:24:16.0000000Z", "GET", "/product/27"],
+                        ["1207539687289059547", "6689426799178276641", "31.56.96.51", "2019-01-22T00:25:17.0000000Z", "GET", "/product/42"],
+                        ["7991813526547606428", "-3794469666640219336", "54.36.149.41", "2019-01-22T00:26:14.0000000Z", "GET", "/product/27"],
+                    ],
+                    true,
+                    true,
+                    plan.EdgeTableName,
+                    edgeColumns),
+                cancellationToken);
 
-            return Task.FromResult(new KustoGraphExportSummary(4, 3, TimeSpan.FromMilliseconds(25)));
+            return new KustoGraphExportSummary(4, 3, TimeSpan.FromMilliseconds(25));
         }
     }
 }

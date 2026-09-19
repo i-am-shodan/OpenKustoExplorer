@@ -1,0 +1,50 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <ItemGroup>
+    <PackageReference Include="Azure.AI.OpenAI" />
+    <PackageReference Include="Azure.Identity" />
+    <PackageReference Include="Microsoft.Azure.Kusto.Language" />
+    <PackageReference Include="Microsoft.Extensions.AI" />
+    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" />
+    <PackageReference Include="Microsoft.Identity.Client" />
+    <PackageReference Include="Microsoft.Identity.Web" />
+    <ProjectReference Include="..\OpenKustoExplorer.Kusto\OpenKustoExplorer.Kusto.csproj" />
+    <ProjectReference
+        Include="..\OpenKustoExplorer.Browser\OpenKustoExplorer.Browser.csproj"
+        ReferenceOutputAssembly="false"
+        SkipGetTargetFrameworkProperties="true" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsAotCompatible>false</IsAotCompatible>
+    <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
+    <AvaloniaBrowserPackageRoot>$(NuGetPackageRoot)avalonia.browser\$(AvaloniaBrowserVersion)</AvaloniaBrowserPackageRoot>
+    <UserSecretsId>OpenKustoExplorer-Web-Development</UserSecretsId>
+  </PropertyGroup>
+
+  <Target Name="CopyAvaloniaBrowserModules" AfterTargets="Build">
+    <PropertyGroup>
+      <_AvaloniaBrowserAssetsOutput>$(TargetDir)avalonia-browser-assets</_AvaloniaBrowserAssetsOutput>
+    </PropertyGroup>
+    <ItemGroup>
+      <_AvaloniaBrowserModule Include="$(AvaloniaBrowserPackageRoot)\staticwebassets\**\*.*" />
+    </ItemGroup>
+    <RemoveDir Directories="$(_AvaloniaBrowserAssetsOutput)" />
+    <Copy
+        SourceFiles="@(_AvaloniaBrowserModule)"
+        DestinationFiles="@(_AvaloniaBrowserModule->'$(_AvaloniaBrowserAssetsOutput)\%(RecursiveDir)%(Filename)%(Extension)')" />
+  </Target>
+
+  <Target Name="IncludeAvaloniaBrowserModulesForPublish" BeforeTargets="ComputeFilesToPublish">
+    <ItemGroup>
+      <ResolvedFileToPublish Include="$(AvaloniaBrowserPackageRoot)\staticwebassets\**\*.*">
+        <RelativePath>avalonia-browser-assets\%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+
+</Project>

@@ -1,7 +1,7 @@
 using System.Text;
 using OpenKustoExplorer.Application.Execution;
 using OpenKustoExplorer.Application.Language;
-using OpenKustoExplorer.Infrastructure.Execution;
+using OpenKustoExplorer.Kusto.Execution;
 
 namespace OpenKustoExplorer.Infrastructure.Tests.Execution;
 
@@ -288,45 +288,37 @@ public sealed class KustoGraphRestStreamParserTests
 
         internal bool NodesCompleted { get; private set; }
 
-        public void BeginTable(
-            KustoGraphExportTableKind kind,
-            string tableName,
-            IReadOnlyList<KustoResultColumn> columns)
+        public ValueTask WriteBatchAsync(
+            KustoGraphExportBatch batch,
+            CancellationToken cancellationToken = default)
         {
-            if (kind == KustoGraphExportTableKind.Nodes)
+            cancellationToken.ThrowIfCancellationRequested();
+            if (batch.StartsTable && batch.Kind == KustoGraphExportTableKind.Nodes)
             {
-                NodeColumns = columns;
-                NodeTableName = tableName;
+                NodeColumns = batch.Columns;
+                NodeTableName = batch.TableName!;
             }
-            else
+            else if (batch.StartsTable)
             {
-                EdgeColumns = columns;
-                EdgeTableName = tableName;
+                EdgeColumns = batch.Columns;
+                EdgeTableName = batch.TableName!;
             }
-        }
 
-        public void EndTable(KustoGraphExportTableKind kind)
-        {
-            if (kind == KustoGraphExportTableKind.Nodes)
+            List<IReadOnlyList<string>> rows = batch.Kind == KustoGraphExportTableKind.Nodes
+                ? NodeRows
+                : EdgeRows;
+            rows.AddRange(batch.Rows);
+
+            if (batch.EndsTable && batch.Kind == KustoGraphExportTableKind.Nodes)
             {
                 NodesCompleted = true;
             }
-            else
+            else if (batch.EndsTable)
             {
                 EdgesCompleted = true;
             }
-        }
 
-        public void WriteRow(KustoGraphExportTableKind kind, IReadOnlyList<string> values)
-        {
-            if (kind == KustoGraphExportTableKind.Nodes)
-            {
-                NodeRows.Add(values);
-            }
-            else
-            {
-                EdgeRows.Add(values);
-            }
+            return ValueTask.CompletedTask;
         }
     }
 }

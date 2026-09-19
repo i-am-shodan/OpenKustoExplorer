@@ -15,7 +15,11 @@ public interface IKustoDashboardStore
     /// Atomically saves the dashboard catalog.
     /// </summary>
     /// <param name="catalog">The complete catalog.</param>
-    public void Save(KustoDashboardCatalog catalog);
+    /// <param name="cancellationToken">Cancels waiting for durable storage.</param>
+    /// <returns>A task that completes after the catalog is durable.</returns>
+    public Task SaveAsync(
+        KustoDashboardCatalog catalog,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Imports one dashboard from JSON.

@@ -11,5 +11,7 @@
     <PackageReference Include="Avalonia.Skia" />
     <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
     <ProjectReference Include="..\..\src\OpenKustoExplorer.Infrastructure\OpenKustoExplorer.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\OpenKustoExplorer.Kusto\OpenKustoExplorer.Kusto.csproj" />
+    <ProjectReference Include="..\..\src\OpenKustoExplorer.Portable\OpenKustoExplorer.Portable.csproj" />
   </ItemGroup>
 </Project>

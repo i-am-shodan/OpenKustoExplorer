@@ -39,20 +39,25 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     ];
 
     private readonly SemaphoreSlim automationExecutionGate = new(1, 1);
+    private readonly SemaphoreSlim automationSaveGate = new(1, 1);
     private readonly IKustoAutomationStore automationStore;
     private readonly IKustoCatalogService catalogService;
     private readonly IKustoConnectionStore connectionStore;
+    private readonly SemaphoreSlim connectionSaveGate = new(1, 1);
     private readonly IKustoCopilotService copilotService;
     private readonly CopilotConversationRegistry copilotRegistry;
     private readonly KustoDocumentWorkspacePersistence documentPersistence;
     private readonly Dictionary<Guid, KustoDocumentOutputState> documentOutputStates = [];
     private readonly IKustoExplorerImportService importService;
+    private readonly Lock persistenceErrorLock = new();
+    private readonly Dictionary<string, string> persistenceErrors = new(StringComparer.Ordinal);
     private readonly KustoResultRowCollection resultRows;
     private readonly List<KustoResultRowViewModel> resultSourceRows = [];
     private readonly IKustoGraphIngestionService graphIngestionService;
     private readonly IGraphStore graphStore;
     private readonly IKustoQueryService queryService;
     private readonly IKustoLanguageService languageService;
+    private readonly IWorkbenchPerformanceSink performanceSink;
     private Guid? activeRecordedExecutionId;
     private KustoDatabaseViewModel? activeDatabase;
     private Uri? activeExecutedClusterUri;
@@ -81,7 +86,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     private string connectionStatusText = "Sign in on first run";
     private KustoCopilotViewModel copilot;
     private string diagnosticSummary = "No problems";
-    private string documentSaveErrorText = string.Empty;
+    private string persistenceErrorText = string.Empty;
     private bool isAddClusterOpen;
     private bool isAddingCluster;
     private bool isConditionalFormattingOpen;
@@ -89,6 +94,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     private bool isDisposed;
     private bool isGraphIdentityResolutionOpen;
     private bool isGraphImportChoiceOpen;
+    private bool hasLiveResultAnnotations;
     private bool isGroupTabOpen;
     private bool isImportingConnections;
     private bool isOrganizeClusterOpen;
@@ -150,6 +156,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     /// <param name="graphIngestionService">The staged Kusto graph ingestion service.</param>
     /// <param name="graphStore">The app-wide durable investigation graph store.</param>
     /// <param name="graphLayoutService">The bounded native-canvas graph layout service.</param>
+    /// <param name="hostCapabilities">The required host feature profile.</param>
     /// <param name="recordedSessionStore">The optional durable recorded-session store.</param>
     /// <param name="predicateInterestExtractor">The optional predicate-interest extractor.</param>
     /// <param name="recordedRelationExtractor">The optional source-relation extractor.</param>
@@ -158,6 +165,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     /// <param name="recordedChainGenerator">The optional recorded-chain KQL generator.</param>
     /// <param name="timeProvider">The optional application clock.</param>
     /// <param name="recordedSessionArchiveService">The optional portable recorded-session archive service.</param>
+    /// <param name="performanceSink">The optional detailed workbench performance sink.</param>
     /// <exception cref="ArgumentNullException"><paramref name="languageService"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentNullException"><paramref name="queryService"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentNullException"><paramref name="catalogService"/> is <see langword="null"/>.</exception>
@@ -182,6 +190,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         IKustoGraphIngestionService graphIngestionService,
         IGraphStore graphStore,
         IGraphLayoutService graphLayoutService,
+        WorkbenchHostCapabilities hostCapabilities,
         IKustoRecordedSessionStore? recordedSessionStore = null,
         IKustoPredicateInterestExtractor? predicateInterestExtractor = null,
         IKustoRecordedRelationExtractor? recordedRelationExtractor = null,
@@ -189,7 +198,8 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         IKustoRecordedRelationPlanner? recordedRelationPlanner = null,
         IKustoRecordedChainQueryGenerator? recordedChainGenerator = null,
         TimeProvider? timeProvider = null,
-        IKustoRecordedSessionArchiveService? recordedSessionArchiveService = null)
+        IKustoRecordedSessionArchiveService? recordedSessionArchiveService = null,
+        IWorkbenchPerformanceSink? performanceSink = null)
     {
         using KustoPerformanceTrace.OperationScope performanceScope =
             KustoPerformanceTrace.Measure("startup.main_view_model.construct");
@@ -205,7 +215,17 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         ArgumentNullException.ThrowIfNull(graphIngestionService);
         ArgumentNullException.ThrowIfNull(graphStore);
         ArgumentNullException.ThrowIfNull(graphLayoutService);
+        ArgumentNullException.ThrowIfNull(hostCapabilities);
+        if (hostCapabilities.AIProviderOwnership == WorkbenchAIProviderOwnership.HostManaged
+            && hostCapabilities.ManagedAIProviderKind != copilotService.ProviderKind)
+        {
+            throw new ArgumentException(
+                "The host-managed AI capability does not match the configured assistant service.",
+                nameof(hostCapabilities));
+        }
 
+        HostCapabilities = hostCapabilities;
+        this.performanceSink = performanceSink ?? NullWorkbenchPerformanceSink.Instance;
         this.languageService = languageService;
         this.queryService = queryService;
         this.catalogService = catalogService;
@@ -218,6 +238,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         this.graphIngestionService = graphIngestionService;
         this.graphStore = graphStore;
         Dashboard = new KustoDashboardWorkspaceViewModel(dashboardStore, queryService);
+        Dashboard.SaveErrorChanged += OnDashboardSaveErrorChanged;
         Clusters = new ObservableCollection<KustoClusterViewModel>();
         VisibleClusters = new ObservableCollection<KustoClusterViewModel>();
         Folders = new ObservableCollection<KustoFolderViewModel>();
@@ -288,10 +309,10 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         AddClusterCommand = new AsyncRelayCommand(AddClusterAsync, () => CanAddCluster);
         ImportKustoExplorerDataCommand = new AsyncRelayCommand(
             ImportKustoExplorerDataAsync,
-            () => !IsImportingConnections);
+            () => HostCapabilities.SupportsKustoExplorerImport && !IsImportingConnections);
         CloseGroupTabCommand = new RelayCommand(CloseGroupTab);
         CloseRenameTabCommand = new RelayCommand(CloseRenameTab);
-        RetryDocumentSaveCommand = new RelayCommand(RetryDocumentSave, () => HasDocumentSaveError);
+        RetryPersistenceCommand = new RelayCommand(RetryPersistence, () => HasPersistenceError);
         CloseOrganizeClusterCommand = new RelayCommand(CloseOrganizeCluster);
         OpenConditionalFormattingCommand = new RelayCommand(
             OpenConditionalFormatting,
@@ -417,9 +438,17 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
 
         using (KustoPerformanceTrace.Measure("startup.automations.project", automationCatalog.Automations.Count))
         {
+            bool channelsNormalized = false;
             foreach (KustoAutomation automation in automationCatalog.Automations)
             {
-                Automations.Add(CreateAutomationViewModel(automation));
+                KustoAutomation normalized = NormalizeAutomationChannels(automation, out bool changed);
+                channelsNormalized |= changed;
+                Automations.Add(CreateAutomationViewModel(normalized));
+            }
+
+            if (channelsNormalized)
+            {
+                PersistAutomations();
             }
         }
     }
@@ -428,6 +457,11 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     /// Occurs after a completed automation matches its configured notification criteria.
     /// </summary>
     public event EventHandler<KustoAutomationNotificationEventArgs>? AutomationNotificationRequested;
+
+    /// <summary>
+    /// Gets the required feature profile supplied by the current host.
+    /// </summary>
+    public WorkbenchHostCapabilities HostCapabilities { get; }
 
     /// <summary>
     /// Gets the active cluster display name.
@@ -922,9 +956,9 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     public IRelayCommand CloseRenameTabCommand { get; }
 
     /// <summary>
-    /// Gets the command that retries the latest failed document workspace save.
+    /// Gets the command that retries the latest application-state saves.
     /// </summary>
-    public IRelayCommand RetryDocumentSaveCommand { get; }
+    public IRelayCommand RetryPersistenceCommand { get; }
 
     /// <summary>
     /// Gets the command that closes the cluster organizer without changing its folder.
@@ -1988,25 +2022,25 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
-    /// Gets the latest document autosave failure shown beside the editor.
+    /// Gets the current durable application-state failure shown beside the editor.
     /// </summary>
-    public string DocumentSaveErrorText
+    public string PersistenceErrorText
     {
-        get => documentSaveErrorText;
+        get => persistenceErrorText;
         private set
         {
-            if (SetProperty(ref documentSaveErrorText, value))
+            if (SetProperty(ref persistenceErrorText, value))
             {
-                OnPropertyChanged(nameof(HasDocumentSaveError));
-                RetryDocumentSaveCommand.NotifyCanExecuteChanged();
+                OnPropertyChanged(nameof(HasPersistenceError));
+                RetryPersistenceCommand.NotifyCanExecuteChanged();
             }
         }
     }
 
     /// <summary>
-    /// Gets a value indicating whether the latest document workspace is not durably saved.
+    /// Gets a value indicating whether application state is not durably saved.
     /// </summary>
-    public bool HasDocumentSaveError => DocumentSaveErrorText.Length > 0;
+    public bool HasPersistenceError => PersistenceErrorText.Length > 0;
 
     /// <summary>
     /// Analyzes an immutable KQL document snapshot at the specified caret position.
@@ -2538,12 +2572,22 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
 
             copilotRegistry.DetachAll();
 
+            Dashboard.SaveErrorChanged -= OnDashboardSaveErrorChanged;
             Dashboard.Dispose();
             Graph.PropertyChanged -= OnGraphPropertyChanged;
             Recording.ActiveInterestsChanged -= OnRecordingActiveInterestsChanged;
             Recording.PropertyChanged -= OnRecordingPropertyChanged;
 
-            documentPersistence.Flush(CreateDocumentWorkspace());
+            Task finalDocumentSave = documentPersistence.FlushAsync(CreateDocumentWorkspace());
+            if (HostCapabilities.StorageManagementMode == WorkbenchStorageManagementMode.BrowserDialog)
+            {
+                _ = ObservePersistenceTaskAsync(finalDocumentSave, "documents");
+            }
+            else
+            {
+                finalDocumentSave.GetAwaiter().GetResult();
+            }
+
             documentPersistence.SaveErrorChanged -= OnDocumentSaveErrorChanged;
             documentPersistence.Dispose();
         }
@@ -3024,6 +3068,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         activeExecutedQueryText = string.Empty;
         activeRecordedExecutionId = null;
         resultContextCell = null;
+        hasLiveResultAnnotations = false;
         InspectedResultCell = null;
         ResultColumns.Clear();
         ResultRows.Clear();
@@ -3115,6 +3160,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         }
 
         ApplyResultView();
+        ApplyRecordingAnnotations();
 
         Visualization = state.Visualization;
         VisualizationMessage = state.VisualizationMessage;
@@ -4147,14 +4193,26 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
 
     private void ApplyQueryResult(KustoQueryResult result, KustoVisualization? visualizationInstructions)
     {
+        int resultRowCount = result.Tables.Count > 0 ? result.Tables[0].Rows.Count : 0;
+        using WorkbenchPerformanceScope applyMeasurement = new(
+            performanceSink,
+            "results.apply",
+            resultRowCount);
         ClearQueryResults();
         KustoResultTable? primaryTable = result.Tables.Count > 0 ? result.Tables[0] : null;
 
         if (primaryTable is not null)
         {
             activeResultTable = primaryTable;
-            IReadOnlyList<KustoResultColumnViewModel> resultColumns = KustoResultColumnViewModel.CreateForTable(
-                primaryTable);
+            IReadOnlyList<KustoResultColumnViewModel> resultColumns;
+            using (new WorkbenchPerformanceScope(
+                performanceSink,
+                "results.columns.size",
+                primaryTable.Rows.Count))
+            {
+                resultColumns = KustoResultColumnViewModel.CreateForTable(primaryTable);
+            }
+
             IReadOnlyList<double> columnWidths = resultColumns
                 .Select(column => column.DisplayWidth)
                 .ToArray();
@@ -4164,16 +4222,23 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
                 column.PropertyChanged += OnResultColumnPropertyChanged;
             }
 
-            for (int rowIndex = 0; rowIndex < primaryTable.Rows.Count; rowIndex++)
+            using (new WorkbenchPerformanceScope(
+                performanceSink,
+                "results.rows.project",
+                primaryTable.Rows.Count))
             {
-                resultSourceRows.Add(new KustoResultRowViewModel(
-                    primaryTable.Rows[rowIndex],
-                    rowIndex,
-                    primaryTable.Columns,
-                    columnWidths));
+                for (int rowIndex = 0; rowIndex < primaryTable.Rows.Count; rowIndex++)
+                {
+                    resultSourceRows.Add(new KustoResultRowViewModel(
+                        primaryTable.Rows[rowIndex],
+                        rowIndex,
+                        primaryTable.Columns,
+                        columnWidths));
+                }
             }
 
             ApplyResultView();
+            ApplyRecordingAnnotations();
 
             ResultSummary = $"{primaryTable.Rows.Count:N0} rows · {primaryTable.Columns.Count:N0} columns · {result.Duration.TotalMilliseconds:N0} ms";
 
@@ -4224,36 +4289,62 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     {
         if (activeResultTable is not null && SelectedDocument is not null)
         {
-            KustoResultFormattingEngine.Apply(
-                activeResultTable.Columns,
-                ResultRows,
-                SelectedDocument.UseAlternatingRows,
-                SelectedDocument.ConditionalFormattingRules);
-            ApplyRecordingAnnotations();
+            using (new WorkbenchPerformanceScope(
+                performanceSink,
+                "results.format.apply",
+                ResultRows.Count))
+            {
+                KustoResultFormattingEngine.Apply(
+                    activeResultTable.Columns,
+                    ResultRows,
+                    SelectedDocument.UseAlternatingRows,
+                    SelectedDocument.ConditionalFormattingRules);
+            }
         }
     }
 
     private void ApplyRecordingAnnotations()
     {
+        bool shouldAnnotate = Recording.HasActiveLiveInterests;
+        if (!shouldAnnotate && !hasLiveResultAnnotations)
+        {
+            return;
+        }
+
+        int cellCount = performanceSink.IsEnabled
+            ? resultSourceRows.Sum(row => row.Cells.Count)
+            : 0;
+        using WorkbenchPerformanceScope annotationMeasurement = new(
+            performanceSink,
+            "results.annotations.apply",
+            cellCount);
         foreach (KustoResultRowViewModel row in resultSourceRows)
         {
             foreach (KustoResultCellViewModel cell in row.Cells)
             {
-                bool isMatch = Recording.IsInteresting(cell.TypeName, cell.Value);
-                KustoRecordedValueIdentity identity = KustoRecordedValueCanonicalizer.Create(
-                    cell.TypeName,
-                    cell.Value);
-                KustoRecordedValueColor color = KustoRecordedValueColorPalette.GetColor(identity);
+                bool isMatch = shouldAnnotate && Recording.IsInteresting(cell.TypeName, cell.Value);
+                bool isManualMatch = shouldAnnotate && Recording.IsManualInterestMatch(cell.Value);
+                bool hasAnnotation = isMatch
+                    || isManualMatch
+                    || cell.IsRecordedPertinent
+                    || cell.IsChainStart
+                    || cell.IsChainEnd;
+                KustoRecordedValueColor color = hasAnnotation
+                    ? KustoRecordedValueColorPalette.GetColor(
+                        KustoRecordedValueCanonicalizer.Create(cell.TypeName, cell.Value))
+                    : new KustoRecordedValueColor("#00000000", "#00000000");
                 cell.SetRecordingAnnotation(
                     isMatch,
                     cell.IsRecordedPertinent,
                     cell.IsChainStart,
                     cell.IsChainEnd,
-                    Recording.IsManualInterestMatch(cell.Value),
+                    isManualMatch,
                     color.AccentHex,
                     color.HighlightHex);
             }
         }
+
+        hasLiveResultAnnotations = shouldAnnotate;
     }
 
     private void OnRecordingActiveInterestsChanged(object? sender, EventArgs eventArguments)
@@ -4270,13 +4361,32 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
             return;
         }
 
-        IReadOnlyList<KustoResultRowViewModel> visibleRows = KustoResultViewEngine.Apply(
-            resultSourceRows,
-            ResultColumns,
-            ResultSearchText);
-        resultRows.ReplaceWith(visibleRows);
+        IReadOnlyList<KustoResultRowViewModel> visibleRows;
+        using (new WorkbenchPerformanceScope(
+            performanceSink,
+            "results.view.transform",
+            resultSourceRows.Count))
+        {
+            visibleRows = KustoResultViewEngine.Apply(
+                resultSourceRows,
+                ResultColumns,
+                ResultSearchText);
+        }
 
-        ApplyResultFormatting();
+        bool rowsChanged;
+        using (new WorkbenchPerformanceScope(
+            performanceSink,
+            "results.collection.replace",
+            visibleRows.Count))
+        {
+            rowsChanged = resultRows.ReplaceWith(visibleRows);
+        }
+
+        if (rowsChanged)
+        {
+            ApplyResultFormatting();
+        }
+
         NotifyResultViewChanged();
     }
 
@@ -4497,6 +4607,10 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             StatusText = "Kusto Explorer import canceled";
+        }
+        catch (Exception exception)
+        {
+            StatusText = $"Kusto Explorer import failed: {exception.Message}";
         }
         finally
         {
@@ -4784,7 +4898,23 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         cancellationToken.ThrowIfCancellationRequested();
         WorkbenchMode = KustoWorkbenchMode.Sessions;
         StatusText = "Recorded sessions";
-        await Recording.RefreshCommand.ExecuteAsync(null);
+        await Task.Yield();
+        long operationId = performanceSink.StartOperation("workspace.sessions.data");
+        try
+        {
+            bool refreshed = await Recording.EnsureLoadedAsync(cancellationToken);
+            performanceSink.CompleteOperation(operationId, refreshed ? "refreshed" : "cached");
+        }
+        catch (OperationCanceledException)
+        {
+            performanceSink.CompleteOperation(operationId, "canceled");
+            throw;
+        }
+        catch
+        {
+            performanceSink.CompleteOperation(operationId, "failed");
+            throw;
+        }
     }
 
     private void ShowDashboards()
@@ -4797,7 +4927,23 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     {
         WorkbenchMode = KustoWorkbenchMode.Graph;
         StatusText = "Graph workspace";
-        await Graph.RefreshAsync(cancellationToken);
+        await Task.Yield();
+        long operationId = performanceSink.StartOperation("workspace.graph.data");
+        try
+        {
+            bool refreshed = await Graph.EnsureLoadedAsync(cancellationToken);
+            performanceSink.CompleteOperation(operationId, refreshed ? "refreshed" : "cached");
+        }
+        catch (OperationCanceledException)
+        {
+            performanceSink.CompleteOperation(operationId, "canceled");
+            throw;
+        }
+        catch
+        {
+            performanceSink.CompleteOperation(operationId, "failed");
+            throw;
+        }
     }
 
     private void ShowQueryWorkbench()
@@ -4844,37 +4990,48 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
 
     private async Task GenerateRecordedChainAsync(CancellationToken cancellationToken)
     {
-        KustoRecordedSessionViewModel? selectedSession = Recording.SelectedSession;
-        KustoRecordedExecution? source = selectedSession is { Session.Executions.Count: > 0 }
-            ? selectedSession.Session.Executions[0]
-            : null;
-        KustoDatabaseSchema? schema = source is null
-            ? null
-            : ResolveDatabase(source.ClusterUri, source.DatabaseName)?.Schema;
-        if (source is not null && schema is null)
+        try
         {
-            Recording.ReportChainGenerationUnavailable(
-                $"Connect to {source.ClusterUri.Host} / {source.DatabaseName} and refresh its schema");
-            return;
-        }
+            KustoRecordedSessionViewModel? selectedSession = Recording.SelectedSession;
+            KustoRecordedExecution? source = selectedSession is { Session.Executions.Count: > 0 }
+                ? selectedSession.Session.Executions[0]
+                : null;
+            KustoDatabaseSchema? schema = source is null
+                ? null
+                : ResolveDatabase(source.ClusterUri, source.DatabaseName)?.Schema;
+            if (source is not null && schema is null)
+            {
+                Recording.ReportChainGenerationUnavailable(
+                    $"Connect to {source.ClusterUri.Host} / {source.DatabaseName} and refresh its schema");
+                return;
+            }
 
-        KustoGeneratedChainQuery? generated = schema is null
-            ? null
-            : await Recording.GenerateChainAsync(schema, cancellationToken);
-        if (generated?.Succeeded == true && selectedSession is not null)
+            KustoGeneratedChainQuery? generated = schema is null
+                ? null
+                : await Recording.GenerateChainAsync(schema, cancellationToken);
+            if (generated?.Succeeded == true && selectedSession is not null)
+            {
+                KustoDocument document = new(
+                    Guid.NewGuid(),
+                    GetUniqueDocumentTitle($"{selectedSession.Name} chain"),
+                    generated.QueryText,
+                    0,
+                    source?.ClusterUri,
+                    source?.DatabaseName);
+                KustoDocumentViewModel viewModel = CreateDocumentViewModel(document);
+                AddDocument(viewModel);
+                SelectedDocument = viewModel;
+                WorkbenchMode = KustoWorkbenchMode.Query;
+                StatusText = "Created query from inferred pivot chain";
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            KustoDocument document = new(
-                Guid.NewGuid(),
-                GetUniqueDocumentTitle($"{selectedSession.Name} chain"),
-                generated.QueryText,
-                0,
-                source?.ClusterUri,
-                source?.DatabaseName);
-            KustoDocumentViewModel viewModel = CreateDocumentViewModel(document);
-            AddDocument(viewModel);
-            SelectedDocument = viewModel;
-            WorkbenchMode = KustoWorkbenchMode.Query;
-            StatusText = "Created query from inferred pivot chain";
+            StatusText = "Canceled";
+        }
+        catch (Exception exception)
+        {
+            Recording.ReportChainGenerationUnavailable($"Could not generate the query: {exception.Message}");
         }
     }
 
@@ -5319,7 +5476,62 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     private void PersistAutomations()
     {
         IEnumerable<KustoAutomation> snapshots = Automations.Select(automation => automation.CreateAutomation());
-        automationStore.Save(new KustoAutomationCatalog(snapshots));
+        _ = ObservePersistenceTaskAsync(
+            SaveAutomationsAsync(new KustoAutomationCatalog(snapshots)),
+            "automations");
+    }
+
+    private KustoAutomation NormalizeAutomationChannels(
+        KustoAutomation automation,
+        out bool changed)
+    {
+        KustoAutomationNotificationSettings settings = automation.NotificationSettings;
+        bool toastEnabled = HostCapabilities.SupportsToastNotifications && settings.DesktopEnabled;
+        bool emailEnabled = HostCapabilities.SupportsEmailNotifications && settings.EmailEnabled;
+        bool applicationEnabled = HostCapabilities.SupportsApplicationLaunchNotifications
+            && settings.RunApplicationEnabled;
+        KustoAutomationWebhookSettings? webhook = HostCapabilities.SupportsWebhookNotifications
+            ? settings.Webhook
+            : null;
+        changed = toastEnabled != settings.DesktopEnabled
+            || emailEnabled != settings.EmailEnabled
+            || applicationEnabled != settings.RunApplicationEnabled
+            || webhook != settings.Webhook;
+        if (!changed)
+        {
+            return automation;
+        }
+
+        KustoAutomationNotificationSettings normalizedSettings = new(
+            settings.NotifyWhenRowCountChanges,
+            settings.RowCountComparison,
+            settings.RowCountValue,
+            toastEnabled,
+            emailEnabled,
+            settings.EmailRecipient,
+            settings.EmailSender,
+            settings.SmtpHost,
+            settings.SmtpPort,
+            settings.SmtpUseSsl,
+            settings.SubjectTemplate,
+            settings.MessageTemplate,
+            applicationEnabled,
+            settings.ApplicationPath,
+            settings.ApplicationArguments,
+            webhook);
+        return new KustoAutomation(
+            automation.Id,
+            automation.Name,
+            automation.ClusterUri,
+            automation.DatabaseName,
+            automation.QueryText,
+            automation.Interval,
+            automation.CreatedAtUtc,
+            automation.NextRunAtUtc,
+            automation.StopAtUtc,
+            automation.IsEnabled,
+            automation.Runs,
+            normalizedSettings);
     }
 
     private void OpenGroupTab(KustoDocumentViewModel document)
@@ -5364,20 +5576,98 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         }
     }
 
-    private void RetryDocumentSave()
+    private void RetryPersistence()
     {
         documentPersistence.Retry();
+        Dashboard.RetrySave();
+        PersistAutomations();
+        PersistCatalog();
     }
 
     private void OnDocumentSaveErrorChanged(string? errorMessage)
     {
-        DocumentSaveErrorText = errorMessage ?? string.Empty;
+        SetPersistenceError("documents", errorMessage);
+    }
+
+    private void OnDashboardSaveErrorChanged(string? errorMessage)
+    {
+        SetPersistenceError("dashboards", errorMessage);
     }
 
     private void PersistCatalog()
     {
         IEnumerable<KustoClusterConnection> connections = Clusters.Select(cluster => cluster.CreateConnection());
-        connectionStore.Save(new KustoConnectionCatalog(connections));
+        _ = ObservePersistenceTaskAsync(
+            SaveConnectionsAsync(new KustoConnectionCatalog(connections)),
+            "connections");
+    }
+
+    private async Task ObservePersistenceTaskAsync(Task task, string area)
+    {
+        try
+        {
+            await task;
+        }
+        catch (Exception exception)
+        {
+            SetPersistenceError(area, $"Application state is not saved. {exception.Message}");
+        }
+    }
+
+    private async Task SaveAutomationsAsync(KustoAutomationCatalog catalog)
+    {
+        await automationSaveGate.WaitAsync();
+        try
+        {
+            await automationStore.SaveAsync(catalog);
+            SetPersistenceError("automations", null);
+        }
+        catch (Exception exception)
+        {
+            SetPersistenceError("automations", $"Automations are not saved. {exception.Message}");
+        }
+        finally
+        {
+            automationSaveGate.Release();
+        }
+    }
+
+    private async Task SaveConnectionsAsync(KustoConnectionCatalog catalog)
+    {
+        await connectionSaveGate.WaitAsync();
+        try
+        {
+            await connectionStore.SaveAsync(catalog);
+            SetPersistenceError("connections", null);
+        }
+        catch (Exception exception)
+        {
+            SetPersistenceError("connections", $"Connections are not saved. {exception.Message}");
+        }
+        finally
+        {
+            connectionSaveGate.Release();
+        }
+    }
+
+    private void SetPersistenceError(string area, string? errorMessage)
+    {
+        string combinedError;
+        lock (persistenceErrorLock)
+        {
+            if (string.IsNullOrWhiteSpace(errorMessage))
+            {
+                persistenceErrors.Remove(area);
+            }
+            else
+            {
+                persistenceErrors[area] = errorMessage;
+            }
+
+            combinedError = string.Join(Environment.NewLine, persistenceErrors.Values);
+        }
+
+        PersistenceErrorText = combinedError;
     }
 
     private void RebuildFolders()

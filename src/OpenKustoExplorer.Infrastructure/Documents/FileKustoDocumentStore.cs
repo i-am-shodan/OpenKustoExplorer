@@ -1,6 +1,7 @@
 using System.Text.Json;
 using OpenKustoExplorer.Application.Documents;
 using OpenKustoExplorer.Infrastructure.Storage;
+using OpenKustoExplorer.Portable.Storage;
 
 namespace OpenKustoExplorer.Infrastructure.Documents;
 
@@ -52,13 +53,17 @@ public sealed class FileKustoDocumentStore : IKustoDocumentStore
     }
 
     /// <inheritdoc />
-    public void Save(KustoDocumentWorkspace workspace)
+    public Task SaveAsync(
+        KustoDocumentWorkspace workspace,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(workspace);
+        cancellationToken.ThrowIfCancellationRequested();
         try
         {
             AtomicFileStore.Write(filePath, stream => KustoDocumentWorkspaceJson.Write(stream, workspace));
             TryDeleteRecoveryFile();
+            return Task.CompletedTask;
         }
         catch (Exception exception) when (IsPersistenceFailure(exception))
         {

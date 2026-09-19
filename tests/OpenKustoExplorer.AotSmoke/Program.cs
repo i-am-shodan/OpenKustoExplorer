@@ -15,8 +15,10 @@ using OpenKustoExplorer.Graph.Query;
 using OpenKustoExplorer.Infrastructure.Assistance;
 using OpenKustoExplorer.Infrastructure.Dashboards;
 using OpenKustoExplorer.Infrastructure.Graph;
-using OpenKustoExplorer.Infrastructure.Language;
 using OpenKustoExplorer.Infrastructure.Sessions;
+using OpenKustoExplorer.Kusto.Language;
+using OpenKustoExplorer.Portable.Graphs;
+using OpenKustoExplorer.Portable.Sessions;
 using SkiaSharp;
 
 namespace OpenKustoExplorer.AotSmoke;
@@ -85,7 +87,7 @@ internal static class Program
                 "Native AOT dashboard",
                 "#EEF2F3",
                 [widget]);
-            store.Save(new KustoDashboardCatalog([dashboard]));
+            store.SaveAsync(new KustoDashboardCatalog([dashboard])).GetAwaiter().GetResult();
             KustoDashboard restored = store.Load().Dashboards[0];
             using MemoryStream stream = new();
             store.Export(stream, restored);
@@ -539,7 +541,7 @@ internal static class Program
 
     private sealed class NativeGraphQueryService : IKustoGraphQueryService
     {
-        Task<KustoGraphExportSummary> IKustoGraphQueryService.ExecuteGraphAsync(
+        async Task<KustoGraphExportSummary> IKustoGraphQueryService.ExecuteGraphAsync(
             KustoQueryRequest request,
             KustoGraphQueryPlan plan,
             IKustoGraphExportSink sink,
@@ -554,21 +556,35 @@ internal static class Program
                 new("name", "string"),
                 new("type", "string"),
             ];
-            sink.BeginTable(KustoGraphExportTableKind.Nodes, plan.NodeTableName, nodeColumns);
-            sink.WriteRow(KustoGraphExportTableKind.Nodes, ["1", "native-user", "Native User", "User"]);
-            sink.WriteRow(KustoGraphExportTableKind.Nodes, ["2", "native-host", "Native Host", "Host"]);
-            sink.EndTable(KustoGraphExportTableKind.Nodes);
+            await sink.WriteBatchAsync(
+                new KustoGraphExportBatch(
+                    KustoGraphExportTableKind.Nodes,
+                    [
+                        ["1", "native-user", "Native User", "User"],
+                        ["2", "native-host", "Native Host", "Host"],
+                    ],
+                    true,
+                    true,
+                    plan.NodeTableName,
+                    nodeColumns),
+                cancellationToken);
             KustoResultColumn[] edgeColumns =
             [
                 new("source_hash", "long"),
                 new("target_hash", "long"),
                 new("edge_type", "string"),
             ];
-            sink.BeginTable(KustoGraphExportTableKind.Edges, plan.EdgeTableName, edgeColumns);
-            sink.WriteRow(KustoGraphExportTableKind.Edges, ["1", "2", "ConnectedTo"]);
-            sink.EndTable(KustoGraphExportTableKind.Edges);
+            await sink.WriteBatchAsync(
+                new KustoGraphExportBatch(
+                    KustoGraphExportTableKind.Edges,
+                    [["1", "2", "ConnectedTo"]],
+                    true,
+                    true,
+                    plan.EdgeTableName,
+                    edgeColumns),
+                cancellationToken);
 
-            return Task.FromResult(new KustoGraphExportSummary(2, 1, TimeSpan.FromMilliseconds(1)));
+            return new KustoGraphExportSummary(2, 1, TimeSpan.FromMilliseconds(1));
         }
     }
 }

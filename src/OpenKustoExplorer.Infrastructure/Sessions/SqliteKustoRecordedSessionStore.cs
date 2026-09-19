@@ -7,6 +7,7 @@ using OpenKustoExplorer.Application.Diagnostics;
 using OpenKustoExplorer.Application.Execution;
 using OpenKustoExplorer.Application.Language;
 using OpenKustoExplorer.Application.Sessions;
+using OpenKustoExplorer.Portable.Sessions;
 
 namespace OpenKustoExplorer.Infrastructure.Sessions;
 
@@ -14,7 +15,7 @@ namespace OpenKustoExplorer.Infrastructure.Sessions;
 /// Persists query-recording sessions in a transactional local SQLite database.
 /// </summary>
 public sealed class SqliteKustoRecordedSessionStore :
-    IKustoRecordedSessionStore,
+    IKustoRecordedSessionArchiveStore,
     IKustoRecordedSessionStoreMaintenance,
     IDisposable
 {
@@ -440,8 +441,9 @@ public sealed class SqliteKustoRecordedSessionStore :
                     executionId);
                 KustoQueryResult? recordedResult = completion.Result is null
                     ? null
-                    : LimitRecordedResult(
+                    : KustoRecordedResultLimiter.Limit(
                         completion.Result,
+                        MaximumRecordedRowsPerExecution,
                         GetAvailableResultBytes(connection, transaction));
                 using (SqliteCommand command = connection.CreateCommand())
                 {
@@ -842,7 +844,7 @@ public sealed class SqliteKustoRecordedSessionStore :
     /// <param name="source">The source session aggregate.</param>
     /// <param name="cancellationToken">Cancels and rolls back the import.</param>
     /// <returns>The imported session summary.</returns>
-    internal async Task<KustoRecordedSessionSummary> ImportSessionCopyAsync(
+    public async Task<KustoRecordedSessionSummary> ImportSessionCopyAsync(
         KustoRecordedSession source,
         CancellationToken cancellationToken = default)
     {
@@ -905,48 +907,6 @@ public sealed class SqliteKustoRecordedSessionStore :
 
         return importedSummary
             ?? throw new InvalidOperationException("The recorded session import did not complete.");
-    }
-
-    private static KustoQueryResult LimitRecordedResult(KustoQueryResult result, int maximumBytes)
-    {
-        ArgumentOutOfRangeException.ThrowIfNegative(maximumBytes);
-        int remainingRows = MaximumRecordedRowsPerExecution;
-        long remainingBytes = maximumBytes;
-        bool wasTruncated = false;
-        bool capacityExhausted = false;
-        List<KustoResultTable> tables = [];
-        foreach (KustoResultTable table in result.Tables)
-        {
-            List<KustoResultRow> retainedRows = [];
-            foreach (KustoResultRow row in table.Rows)
-            {
-                long estimatedBytes = EstimateRecordedRowBytes(table.Columns, row);
-                if (capacityExhausted || remainingRows == 0 || estimatedBytes > remainingBytes)
-                {
-                    capacityExhausted = true;
-                    wasTruncated = true;
-                    break;
-                }
-
-                retainedRows.Add(row);
-                remainingRows--;
-                remainingBytes -= estimatedBytes;
-            }
-
-            wasTruncated |= retainedRows.Count != table.Rows.Count;
-            tables.Add(new KustoResultTable(
-                table.Name,
-                table.Columns,
-                retainedRows));
-        }
-
-        return wasTruncated
-            ? new KustoQueryResult(
-                tables,
-                result.Duration,
-                result.Visualization,
-                KustoQueryResultCompleteness.RecordLimitReached)
-            : result;
     }
 
     private static long EstimateRecordedRowBytes(

@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk.WebAssembly">
+
+  <ItemGroup>
+    <ProjectReference Include="..\OpenKustoExplorer.Avalonia\OpenKustoExplorer.Avalonia.csproj" />
+    <ProjectReference Include="..\OpenKustoExplorer.Kusto\OpenKustoExplorer.Kusto.csproj" />
+    <ProjectReference Include="..\OpenKustoExplorer.Portable\OpenKustoExplorer.Portable.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" />
+    <PackageReference Include="Avalonia.AvaloniaEdit" />
+    <PackageReference Include="Avalonia.Browser" />
+    <PackageReference Include="Avalonia.Controls.ColorPicker" />
+    <PackageReference Include="Avalonia.Fonts.Inter" />
+    <PackageReference Include="Avalonia.Themes.Fluent" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <OutputType>Exe</OutputType>
+    <StaticWebAssetBasePath>app</StaticWebAssetBasePath>
+    <TargetFramework>net10.0-browser</TargetFramework>
+    <WasmBuildNative>true</WasmBuildNative>
+  </PropertyGroup>
+
+  <Target Name="RejectBrowserIncompatibleReferences" AfterTargets="ResolveAssemblyReferences">
+    <ItemGroup>
+      <_BrowserIncompatibleReference
+          Include="@(ReferencePath)"
+          Condition="'%(ReferencePath.FileName)' == 'Lucide.Avalonia'" />
+    </ItemGroup>
+    <Error
+        Condition="'@(_BrowserIncompatibleReference)' != ''"
+        Text="Lucide.Avalonia uses BrotliStream at runtime, which is unsupported on browser-wasm. Use a browser-compatible icon implementation instead." />
+  </Target>
+
+</Project>

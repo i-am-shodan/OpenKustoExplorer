@@ -15,5 +15,9 @@ public interface IKustoConnectionStore
     /// Atomically saves the cluster, database, and cached schema catalog.
     /// </summary>
     /// <param name="catalog">The immutable catalog to save.</param>
-    public void Save(KustoConnectionCatalog catalog);
+    /// <param name="cancellationToken">Cancels waiting for durable storage.</param>
+    /// <returns>A task that completes after the catalog is durable.</returns>
+    public Task SaveAsync(
+        KustoConnectionCatalog catalog,
+        CancellationToken cancellationToken = default);
 }

@@ -107,9 +107,9 @@ public sealed class KustoDashboardWorkspaceViewModelTests
 
         viewModel.SelectedTimeRangeOption = viewModel.TimeRangeOptions[^1];
         await viewModel.ApplyTimeRangeSelectionCommand.ExecutionTask!;
-        viewModel.CustomTimeRangeStartDate = new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero);
+        viewModel.CustomTimeRangeStartDate = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Unspecified);
         viewModel.CustomTimeRangeStartTime = TimeSpan.FromHours(8);
-        viewModel.CustomTimeRangeEndDate = new DateTimeOffset(2026, 9, 2, 0, 0, 0, TimeSpan.Zero);
+        viewModel.CustomTimeRangeEndDate = new DateTime(2026, 9, 2, 0, 0, 0, DateTimeKind.Unspecified);
         viewModel.CustomTimeRangeEndTime = TimeSpan.FromHours(9);
 
         await viewModel.SaveCustomTimeRangeCommand.ExecuteAsync(null);
@@ -307,16 +307,16 @@ public sealed class KustoDashboardWorkspaceViewModelTests
         viewModel.SelectedTimeRangeOption = viewModel.TimeRangeOptions[^1];
         await viewModel.ApplyTimeRangeSelectionCommand.ExecutionTask!;
 
-        viewModel.CustomTimeRangeStartDate = new DateTimeOffset(2026, 9, 2, 0, 0, 0, TimeSpan.Zero);
+        viewModel.CustomTimeRangeStartDate = new DateTime(2026, 9, 2, 0, 0, 0, DateTimeKind.Unspecified);
         viewModel.CustomTimeRangeStartTime = TimeSpan.FromHours(10);
-        viewModel.CustomTimeRangeEndDate = new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero);
+        viewModel.CustomTimeRangeEndDate = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Unspecified);
         viewModel.CustomTimeRangeEndTime = TimeSpan.FromHours(9);
 
         Assert.True(viewModel.HasCustomTimeRangeError);
         Assert.False(viewModel.CanSaveCustomTimeRange);
         Assert.False(viewModel.SaveCustomTimeRangeCommand.CanExecute(null));
 
-        viewModel.CustomTimeRangeEndDate = new DateTimeOffset(2026, 9, 3, 0, 0, 0, TimeSpan.Zero);
+        viewModel.CustomTimeRangeEndDate = new DateTime(2026, 9, 3, 0, 0, 0, DateTimeKind.Unspecified);
         Assert.False(viewModel.HasCustomTimeRangeError);
         Assert.True(viewModel.CanSaveCustomTimeRange);
         viewModel.CloseCustomTimeRangeCommand.Execute(null);
@@ -365,10 +365,14 @@ public sealed class KustoDashboardWorkspaceViewModelTests
             return catalog;
         }
 
-        public void Save(KustoDashboardCatalog catalog)
+        public Task SaveAsync(
+            KustoDashboardCatalog catalog,
+            CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             SavedCatalog = catalog;
             SavedCatalogs.Add(catalog);
+            return Task.CompletedTask;
         }
 
         public KustoDashboard Import(Stream stream)

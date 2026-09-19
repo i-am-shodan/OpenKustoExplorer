@@ -11,8 +11,9 @@ public sealed class FileKustoDocumentStoreTests
     /// <summary>
     /// Verifies that tab order, selection, content, targets, colors, and groups round-trip through JSON.
     /// </summary>
+    /// <returns>A task that completes after the workspace is reloaded.</returns>
     [Fact]
-    public void SaveAndLoadRoundTripsDocumentWorkspace()
+    public async Task SaveAndLoadRoundTripsDocumentWorkspace()
     {
         string directoryPath = CreateTemporaryDirectory();
         string filePath = Path.Combine(directoryPath, "documents.json");
@@ -59,7 +60,7 @@ public sealed class FileKustoDocumentStoreTests
                 secondId);
             FileKustoDocumentStore store = new(filePath);
 
-            store.Save(workspace);
+            await store.SaveAsync(workspace);
             KustoDocumentWorkspace restored = store.Load();
 
             Assert.Equal(secondId, restored.SelectedDocumentId);
@@ -210,8 +211,9 @@ public sealed class FileKustoDocumentStoreTests
     /// <summary>
     /// Verifies that a failed primary write preserves the latest workspace at the recovery path.
     /// </summary>
+    /// <returns>A task that completes after the recovery copy is inspected.</returns>
     [Fact]
-    public void SaveWritesRecoveryCopyWhenPrimaryPathIsUnavailable()
+    public async Task SaveWritesRecoveryCopyWhenPrimaryPathIsUnavailable()
     {
         string directoryPath = CreateTemporaryDirectory();
         string blockingPath = Path.Combine(directoryPath, "not-a-directory");
@@ -223,10 +225,10 @@ public sealed class FileKustoDocumentStoreTests
 
         try
         {
-            File.WriteAllText(blockingPath, string.Empty);
+            await File.WriteAllTextAsync(blockingPath, string.Empty);
             FileKustoDocumentStore store = new(filePath, recoveryFilePath);
 
-            IOException exception = Assert.Throws<IOException>(() => store.Save(workspace));
+            IOException exception = await Assert.ThrowsAsync<IOException>(() => store.SaveAsync(workspace));
 
             Assert.Contains(recoveryFilePath, exception.Message, StringComparison.Ordinal);
             KustoDocument recovered = Assert.Single(new FileKustoDocumentStore(recoveryFilePath).Load().Documents);

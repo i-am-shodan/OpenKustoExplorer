@@ -1,5 +1,6 @@
 using OpenKustoExplorer.Application.Dashboards;
 using OpenKustoExplorer.Infrastructure.Storage;
+using OpenKustoExplorer.Portable.Storage;
 
 namespace OpenKustoExplorer.Infrastructure.Dashboards;
 
@@ -38,10 +39,14 @@ public sealed class FileKustoDashboardStore : IKustoDashboardStore
     }
 
     /// <inheritdoc />
-    public void Save(KustoDashboardCatalog catalog)
+    public Task SaveAsync(
+        KustoDashboardCatalog catalog,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(catalog);
+        cancellationToken.ThrowIfCancellationRequested();
         AtomicFileStore.Write(filePath, stream => KustoDashboardCatalogJson.Write(stream, catalog));
+        return Task.CompletedTask;
     }
 
     /// <inheritdoc />

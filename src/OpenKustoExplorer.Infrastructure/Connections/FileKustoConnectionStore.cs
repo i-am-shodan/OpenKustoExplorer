@@ -1,5 +1,6 @@
 using OpenKustoExplorer.Application.Connections;
 using OpenKustoExplorer.Infrastructure.Storage;
+using OpenKustoExplorer.Portable.Storage;
 
 namespace OpenKustoExplorer.Infrastructure.Connections;
 
@@ -38,10 +39,14 @@ public sealed class FileKustoConnectionStore : IKustoConnectionStore
     }
 
     /// <inheritdoc />
-    public void Save(KustoConnectionCatalog catalog)
+    public Task SaveAsync(
+        KustoConnectionCatalog catalog,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(catalog);
+        cancellationToken.ThrowIfCancellationRequested();
         AtomicFileStore.Write(filePath, stream => KustoConnectionCatalogJson.Write(stream, catalog));
+        return Task.CompletedTask;
     }
 
     private static string GetDefaultFilePath()

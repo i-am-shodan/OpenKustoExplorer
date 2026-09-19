@@ -18,11 +18,12 @@ public sealed class KustoDashboardWorkspaceViewModel : ObservableObject, IDispos
     private readonly IKustoDashboardStore dashboardStore;
     private readonly TimeZoneInfo localTimeZone;
     private readonly IKustoQueryService queryService;
+    private readonly SemaphoreSlim saveGate = new(1, 1);
     private readonly TimeProvider timeProvider;
-    private DateTimeOffset? customTimeRangeEndDate;
+    private DateTime? customTimeRangeEndDate;
     private TimeSpan? customTimeRangeEndTime;
     private string customTimeRangeErrorText = string.Empty;
-    private DateTimeOffset? customTimeRangeStartDate;
+    private DateTime? customTimeRangeStartDate;
     private TimeSpan? customTimeRangeStartTime;
     private KustoDashboardViewModel? dashboardBeingEdited;
     private string dashboardEditorBackgroundColor = DefaultDashboardBackground;
@@ -109,6 +110,11 @@ public sealed class KustoDashboardWorkspaceViewModel : ObservableObject, IDispos
         ApplyWidgetThemeCommand = new RelayCommand<KustoDashboardThemeViewModel>(ApplyWidgetTheme);
         SelectedDashboard = Dashboards.FirstOrDefault();
     }
+
+    /// <summary>
+    /// Occurs when dashboard persistence fails or later succeeds.
+    /// </summary>
+    internal event Action<string?>? SaveErrorChanged;
 
     /// <summary>
     /// Gets persisted dashboards in display order.
@@ -230,7 +236,7 @@ public sealed class KustoDashboardWorkspaceViewModel : ObservableObject, IDispos
     /// <summary>
     /// Gets or sets the custom local start date.
     /// </summary>
-    public DateTimeOffset? CustomTimeRangeStartDate
+    public DateTime? CustomTimeRangeStartDate
     {
         get => customTimeRangeStartDate;
         set
@@ -260,7 +266,7 @@ public sealed class KustoDashboardWorkspaceViewModel : ObservableObject, IDispos
     /// <summary>
     /// Gets or sets the custom local end date.
     /// </summary>
-    public DateTimeOffset? CustomTimeRangeEndDate
+    public DateTime? CustomTimeRangeEndDate
     {
         get => customTimeRangeEndDate;
         set
@@ -947,6 +953,11 @@ public sealed class KustoDashboardWorkspaceViewModel : ObservableObject, IDispos
         return widgets.Length;
     }
 
+    /// <summary>
+    /// Retries the latest complete dashboard catalog.
+    /// </summary>
+    internal void RetrySave() => Save();
+
     private static KustoDashboard CloneWithNewIdentifiers(KustoDashboard source)
     {
         return new KustoDashboard(
@@ -1027,6 +1038,20 @@ public sealed class KustoDashboardWorkspaceViewModel : ObservableObject, IDispos
             new("Ink", "#20252B", "#F4F7F8", "#4CC9C0"),
             new("Rose", "#FFF2F5", "#3E222A", "#C43D67"),
         });
+    }
+
+    private static async Task ObservePersistenceTaskAsync(Task task)
+    {
+        try
+        {
+            await task;
+        }
+        catch (Exception exception)
+        {
+            System.Diagnostics.Trace.TraceError(
+                "Unexpected dashboard persistence failure: {0}",
+                exception);
+        }
     }
 
     private void ApplyDashboardTheme(KustoDashboardThemeViewModel? theme)
@@ -1303,9 +1328,9 @@ public sealed class KustoDashboardWorkspaceViewModel : ObservableObject, IDispos
         }
 
         IsCustomTimeRangeOpen = false;
-        CustomTimeRangeStartDate = startLocal;
+        CustomTimeRangeStartDate = startLocal.Date;
         CustomTimeRangeStartTime = startLocal.TimeOfDay;
-        CustomTimeRangeEndDate = endLocal;
+        CustomTimeRangeEndDate = endLocal.Date;
         CustomTimeRangeEndTime = endLocal.TimeOfDay;
         CustomTimeRangeErrorText = string.Empty;
         IsCustomTimeRangeOpen = true;
@@ -1380,7 +1405,26 @@ public sealed class KustoDashboardWorkspaceViewModel : ObservableObject, IDispos
 
     private void Save()
     {
-        dashboardStore.Save(new KustoDashboardCatalog(
-            Dashboards.Select(item => item.CreateDefinition())));
+        KustoDashboardCatalog catalog = new(
+            Dashboards.Select(item => item.CreateDefinition()));
+        _ = ObservePersistenceTaskAsync(SaveAsync(catalog));
+    }
+
+    private async Task SaveAsync(KustoDashboardCatalog catalog)
+    {
+        await saveGate.WaitAsync();
+        try
+        {
+            await dashboardStore.SaveAsync(catalog);
+            SaveErrorChanged?.Invoke(null);
+        }
+        catch (Exception exception)
+        {
+            SaveErrorChanged?.Invoke($"Dashboards are not saved. {exception.Message}");
+        }
+        finally
+        {
+            saveGate.Release();
+        }
     }
 }

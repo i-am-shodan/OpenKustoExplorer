@@ -1,7 +1,7 @@
 using System.Collections.ObjectModel;
 using OpenKustoExplorer.Application.Execution;
 using OpenKustoExplorer.Domain.Schema;
-using OpenKustoExplorer.Infrastructure.Connections;
+using OpenKustoExplorer.Kusto.Connections;
 
 namespace OpenKustoExplorer.Infrastructure.Tests.Connections;
 

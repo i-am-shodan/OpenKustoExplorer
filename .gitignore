@@ -11,3 +11,4 @@ publish/
 *.suo
 *.nupkg
 *.snupkg
+**/node_modules/**

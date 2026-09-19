@@ -1,4 +1,4 @@
-using OpenKustoExplorer.Infrastructure.Execution;
+using OpenKustoExplorer.Kusto.Execution;
 
 namespace OpenKustoExplorer.Infrastructure.Tests.Execution;
 
@@ -19,7 +19,7 @@ public sealed class KustoQueryServiceTests
     [InlineData("print '.'", false)]
     public void IsManagementCommandClassifiesLeadingDot(string queryText, bool expected)
     {
-        bool result = KustoQueryService.IsManagementCommand(queryText);
+        bool result = KustoExecutionService.IsManagementCommand(queryText);
 
         Assert.Equal(expected, result);
     }

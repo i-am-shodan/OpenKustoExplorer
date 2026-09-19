@@ -15,5 +15,9 @@ public interface IKustoAutomationStore
     /// Atomically saves all automation definitions and run histories.
     /// </summary>
     /// <param name="catalog">The immutable automation catalog.</param>
-    public void Save(KustoAutomationCatalog catalog);
+    /// <param name="cancellationToken">Cancels waiting for durable storage.</param>
+    /// <returns>A task that completes after the catalog is durable.</returns>
+    public Task SaveAsync(
+        KustoAutomationCatalog catalog,
+        CancellationToken cancellationToken = default);
 }

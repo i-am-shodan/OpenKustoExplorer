@@ -9,6 +9,7 @@ using OpenKustoExplorer.Application.Sessions;
 using OpenKustoExplorer.Domain.Schema;
 using OpenKustoExplorer.Infrastructure.Assistance;
 using OpenKustoExplorer.Infrastructure.Sessions;
+using OpenKustoExplorer.Portable.Sessions;
 
 namespace OpenKustoExplorer.Infrastructure.Tests.Assistance;
 

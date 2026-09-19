@@ -1,0 +1,13 @@
+{
+  "name": "open-kusto-explorer-browser-smoke",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "large-editor": "node browser-large-editor.mjs",
+    "performance": "node browser-performance.mjs",
+    "test": "node browser-smoke.mjs && node browser-large-editor.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.55.1"
+  }
+}

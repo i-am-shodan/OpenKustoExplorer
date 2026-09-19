@@ -14,6 +14,9 @@ public sealed class KustoResultColumnViewModel : ObservableObject
     private const double HeaderChromeWidth = 60;
     private const double HorizontalCellPadding = 24;
     private const double MaximumContentDisplayWidth = 360;
+    private const int MaximumMeasuredCharacterCount =
+        (int)((MaximumContentDisplayWidth - HorizontalCellPadding) / ApproximateCharacterWidth);
+
     private const double MinimumDisplayWidth = 84;
     private static readonly ReadOnlyCollection<KustoResultFilterOption> AvailableFilterOptions = Array.AsReadOnly(
         new KustoResultFilterOption[]
@@ -240,6 +243,10 @@ public sealed class KustoResultColumnViewModel : ObservableObject
                 maximumContentCharacterCount = Math.Max(
                     maximumContentCharacterCount,
                     GetMaximumLineLength(row.Values[columnIndex]));
+                if (maximumContentCharacterCount >= MaximumMeasuredCharacterCount)
+                {
+                    break;
+                }
             }
 
             double contentDisplayWidth = Math.Clamp(
