@@ -52,18 +52,17 @@ public sealed class FileKustoDocumentStore : IKustoDocumentStore
             static () => new KustoDocumentWorkspace([], null));
     }
 
-    /// <inheritdoc />
-    public Task SaveAsync(
-        KustoDocumentWorkspace workspace,
-        CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Saves the document workspace synchronously.
+    /// </summary>
+    /// <param name="workspace">The document workspace.</param>
+    public void Save(KustoDocumentWorkspace workspace)
     {
         ArgumentNullException.ThrowIfNull(workspace);
-        cancellationToken.ThrowIfCancellationRequested();
         try
         {
             AtomicFileStore.Write(filePath, stream => KustoDocumentWorkspaceJson.Write(stream, workspace));
             TryDeleteRecoveryFile();
-            return Task.CompletedTask;
         }
         catch (Exception exception) when (IsPersistenceFailure(exception))
         {
@@ -72,6 +71,16 @@ public sealed class FileKustoDocumentStore : IKustoDocumentStore
                 : "The recovery copy could not be written either.";
             throw new IOException(message, exception);
         }
+    }
+
+    /// <inheritdoc />
+    public Task SaveAsync(
+        KustoDocumentWorkspace workspace,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Save(workspace);
+        return Task.CompletedTask;
     }
 
     private static string GetDefaultFilePath()

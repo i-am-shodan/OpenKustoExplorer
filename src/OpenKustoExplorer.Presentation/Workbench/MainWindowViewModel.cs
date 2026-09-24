@@ -2314,15 +2314,6 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
-    /// Gets the current context cell value.
-    /// </summary>
-    /// <returns>The invariant cell text, or an empty string.</returns>
-    public string GetContextCellText()
-    {
-        return resultContextCell?.Text ?? string.Empty;
-    }
-
-    /// <summary>
     /// Creates newline-delimited text from the context column across selected result rows.
     /// </summary>
     /// <param name="rows">The selected rows in display order, or an empty list for the context row.</param>

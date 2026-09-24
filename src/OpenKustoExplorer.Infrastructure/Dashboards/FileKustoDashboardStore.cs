@@ -38,14 +38,23 @@ public sealed class FileKustoDashboardStore : IKustoDashboardStore
             static () => new KustoDashboardCatalog([]));
     }
 
+    /// <summary>
+    /// Saves the dashboard catalog synchronously.
+    /// </summary>
+    /// <param name="catalog">The dashboard catalog.</param>
+    public void Save(KustoDashboardCatalog catalog)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        AtomicFileStore.Write(filePath, stream => KustoDashboardCatalogJson.Write(stream, catalog));
+    }
+
     /// <inheritdoc />
     public Task SaveAsync(
         KustoDashboardCatalog catalog,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(catalog);
         cancellationToken.ThrowIfCancellationRequested();
-        AtomicFileStore.Write(filePath, stream => KustoDashboardCatalogJson.Write(stream, catalog));
+        Save(catalog);
         return Task.CompletedTask;
     }
 

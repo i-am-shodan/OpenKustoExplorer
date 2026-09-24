@@ -47,6 +47,26 @@ public static partial class BrowserPerformanceExports
             return currentFixture.Prepare();
         }
 
+        if (string.Equals(action, "run-query", StringComparison.Ordinal))
+        {
+            return currentWorkbench.RunPerformanceQuery();
+        }
+
+        if (string.Equals(action, "repair-query", StringComparison.Ordinal))
+        {
+            return currentWorkbench.SetPerformanceQuery(BrowserPerformanceFixture.GetRepairQueryText());
+        }
+
+        if (string.Equals(action, "trend-query", StringComparison.Ordinal))
+        {
+            return currentWorkbench.SetPerformanceQuery(BrowserPerformanceFixture.GetTrendQueryText());
+        }
+
+        if (string.Equals(action, "render-timechart", StringComparison.Ordinal))
+        {
+            return currentWorkbench.RenderPerformanceTimeChart();
+        }
+
         return string.Equals(action, "large-editor", StringComparison.Ordinal)
             ? currentWorkbench.FocusPerformanceDocument(BrowserPerformanceFixture.GetLargeDocumentId())
             : currentWorkbench.FocusPerformanceTarget(action);

@@ -1197,6 +1197,7 @@
                             Text="{Binding QueryErrorText}"
                             TextWrapping="Wrap" />
                         <Button
+                          x:Name="FixQueryWithCopilotButton"
                             Margin="0,5,0,0"
                             HorizontalAlignment="Left"
                             AutomationProperties.Name="Fix failed query with Copilot"
@@ -4357,7 +4358,7 @@
                 <Button Margin="3" Classes="command" Command="{Binding Copilot.CreateAutomationCommand}" Content="Create automation" IsVisible="{Binding Copilot.HasAutomationProposal}" />
                 <Button Margin="3" Classes="command" Command="{Binding Copilot.CreateNewTabCommand}" Content="New tab" IsVisible="{Binding Copilot.HasProposal}" />
                 <Button Margin="3" AutomationProperties.Name="Add Copilot query to end of current tab" Classes="command" Command="{Binding Copilot.AppendToCurrentTabCommand}" Content="Add to end" IsVisible="{Binding Copilot.HasAppendProposal}" />
-                <Button Margin="3" Classes="primaryCommand" Command="{Binding Copilot.ApplyToCurrentTabCommand}" Content="Apply edit" IsVisible="{Binding Copilot.HasApplyProposal}" />
+                <Button x:Name="CopilotApplyEditButton" Margin="3" Classes="primaryCommand" Command="{Binding Copilot.ApplyToCurrentTabCommand}" Content="Apply edit" IsVisible="{Binding Copilot.HasApplyProposal}" />
                 <Button Margin="3" Classes="command" Command="{Binding Copilot.LoadCypherCommand}" Content="Load query" IsVisible="{Binding Copilot.HasCypherProposal}" />
                 <Button Margin="3" Classes="primaryCommand" Command="{Binding Copilot.RunCypherProposalCommand}" Content="Run query" IsVisible="{Binding Copilot.HasCypherProposal}" />
               </WrapPanel>
@@ -4404,6 +4405,7 @@
                     Content="Cancel"
                     IsVisible="{Binding Copilot.CanCancel}" />
                 <Button
+                  x:Name="CopilotSendButton"
                   Grid.Column="3"
                     Classes="primaryCommand"
                     Command="{Binding Copilot.SendCommand}"

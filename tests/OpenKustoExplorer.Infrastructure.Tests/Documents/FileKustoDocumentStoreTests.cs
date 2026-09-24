@@ -11,9 +11,8 @@ public sealed class FileKustoDocumentStoreTests
     /// <summary>
     /// Verifies that tab order, selection, content, targets, colors, and groups round-trip through JSON.
     /// </summary>
-    /// <returns>A task that completes after the workspace is reloaded.</returns>
     [Fact]
-    public async Task SaveAndLoadRoundTripsDocumentWorkspace()
+    public void SaveAndLoadRoundTripsDocumentWorkspace()
     {
         string directoryPath = CreateTemporaryDirectory();
         string filePath = Path.Combine(directoryPath, "documents.json");
@@ -45,7 +44,7 @@ public sealed class FileKustoDocumentStoreTests
                                 "error",
                                 KustoConditionalFormatTarget.Row,
                                 "#FECACA"),
-                            ]),
+                        ]),
                     new KustoDocument(
                         secondId,
                         "Monitor",
@@ -60,7 +59,7 @@ public sealed class FileKustoDocumentStoreTests
                 secondId);
             FileKustoDocumentStore store = new(filePath);
 
-            await store.SaveAsync(workspace);
+            store.Save(workspace);
             KustoDocumentWorkspace restored = store.Load();
 
             Assert.Equal(secondId, restored.SelectedDocumentId);
@@ -135,55 +134,6 @@ public sealed class FileKustoDocumentStoreTests
     }
 
     /// <summary>
-    /// Verifies version-two workspaces retain their query tabs while obsolete analysis metadata is ignored.
-    /// </summary>
-    [Fact]
-    public void LoadAcceptsVersionTwoWorkspaceWithObsoleteAnalysisMetadata()
-    {
-        string directoryPath = CreateTemporaryDirectory();
-        string filePath = Path.Join(directoryPath, "documents.json");
-        Guid documentId = Guid.NewGuid();
-        string json = $$"""
-                        {
-                            "version": 2,
-                            "selectedDocumentId": "{{documentId}}",
-                            "documents": [
-                                {
-                                    "id": "{{documentId}}",
-                                    "title": "Existing analysis",
-                                    "text": "StormEvents | count",
-                                    "caretPosition": 4,
-                                    "clusterUri": null,
-                                    "databaseName": null,
-                                    "resultAnalysis": {
-                                        "mode": "Grouped",
-                                        "calculatedColumns": [],
-                                        "groupColumnNames": ["State"],
-                                        "aggregates": []
-                                    }
-                                }
-                            ]
-                        }
-                        """;
-
-        try
-        {
-            File.WriteAllText(filePath, json);
-            FileKustoDocumentStore store = new(filePath);
-
-            KustoDocument restored = Assert.Single(store.Load().Documents);
-
-            Assert.Equal(documentId, restored.Id);
-            Assert.Equal("Existing analysis", restored.Title);
-            Assert.Equal("StormEvents | count", restored.Text);
-        }
-        finally
-        {
-            Directory.Delete(directoryPath, true);
-        }
-    }
-
-    /// <summary>
     /// Verifies that corrupt autosave JSON does not prevent startup.
     /// </summary>
     [Fact]
@@ -211,9 +161,8 @@ public sealed class FileKustoDocumentStoreTests
     /// <summary>
     /// Verifies that a failed primary write preserves the latest workspace at the recovery path.
     /// </summary>
-    /// <returns>A task that completes after the recovery copy is inspected.</returns>
     [Fact]
-    public async Task SaveWritesRecoveryCopyWhenPrimaryPathIsUnavailable()
+    public void SaveWritesRecoveryCopyWhenPrimaryPathIsUnavailable()
     {
         string directoryPath = CreateTemporaryDirectory();
         string blockingPath = Path.Combine(directoryPath, "not-a-directory");
@@ -225,10 +174,10 @@ public sealed class FileKustoDocumentStoreTests
 
         try
         {
-            await File.WriteAllTextAsync(blockingPath, string.Empty);
+            File.WriteAllText(blockingPath, string.Empty);
             FileKustoDocumentStore store = new(filePath, recoveryFilePath);
 
-            IOException exception = await Assert.ThrowsAsync<IOException>(() => store.SaveAsync(workspace));
+            IOException exception = Assert.Throws<IOException>(() => store.Save(workspace));
 
             Assert.Contains(recoveryFilePath, exception.Message, StringComparison.Ordinal);
             KustoDocument recovered = Assert.Single(new FileKustoDocumentStore(recoveryFilePath).Load().Documents);

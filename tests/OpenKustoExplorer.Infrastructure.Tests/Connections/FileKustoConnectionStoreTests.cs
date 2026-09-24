@@ -12,9 +12,8 @@ public sealed class FileKustoConnectionStoreTests
     /// <summary>
     /// Verifies that clusters, databases, tables, columns, and scalar types round-trip in order.
     /// </summary>
-    /// <returns>A task that completes after the catalog is reloaded.</returns>
     [Fact]
-    public async Task SaveAndLoadRoundTripsCatalogHierarchy()
+    public void SaveAndLoadRoundTripsCatalogHierarchy()
     {
         string directoryPath = CreateTemporaryDirectory();
         string filePath = Path.Combine(directoryPath, "connections.json");
@@ -50,7 +49,7 @@ public sealed class FileKustoConnectionStoreTests
                 ]);
             FileKustoConnectionStore store = new(filePath);
 
-            await store.SaveAsync(catalog);
+            store.Save(catalog);
             KustoConnectionCatalog restored = store.Load();
 
             KustoClusterConnection cluster = Assert.Single(restored.Clusters);

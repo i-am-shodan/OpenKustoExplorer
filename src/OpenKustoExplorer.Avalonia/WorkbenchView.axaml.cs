@@ -468,9 +468,14 @@ public sealed partial class WorkbenchView : UserControl, IDisposable
                     AutomationProperties.GetName(item),
                     "Custom time range start date",
                     StringComparison.Ordinal)),
+            "copilot-apply-edit" => this.FindControl<Button>("CopilotApplyEditButton"),
+            "copilot-open" => copilotExpandButton,
+            "copilot-prompt" => copilotPrompt,
+            "copilot-send" => this.FindControl<Button>("CopilotSendButton"),
             "dashboard" => dashboardButton,
             "dashboard-time-range" => this.FindControl<ComboBox>("DashboardTimeRangeSelector"),
             "editor" => queryEditor,
+            "fix-query" => this.FindControl<Button>("FixQueryWithCopilotButton"),
             "graph" => graphButton,
             "result-search" => this.FindControl<TextBox>("ResultSearchBox"),
             "sessions" => sessionsButton,
@@ -503,6 +508,58 @@ public sealed partial class WorkbenchView : UserControl, IDisposable
 
         viewModel.SelectedDocument = document;
         queryEditor.TextArea.Focus();
+        return true;
+    }
+
+    /// <summary>
+    /// Runs the active query for a constrained Browser performance fixture.
+    /// </summary>
+    /// <returns><see langword="true"/> when query execution was started.</returns>
+    internal bool RunPerformanceQuery()
+    {
+        if (DataContext is not MainWindowViewModel viewModel
+            || !viewModel.RunQueryCommand.CanExecute(null))
+        {
+            return false;
+        }
+
+        viewModel.RunQueryCommand.Execute(null);
+        return true;
+    }
+
+    /// <summary>
+    /// Loads a deterministic query into the active document for a Browser fixture capture.
+    /// </summary>
+    /// <param name="queryText">The query text to load.</param>
+    /// <returns><see langword="true"/> when the active query document was updated.</returns>
+    internal bool SetPerformanceQuery(string queryText)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(queryText);
+        if (DataContext is not MainWindowViewModel viewModel || queryEditor is null)
+        {
+            return false;
+        }
+
+        viewModel.QueryText = queryText;
+        viewModel.CaretPosition = queryText.Length;
+        queryEditor.TextArea.Focus();
+        return true;
+    }
+
+    /// <summary>
+    /// Renders the active fixture result as a time chart.
+    /// </summary>
+    /// <returns><see langword="true"/> when the visualization command was available.</returns>
+    internal bool RenderPerformanceTimeChart()
+    {
+        const string VisualizationName = "TimeChart";
+        if (DataContext is not MainWindowViewModel viewModel
+            || !viewModel.RenderVisualizationCommand.CanExecute(VisualizationName))
+        {
+            return false;
+        }
+
+        viewModel.RenderVisualizationCommand.Execute(VisualizationName);
         return true;
     }
 

@@ -125,6 +125,8 @@ internal static class Program
         services.AddSingleton<SqliteKustoRecordedSessionStore>();
         services.AddSingleton<IKustoRecordedSessionStore>(serviceProvider =>
             serviceProvider.GetRequiredService<SqliteKustoRecordedSessionStore>());
+        services.AddSingleton<IKustoRecordedSessionArchiveStore>(serviceProvider =>
+            serviceProvider.GetRequiredService<SqliteKustoRecordedSessionStore>());
         services.AddSingleton<KustoRecordedSessionArchiveService>();
         services.AddSingleton<IKustoRecordedSessionArchiveService>(serviceProvider =>
             serviceProvider.GetRequiredService<KustoRecordedSessionArchiveService>());

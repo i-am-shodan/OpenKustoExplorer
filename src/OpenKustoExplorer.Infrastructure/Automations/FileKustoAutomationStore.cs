@@ -38,14 +38,23 @@ public sealed class FileKustoAutomationStore : IKustoAutomationStore
             static () => new KustoAutomationCatalog([]));
     }
 
+    /// <summary>
+    /// Saves the automation catalog synchronously.
+    /// </summary>
+    /// <param name="catalog">The automation catalog.</param>
+    public void Save(KustoAutomationCatalog catalog)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        AtomicFileStore.Write(filePath, stream => KustoAutomationCatalogJson.Write(stream, catalog));
+    }
+
     /// <inheritdoc />
     public Task SaveAsync(
         KustoAutomationCatalog catalog,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(catalog);
         cancellationToken.ThrowIfCancellationRequested();
-        AtomicFileStore.Write(filePath, stream => KustoAutomationCatalogJson.Write(stream, catalog));
+        Save(catalog);
         return Task.CompletedTask;
     }
 

@@ -50,6 +50,14 @@ internal static class BrowserWorkbenchFactory
             ? bootstrapContext.Stores.Documents
             : performanceFixture;
         IKustoQueryService queryService = performanceFixture is null ? gatewayClient : performanceFixture;
+        IKustoCopilotService copilotService = performanceFixture is null
+            ? new BrowserWebCopilotService(
+                gatewayClient,
+                new KustoCopilotSharedDataBuilder(
+                    graphStore,
+                    graphQueryService,
+                    bootstrapContext.RecordedSessionStore))
+            : new BrowserPerformanceCopilotService();
         BrowserIdentityService identityService = new(gatewayClient);
         IWorkbenchPerformanceSink performanceSink = BrowserInterop.IsProfilingEnabled()
             ? new BrowserWorkbenchPerformanceSink()
@@ -69,12 +77,7 @@ internal static class BrowserWorkbenchFactory
             bootstrapContext.Stores.Dashboards,
             bootstrapContext.Stores.Automations,
             new BrowserKustoExplorerImportService(),
-            new BrowserWebCopilotService(
-                gatewayClient,
-                new KustoCopilotSharedDataBuilder(
-                    graphStore,
-                    graphQueryService,
-                    bootstrapContext.RecordedSessionStore)),
+            copilotService,
             new KustoGraphIngestionCoordinator(
                 gatewayClient,
                 graphStore,
