@@ -44,6 +44,9 @@ jobs:
           # Build analyzers enforce quality; CodeQL remains focused on security findings.
           queries: security-extended
 
+      - name: Restore WebAssembly workload
+        run: dotnet workload restore src/OpenKustoExplorer.Browser/OpenKustoExplorer.Browser.csproj
+
       - name: Restore dependencies
         run: dotnet restore OpenKustoExplorer.slnx
 

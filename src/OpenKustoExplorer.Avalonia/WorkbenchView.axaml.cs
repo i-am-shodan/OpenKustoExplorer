@@ -491,6 +491,29 @@ public sealed partial class WorkbenchView : UserControl, IDisposable
     }
 
     /// <summary>
+    /// Selects the custom dashboard time range for the Browser performance fixture.
+    /// </summary>
+    /// <returns><see langword="true"/> when the custom time-range editor opened.</returns>
+    internal bool OpenPerformanceCustomTimeRange()
+    {
+        if (DataContext is not MainWindowViewModel viewModel
+            || viewModel.Dashboard.SelectedDashboard is null)
+        {
+            return false;
+        }
+
+        KustoDashboardTimeRangeOptionViewModel? customOption = viewModel.Dashboard.TimeRangeOptions
+            .FirstOrDefault(option => option.IsCustom);
+        if (customOption is null)
+        {
+            return false;
+        }
+
+        viewModel.Dashboard.SelectedTimeRangeOption = customOption;
+        return viewModel.Dashboard.IsCustomTimeRangeOpen;
+    }
+
+    /// <summary>
     /// Selects and focuses one query document for a constrained Browser performance fixture.
     /// </summary>
     /// <param name="documentId">The fixture document identifier.</param>

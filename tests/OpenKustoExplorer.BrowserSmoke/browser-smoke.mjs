@@ -41,7 +41,7 @@ const waitForHost = async () => {
   throw new Error(`The Web host did not become ready at ${baseUrl}: ${lastFailure}`);
 };
 
-const focusFixtureTarget = async (page, target) => {
+const invokeFixtureAction = async (page, target) => {
   const accepted = await page.evaluate(
     fixtureTarget => globalThis.openKustoExplorerInvokePerformanceFixture(fixtureTarget),
     target);
@@ -96,18 +96,16 @@ const verifyDashboardTimeRange = async viewport => {
         && bounds.height >= viewport.height * 0.9,
       `The ${viewport.width}x${viewport.height} Avalonia canvas is not correctly framed.`);
 
-    await focusFixtureTarget(page, "dashboard");
+    await invokeFixtureAction(page, "dashboard");
     await page.keyboard.press("Enter");
-    await focusFixtureTarget(page, "create-dashboard");
+    await invokeFixtureAction(page, "create-dashboard");
     await page.keyboard.press("Enter");
     await page.keyboard.type(`Parity smoke ${viewport.width}`);
     await page.keyboard.press("Enter");
-    await focusFixtureTarget(page, "dashboard-time-range");
+    await invokeFixtureAction(page, "dashboard-time-range");
     await captureScreenshot(page, `dashboard-${viewport.width}x${viewport.height}.png`);
 
-    await page.keyboard.press("Alt+ArrowDown");
-    await page.keyboard.press("End");
-    await page.keyboard.press("Enter");
+    await invokeFixtureAction(page, "open-custom-time-range");
     await waitForFixtureTarget(page, "custom-time-range-start-date");
     await captureScreenshot(page, `dashboard-custom-${viewport.width}x${viewport.height}.png`);
     assert.deepEqual(errors, []);

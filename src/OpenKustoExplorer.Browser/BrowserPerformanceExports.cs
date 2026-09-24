@@ -67,6 +67,11 @@ public static partial class BrowserPerformanceExports
             return currentWorkbench.RenderPerformanceTimeChart();
         }
 
+        if (string.Equals(action, "open-custom-time-range", StringComparison.Ordinal))
+        {
+            return currentWorkbench.OpenPerformanceCustomTimeRange();
+        }
+
         return string.Equals(action, "large-editor", StringComparison.Ordinal)
             ? currentWorkbench.FocusPerformanceDocument(BrowserPerformanceFixture.GetLargeDocumentId())
             : currentWorkbench.FocusPerformanceTarget(action);

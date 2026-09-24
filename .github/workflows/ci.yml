@@ -23,6 +23,9 @@ jobs:
         with:
           dotnet-version: 10.0.401
 
+      - name: Restore WebAssembly workload
+        run: dotnet workload restore src/OpenKustoExplorer.Browser/OpenKustoExplorer.Browser.csproj
+
       - name: Restore and audit all dependencies
         run: dotnet restore OpenKustoExplorer.slnx -p:AuditPipeline=true
 
