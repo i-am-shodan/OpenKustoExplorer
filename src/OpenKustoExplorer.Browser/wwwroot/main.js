@@ -9,6 +9,7 @@ const performanceFixtureEnabled = profilingEnabled
     && queryParameters.get("fixture") === "performance"
     && ["localhost", "127.0.0.1", "[::1]"].includes(globalThis.location.hostname);
 const maximumObservedEntryCount = 200;
+const runtimeResourceVersion = "1";
 const observedAnimationFrames = [];
 const observedEvents = [];
 const observedLongTasks = [];
@@ -255,6 +256,11 @@ try {
     const dotnetRuntime = await dotnet
         .withDiagnosticTracing(false)
         .withApplicationArgumentsFromQuery()
+        .withResourceLoader((_type, _name, defaultUri) => {
+            const resourceUri = new URL(defaultUri, globalThis.location.href);
+            resourceUri.searchParams.set("oke-runtime", runtimeResourceVersion);
+            return resourceUri.href;
+        })
         .create();
     globalThis.openKustoExplorerMarkPerformance("runtime.create.complete");
 
