@@ -35,6 +35,7 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
     private bool isDeleteConfirmationOpen;
     private bool isDeleteExecutionConfirmationOpen;
     private bool isExportConfirmationOpen;
+    private bool isLoaded;
     private bool isLoading;
     private bool isRenameExecutionOpen;
     private bool isRecordingDialogOpen;
@@ -655,6 +656,10 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
     /// <summary>Gets the command that clears both selected chain endpoints.</summary>
     public IAsyncRelayCommand ClearChainEndpointsCommand { get; }
 
+    /// <summary>Gets a value indicating whether live result values can currently be annotated.</summary>
+    internal bool HasActiveLiveInterests => IsRecording
+        && (activeInterests.Count > 0 || activeManualInterestValues.Count > 0);
+
     private SemaphoreSlim RecordingOperationGate { get; } = new(1, 1);
 
     /// <summary>
@@ -1146,6 +1151,23 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
         return generated;
     }
 
+    /// <summary>
+    /// Ensures recorded-session state is loaded for workspace activation.
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the initial load.</param>
+    /// <returns>Whether state was refreshed instead of served from memory.</returns>
+    internal async Task<bool> EnsureLoadedAsync(CancellationToken cancellationToken)
+    {
+        if (isLoaded || store is null)
+        {
+            isLoaded = true;
+            return false;
+        }
+
+        await RefreshAsync(cancellationToken);
+        return true;
+    }
+
     private static string FormatValue(KustoResultValue value)
     {
         if (value.IsNull)
@@ -1469,6 +1491,8 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
             {
                 SelectedSession = null;
             }
+
+            isLoaded = true;
         }
         catch (KustoRecordedSessionDatabaseVersionException exception)
         {
@@ -1482,6 +1506,7 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
                 + $"this build supports version {exception.SupportedVersion}. Remove it to create empty storage.";
             DatabaseRecoveryErrorText = string.Empty;
             IsDatabaseRecoveryOpen = true;
+            isLoaded = true;
         }
         finally
         {

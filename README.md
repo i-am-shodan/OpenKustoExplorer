@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="src/OpenKustoExplorer.Desktop/Assets/OpenKustoExplorer.png" width="112" alt="Open Kusto Explorer logo" />
+  <img src="src/OpenKustoExplorer.Browser/wwwroot/open-kusto-explorer.png" width="112" alt="Open Kusto Explorer logo" />
 </p>
 
 <h1 align="center">Open Kusto Explorer</h1>
 
 <p align="center">
-  <strong>A fast, native desktop workbench for Azure Data Explorer.</strong><br />
+  <strong>A fast Avalonia workbench for Azure Data Explorer, on desktop and web.</strong><br />
   Create and validate KQL with GitHub Copilot, explore results, build dashboards, automate analysis, and follow evidence through investigation graphs.
 </p>
 
@@ -14,6 +14,7 @@
   <img alt="Avalonia 12" src="https://img.shields.io/badge/Avalonia-12-0B6AA2" />
   <img alt="Native AOT" src="https://img.shields.io/badge/Native_AOT-ready-1F883D" />
   <img alt="Windows, Linux, and macOS" src="https://img.shields.io/badge/desktop-Windows_%7C_Linux_%7C_macOS-2F81F7" />
+  <img alt="Desktop and web" src="https://img.shields.io/badge/hosts-desktop_%7C_web-2F81F7" />
   <img alt="KQL" src="https://img.shields.io/badge/language-KQL-59D0C5" />
 </p>
 
@@ -36,7 +37,7 @@ Open Kusto Explorer brings the workflows around KQL into one focused application
 - **Stay in the investigation.** Move from query to chart, dashboard, automation, or graph without rebuilding context in another tool.
 - **Work like a Kusto power user.** Caret-scoped execution, Kusto.Explorer-style shortcuts, render operators, tab groups, colors, and import are built in.
 - **Keep local state local.** Documents, dashboards, schedules, settings, and graph evidence persist on your machine. Credentials do not.
-- **Ship a real desktop app.** The UI is native Avalonia, the architecture is trimming-aware, and release bundles are self-contained Native AOT executables.
+- **Use one UI on desktop and web.** The same Avalonia workbench runs in the native desktop shell and as WebAssembly inside the Blazor frontend.
 
 ## One Workbench, Six Workflows
 
@@ -71,7 +72,7 @@ Copilot never executes a KQL proposal automatically. You review the complete pro
 - Microsoft sign-in through the system browser; database discovery and schema loading happen lazily.
 - Cluster context menus expose the complete URL and editable connection properties; URL changes migrate query tabs, dashboard widgets, and future automation runs while retaining historical run provenance.
 - Cancellation, execution timing, query details, and automatic handling of Kusto `render` metadata.
-- Non-destructive import of open Microsoft Kusto Explorer tabs, connection groups, and cluster registrations on Windows.
+- Non-destructive import of open Microsoft Kusto Explorer tabs, connection groups, and cluster registrations: discovered automatically on Windows desktop or read from an explicitly selected profile folder on Web.
 - GitHub Copilot can explain or refine the active query, repair a failed query from its diagnostics, and validate every proposed KQL edit before it is shown.
 
 ### Results That Do Not Get In The Way
@@ -171,7 +172,7 @@ Schedule a KQL block without leaving the editor. Open Kusto Explorer retains up 
 
 - Run on an interval while the application is open and catch up one missed occurrence after restart.
 - Trigger when row count changes or crosses an `=`, `>=`, `<=`, or `!=` threshold.
-- Notify through in-app desktop alerts, TLS email, a local application with templated arguments, or an HTTPS webhook.
+- Notify through in-app desktop or browser alerts; Desktop also supports TLS email, a local application with templated arguments, or an HTTPS webhook.
 - Use `{row_count}`, `{rows_changed}`, `{name}`, and `{query}` in notification templates.
 - Feed scheduled `make-graph` and `graph()` results into the active named investigation graph.
 
@@ -214,6 +215,8 @@ Choose the provider under **Application settings → AI**. Provider clients are 
 - **Azure OpenAI** requires an endpoint and deployment. It uses the API key from the configured environment-variable name when present; otherwise it uses `DefaultAzureCredential` and Microsoft Entra authentication.
 - **OpenAI** requires a model and an API key in the configured environment variable. Its optional endpoint supports OpenAI-compatible gateways and local services.
 
+The Web client uses the host's configured Azure OpenAI deployment rather than browser credentials. Conversation history remains in browser memory; each authenticated request carries at most ten prior turns. Graph and recorded-result data is read from IndexedDB only after the matching session consent is enabled, converted locally to a snapshot capped at 64 KiB, and sent as untrusted prompt context. The stateless BFF cannot read the browser's graph or recorded-session stores.
+
 API keys are never entered into or persisted by Open Kusto Explorer. Settings store only endpoints, model or deployment names, and environment-variable names. GitHub-only Microsoft Learn and Azure MCP options are hidden for other providers; bounded local graph and recorded-session tools remain available with explicit consent.
 
 Azure MCP additionally requires Node.js with `npx` and an authenticated Azure credential chain.
@@ -230,10 +233,47 @@ AI provider and Azure MCP dependencies are optional at runtime; the core query, 
 
 ### Run From Source
 
+Desktop:
+
 ```powershell
 dotnet restore OpenKustoExplorer.slnx
 dotnet run --project src/OpenKustoExplorer.Desktop --configuration Release
 ```
+
+Web:
+
+```powershell
+dotnet workload restore src/OpenKustoExplorer.Browser/OpenKustoExplorer.Browser.csproj
+dotnet run --project src/OpenKustoExplorer.Web --configuration Debug
+```
+
+The Development host accepts authenticated application requests from loopback only. Its first ADX request opens system-browser sign-in using the public-client settings advertised by the target cluster. ADX tokens remain in the server process; the Browser client never receives them. No application secret, certificate, service principal, or local Entra configuration is required for this mode.
+
+The web launch profile serves the Blazor frontend at `http://localhost:5216`. It embeds the same Avalonia workbench from `/app` and applies the cross-origin isolation headers required by the WebAssembly renderer.
+
+### Deploy Web With Workload Identity Federation
+
+The deployed confidential Web app uses a user-assigned managed identity as its federated credential:
+
+1. Create a user-assigned managed identity and assign it to the Azure compute resource hosting the Web app.
+2. Register the Web app as a single-tenant Microsoft Entra application, add its deployed `/signin-oidc` Web redirect URI, and grant delegated **Azure Data Explorer / user_impersonation** permission.
+3. On that app registration, add a **Managed Identity** federated credential that trusts the user-assigned managed identity. Use audience `api://AzureADTokenExchange`; its subject is the managed identity's Object (principal) ID.
+4. Configure the deployed Web host with the app and managed-identity client IDs:
+
+```text
+WebAuthentication__Mode=FederatedManagedIdentity
+AzureAd__TenantId=<tenant-id>
+AzureAd__ClientId=<web-app-registration-client-id>
+AzureAd__ClientCredentials__0__SourceType=SignedAssertionFromManagedIdentity
+AzureAd__ClientCredentials__0__ManagedIdentityClientId=<user-assigned-managed-identity-client-id>
+AzureAd__ClientCredentials__0__TokenExchangeUrl=api://AzureADTokenExchange/.default
+Copilot__AzureOpenAIEndpoint=https://<resource-name>.openai.azure.com/
+Copilot__Deployment=<deployment-name>
+Copilot__ManagedIdentityClientId=<user-assigned-managed-identity-client-id>
+Copilot__MaximumOutputTokens=4096
+```
+
+Assign the managed identity the **Cognitive Services OpenAI User** role on the Azure OpenAI resource. The Web host is a same-origin BFF: it retains Microsoft identity tokens and Azure OpenAI credentials server-side, accepts only public `*.kusto.windows.net` cluster authorities, and forwards bounded requests through shared execution and assistant protocols. Production startup rejects missing federation settings, and local loopback authentication cannot be enabled outside the Development environment.
 
 Then:
 
@@ -287,7 +327,10 @@ Application state lives under the platform's local application-data directory. O
 
 ```mermaid
 flowchart LR
-    Desktop["Avalonia Desktop"] --> Presentation["Presentation / MVVM"]
+  Desktop["Avalonia Desktop host"] --> Shared["Shared Avalonia workbench"]
+  Web["Blazor frontend"] --> Browser["Avalonia Browser / WASM"]
+  Browser --> Shared
+  Shared --> Presentation["Presentation / MVVM"]
   Desktop --> Infrastructure["Infrastructure adapters"]
     Presentation --> Application["Application contracts and workflows"]
   Infrastructure --> Application
@@ -303,9 +346,13 @@ flowchart LR
 | `OpenKustoExplorer.Domain` | Immutable Kusto schema model |
 | `OpenKustoExplorer.Application` | Use-case contracts and durable definitions |
 | `OpenKustoExplorer.Graph` | Graph domain, bounded queries, and layout contracts |
-| `OpenKustoExplorer.Infrastructure` | ADX, persistence, graph SQLite, import, and AI provider adapters |
+| `OpenKustoExplorer.Kusto` | Shared ADX REST execution, schema parsing, and KQL language intelligence |
+| `OpenKustoExplorer.Infrastructure` | Desktop authentication, persistence, graph SQLite, import, and AI provider adapters |
 | `OpenKustoExplorer.Presentation` | Workbench state, commands, projections, and view models |
-| `OpenKustoExplorer.Desktop` | Avalonia UI, platform integration, charts, and automation dispatch |
+| `OpenKustoExplorer.Avalonia` | Shared workbench XAML, editor, controls, charts, graph rendering, and themes |
+| `OpenKustoExplorer.Desktop` | Native window, desktop composition, notifications, and process integration |
+| `OpenKustoExplorer.Browser` | WebAssembly entry point and browser-safe service composition |
+| `OpenKustoExplorer.Web` | Interactive-server Blazor shell, same-origin hosting, and isolation headers |
 
 The solution uses dependency injection in-process. JSON is handled through explicit trimming-safe readers and writers, and release builds enforce trimming and Native AOT analysis.
 
@@ -318,7 +365,7 @@ dotnet build OpenKustoExplorer.slnx --configuration Release --no-restore -warnas
 dotnet test OpenKustoExplorer.slnx --configuration Release --no-build --no-restore
 ```
 
-CI runs a fail-closed direct/transitive NuGet vulnerability audit, formatting, warning-free builds, tests, Native AOT smoke execution, and desktop publication on Windows, Linux, Apple Silicon macOS, and Intel macOS. CodeQL separately analyzes C# security and quality on pull requests, main pushes, and a weekly schedule. Dependabot checks centrally managed NuGet packages and GitHub Actions weekly, grouping compatible minor/patch updates while leaving major updates for individual review. Every successful push event to `main` then creates one stable GitHub release and matching source tag; pull requests, manual CI runs, and failed builds create neither.
+CI runs a fail-closed direct/transitive NuGet vulnerability audit, formatting, warning-free builds, tests, Native AOT smoke execution, desktop publication on Windows, Linux, Apple Silicon macOS, and Intel macOS, and a real Chromium WebAssembly smoke test. CodeQL separately analyzes C# security and quality on pull requests, main pushes, and a weekly schedule. Dependabot checks centrally managed NuGet packages and GitHub Actions weekly, grouping compatible minor/patch updates while leaving major updates for individual review. Every successful push event to `main` then creates one stable GitHub release and matching source tag; pull requests, manual CI runs, and failed builds create neither.
 
 ### Performance Tracing
 
@@ -392,11 +439,14 @@ The published bundle is self-contained; the target machine does not need a separ
 
 ## Current Boundaries
 
+- The web host uses Microsoft Entra authentication and a stateless same-origin BFF for live ADX and Azure OpenAI requests. Account-partitioned connections, documents, dashboards, automations, recorded sessions, and graphs persist in browser localStorage or IndexedDB.
+- Web application settings expose browser storage usage, persistence status, partition-scoped backup/restore, recovery archives for unreadable records, and a clear-data action.
 - Interactive query results are materialized up to 10,000 rows; export and visualization operate on that bounded result.
 - One `.kql` import processes up to 100 files of at most 1 MiB each; UTF-8 and BOM-marked UTF-16 are supported.
 - Session recording persists up to 500 rows per execution across all result tables and labels capped executions as limited.
 - Generated pivot queries currently require one cluster/database and conservative direct table-column lineage.
 - Scheduled automations run while Open Kusto Explorer is open and catch up at most one missed occurrence.
+- Every graph generation is limited to 25,000 entities and 100,000 relationships on both Desktop and Web.
 - Historical graph views are read-only, and all graph rendering/query operations enforce explicit bounds.
 - Native AOT desktop bundles must be published on their target operating system.
 

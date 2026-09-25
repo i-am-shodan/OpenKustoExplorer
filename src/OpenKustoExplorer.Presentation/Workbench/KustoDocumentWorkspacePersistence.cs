@@ -9,7 +9,7 @@ internal sealed class KustoDocumentWorkspacePersistence : IDisposable
 {
     private static readonly TimeSpan AutosaveDelay = TimeSpan.FromMilliseconds(400);
     private readonly Lock autosaveLock = new();
-    private readonly Lock storeLock = new();
+    private readonly SemaphoreSlim storeGate = new(1, 1);
     private readonly IKustoDocumentStore store;
     private CancellationTokenSource? autosaveCancellationSource;
     private KustoDocumentWorkspace? latestWorkspace;
@@ -73,14 +73,15 @@ internal sealed class KustoDocumentWorkspacePersistence : IDisposable
             autosaveCancellationSource = cancellationSource;
         }
 
-        _ = SaveAfterDelayAsync(workspace, cancellationSource);
+        _ = ObservePersistenceTaskAsync(SaveAfterDelayAsync(workspace, cancellationSource));
     }
 
     /// <summary>
     /// Cancels pending debounce work and immediately persists the supplied snapshot.
     /// </summary>
     /// <param name="workspace">The final workspace snapshot.</param>
-    internal void Flush(KustoDocumentWorkspace workspace)
+    /// <returns>A task that completes after the durable save attempt.</returns>
+    internal Task FlushAsync(KustoDocumentWorkspace workspace)
     {
         ArgumentNullException.ThrowIfNull(workspace);
 
@@ -91,7 +92,7 @@ internal sealed class KustoDocumentWorkspacePersistence : IDisposable
             autosaveCancellationSource = null;
         }
 
-        Save(workspace);
+        return SaveAsync(workspace);
     }
 
     /// <summary>
@@ -107,7 +108,21 @@ internal sealed class KustoDocumentWorkspacePersistence : IDisposable
 
         if (workspace is not null)
         {
-            Save(workspace);
+            _ = ObservePersistenceTaskAsync(SaveAsync(workspace));
+        }
+    }
+
+    private static async Task ObservePersistenceTaskAsync(Task task)
+    {
+        try
+        {
+            await task;
+        }
+        catch (Exception exception)
+        {
+            System.Diagnostics.Trace.TraceError(
+                "Unexpected document persistence failure: {0}",
+                exception);
         }
     }
 
@@ -118,7 +133,7 @@ internal sealed class KustoDocumentWorkspacePersistence : IDisposable
         try
         {
             await Task.Delay(AutosaveDelay, cancellationSource.Token);
-            Save(workspace);
+            await SaveAsync(workspace);
         }
         catch (OperationCanceledException)
         {
@@ -138,20 +153,21 @@ internal sealed class KustoDocumentWorkspacePersistence : IDisposable
         }
     }
 
-    private void Save(KustoDocumentWorkspace workspace)
+    private async Task SaveAsync(KustoDocumentWorkspace workspace)
     {
+        await storeGate.WaitAsync(CancellationToken.None);
         try
         {
-            lock (storeLock)
-            {
-                store.Save(workspace);
-            }
-
+            await store.SaveAsync(workspace, CancellationToken.None);
             SetSaveError(null);
         }
         catch (Exception exception)
         {
             SetSaveError($"Queries are not saved. {exception.Message}");
+        }
+        finally
+        {
+            storeGate.Release();
         }
     }
 

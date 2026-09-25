@@ -2,6 +2,7 @@ using Microsoft.Data.Sqlite;
 using OpenKustoExplorer.Graph;
 using OpenKustoExplorer.Graph.Query;
 using OpenKustoExplorer.Infrastructure.Graph;
+using OpenKustoExplorer.Portable.Graphs;
 
 namespace OpenKustoExplorer.Infrastructure.Tests.Graph;
 
@@ -10,6 +11,24 @@ namespace OpenKustoExplorer.Infrastructure.Tests.Graph;
 /// </summary>
 public sealed class SqliteGraphStoreTests
 {
+    /// <summary>
+    /// Verifies Desktop accepts shared graph limits and rejects either count above them.
+    /// </summary>
+    [Fact]
+    public void GenerationStorageLimitsMatchPortableStore()
+    {
+        SqliteGraphStore.ValidateGenerationStorageLimits(
+            GraphStorageLimits.MaximumEntityCount,
+            GraphStorageLimits.MaximumRelationshipCount);
+
+        Assert.Throws<InvalidDataException>(() => SqliteGraphStore.ValidateGenerationStorageLimits(
+            GraphStorageLimits.MaximumEntityCount + 1L,
+            GraphStorageLimits.MaximumRelationshipCount));
+        Assert.Throws<InvalidDataException>(() => SqliteGraphStore.ValidateGenerationStorageLimits(
+            GraphStorageLimits.MaximumEntityCount,
+            GraphStorageLimits.MaximumRelationshipCount + 1L));
+    }
+
     /// <summary>
     /// Verifies read-only openCypher projects typed values and a matched graph viewport.
     /// </summary>

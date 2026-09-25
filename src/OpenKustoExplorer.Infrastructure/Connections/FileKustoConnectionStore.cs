@@ -1,5 +1,6 @@
 using OpenKustoExplorer.Application.Connections;
 using OpenKustoExplorer.Infrastructure.Storage;
+using OpenKustoExplorer.Portable.Storage;
 
 namespace OpenKustoExplorer.Infrastructure.Connections;
 
@@ -37,17 +38,30 @@ public sealed class FileKustoConnectionStore : IKustoConnectionStore
             static () => new KustoConnectionCatalog([]));
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Saves the connection catalog synchronously.
+    /// </summary>
+    /// <param name="catalog">The connection catalog.</param>
     public void Save(KustoConnectionCatalog catalog)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         AtomicFileStore.Write(filePath, stream => KustoConnectionCatalogJson.Write(stream, catalog));
     }
 
+    /// <inheritdoc />
+    public Task SaveAsync(
+        KustoConnectionCatalog catalog,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Save(catalog);
+        return Task.CompletedTask;
+    }
+
     private static string GetDefaultFilePath()
     {
         string localApplicationData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        string defaultFilePath = Path.Join(localApplicationData, "OpenKustoExplorer", "connections.json");
+        string defaultFilePath = Path.Combine(localApplicationData, "OpenKustoExplorer", "connections.json");
         return defaultFilePath;
     }
 }

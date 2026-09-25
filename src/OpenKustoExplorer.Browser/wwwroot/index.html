@@ -1,0 +1,774 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#eef3f4" />
+  <title>Open Kusto Explorer</title>
+  <link rel="icon" href="open-kusto-explorer.png" />
+  <link rel="preload" href="open-kusto-explorer.png" as="image" />
+  <style>
+    :root {
+      color-scheme: light;
+      --startup-canvas: #eef3f4;
+      --startup-grid: rgba(38, 71, 76, 0.07);
+      --startup-ink: #172a31;
+      --startup-muted: #5d7076;
+      --startup-track: rgba(23, 42, 49, 0.12);
+      --startup-teal: #55c9bb;
+      --startup-blue: #62afe2;
+      --startup-gold: #ffca61;
+      --startup-error: #b42318;
+    }
+
+    html,
+    body,
+    #out {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+    }
+
+    body {
+      overflow: hidden;
+      background-color: var(--startup-canvas);
+      color: var(--startup-ink);
+    }
+
+    body::before {
+      position: fixed;
+      inset: 0 0 auto;
+      z-index: 2;
+      height: 4px;
+      background: linear-gradient(
+        90deg,
+        var(--startup-teal) 0 38%,
+        var(--startup-blue) 38% 70%,
+        var(--startup-gold) 70% 100%);
+      content: "";
+    }
+
+    #out {
+      position: relative;
+      box-sizing: border-box;
+    }
+
+    .browser-toast-region {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      z-index: 10;
+      display: grid;
+      width: min(360px, calc(100vw - 40px));
+      gap: 8px;
+      pointer-events: none;
+    }
+
+    .browser-toast {
+      box-sizing: border-box;
+      padding: 13px 14px 14px;
+      border: 1px solid rgba(23, 42, 49, 0.22);
+      border-left: 4px solid #237f78;
+      border-radius: 6px;
+      background: #ffffff;
+      box-shadow: 0 12px 30px rgba(20, 44, 50, 0.2);
+      color: #172a31;
+      font: 14px/1.45 "Aptos", "Segoe UI Variable Text", "Trebuchet MS", sans-serif;
+      letter-spacing: 0;
+      pointer-events: auto;
+      animation: toast-arrive 180ms ease-out both;
+    }
+
+    .browser-toast-header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 24px;
+      align-items: start;
+      gap: 8px;
+    }
+
+    .browser-toast-header strong,
+    .browser-toast p {
+      overflow-wrap: anywhere;
+    }
+
+    .browser-toast p {
+      margin: 5px 28px 0 0;
+      color: #4b6066;
+    }
+
+    .browser-toast-close {
+      display: grid;
+      width: 24px;
+      height: 24px;
+      padding: 0;
+      border: 0;
+      border-radius: 4px;
+      place-items: center;
+      background: transparent;
+      color: #40565c;
+      font: 20px/1 sans-serif;
+      cursor: pointer;
+    }
+
+    .browser-toast-close:hover {
+      background: #e5edef;
+    }
+
+    .browser-toast-close:focus-visible {
+      outline: 2px solid #237f78;
+      outline-offset: 1px;
+    }
+
+    .storage-manager {
+      width: min(620px, calc(100vw - 32px));
+      max-height: calc(100vh - 32px);
+      box-sizing: border-box;
+      padding: 0;
+      overflow: auto;
+      border: 1px solid #b5c4c8;
+      border-radius: 8px;
+      background: #f8fbfb;
+      box-shadow: 0 24px 64px rgba(20, 44, 50, 0.3);
+      color: #172a31;
+      font: 14px/1.45 "Aptos", "Segoe UI Variable Text", "Trebuchet MS", sans-serif;
+      letter-spacing: 0;
+    }
+
+    .storage-manager::backdrop {
+      background: rgba(12, 27, 31, 0.52);
+    }
+
+    .storage-manager-form {
+      padding: 22px;
+    }
+
+    .storage-manager-header,
+    .storage-manager-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .storage-manager-header h2 {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+
+    .storage-manager-close {
+      display: grid;
+      width: 32px;
+      height: 32px;
+      padding: 0;
+      border: 0;
+      border-radius: 4px;
+      place-items: center;
+      background: transparent;
+      color: #40565c;
+      font: 24px/1 sans-serif;
+      cursor: pointer;
+    }
+
+    .storage-manager-close:hover {
+      background: #e5edef;
+    }
+
+    .storage-manager-summary {
+      margin: 18px 0;
+      border-block: 1px solid #cfdbde;
+    }
+
+    .storage-manager-row {
+      display: grid;
+      min-height: 42px;
+      grid-template-columns: minmax(0, 1fr) minmax(140px, auto);
+      align-items: center;
+      gap: 16px;
+      border-bottom: 1px solid #e0e8ea;
+    }
+
+    .storage-manager-row:last-child {
+      border-bottom: 0;
+    }
+
+    .storage-manager-row strong {
+      overflow-wrap: anywhere;
+      text-align: right;
+    }
+
+    .storage-manager-error {
+      margin: 0 0 14px;
+      padding: 10px 12px;
+      border-left: 4px solid #b42318;
+      background: #fbe9e7;
+      color: #7a1d15;
+      overflow-wrap: anywhere;
+    }
+
+    .storage-manager-actions {
+      display: flex;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .storage-manager button:not(.storage-manager-close) {
+      min-height: 36px;
+      padding: 7px 13px;
+      border: 1px solid #8fa5aa;
+      border-radius: 5px;
+      background: #ffffff;
+      color: #203940;
+      font: 600 14px/1.2 "Aptos", "Segoe UI Variable Text", "Trebuchet MS", sans-serif;
+      letter-spacing: 0;
+      cursor: pointer;
+    }
+
+    .storage-manager button:not(.storage-manager-close):hover {
+      background: #e9f0f1;
+    }
+
+    .storage-manager button:not(.storage-manager-close):focus-visible,
+    .storage-manager-close:focus-visible {
+      outline: 2px solid #237f78;
+      outline-offset: 2px;
+    }
+
+    .storage-manager button.storage-manager-danger {
+      border-color: #c88c86;
+      color: #9a2b20;
+    }
+
+    .storage-manager button.storage-manager-primary {
+      border-color: #1f716b;
+      background: #237f78;
+      color: #ffffff;
+    }
+
+    .storage-manager button.storage-manager-primary:hover {
+      background: #1c6963;
+    }
+
+    .storage-manager button:disabled {
+      cursor: wait;
+      opacity: 0.55;
+    }
+
+    .storage-manager-status {
+      margin: 0;
+      color: #5d7076;
+    }
+
+    .kusto-profile-import {
+      width: min(560px, calc(100vw - 32px));
+      max-height: calc(100vh - 32px);
+      box-sizing: border-box;
+      padding: 0;
+      overflow: auto;
+      border: 1px solid #b5c4c8;
+      border-radius: 8px;
+      background: #f8fbfb;
+      box-shadow: 0 24px 64px rgba(20, 44, 50, 0.3);
+      color: #172a31;
+      font: 14px/1.45 "Aptos", "Segoe UI Variable Text", "Trebuchet MS", sans-serif;
+      letter-spacing: 0;
+    }
+
+    .kusto-profile-import::backdrop {
+      background: rgba(12, 27, 31, 0.52);
+    }
+
+    .kusto-profile-form {
+      display: grid;
+      padding: 22px;
+      gap: 16px;
+    }
+
+    .kusto-profile-form h2,
+    .kusto-profile-form p {
+      margin: 0;
+    }
+
+    .kusto-profile-form h2 {
+      font-size: 20px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+
+    .kusto-profile-copy-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: stretch;
+      gap: 8px;
+    }
+
+    .kusto-profile-path {
+      min-width: 0;
+      padding: 9px 11px;
+      overflow-x: auto;
+      border: 1px solid #b5c4c8;
+      border-radius: 5px;
+      background: #ffffff;
+      color: #203940;
+      font: 13px/1.4 "Cascadia Code", "Consolas", monospace;
+      letter-spacing: 0;
+      white-space: nowrap;
+      user-select: all;
+    }
+
+    .kusto-profile-help,
+    .kusto-profile-status {
+      color: #5d7076;
+    }
+
+    .kusto-profile-file-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .kusto-profile-error {
+      padding: 10px 12px;
+      border-left: 4px solid #b42318;
+      background: #fbe9e7;
+      color: #7a1d15;
+      overflow-wrap: anywhere;
+    }
+
+    .kusto-profile-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    .kusto-profile-form button {
+      min-height: 36px;
+      padding: 7px 13px;
+      border: 1px solid #8fa5aa;
+      border-radius: 5px;
+      background: #ffffff;
+      color: #203940;
+      font: 600 14px/1.2 "Aptos", "Segoe UI Variable Text", "Trebuchet MS", sans-serif;
+      letter-spacing: 0;
+      cursor: pointer;
+    }
+
+    .kusto-profile-form button:hover {
+      background: #e9f0f1;
+    }
+
+    .kusto-profile-form button:focus-visible {
+      outline: 2px solid #237f78;
+      outline-offset: 2px;
+    }
+
+    .kusto-profile-form button.kusto-profile-primary {
+      border-color: #1f716b;
+      background: #237f78;
+      color: #ffffff;
+    }
+
+    .kusto-profile-form button.kusto-profile-primary:hover {
+      background: #1c6963;
+    }
+
+    .kusto-profile-form button:disabled {
+      cursor: wait;
+      opacity: 0.55;
+    }
+
+    .startup {
+      position: fixed;
+      inset: 4px 0 0;
+      z-index: 1;
+      display: grid;
+      box-sizing: border-box;
+      padding: 32px 24px;
+      justify-items: center;
+      align-content: center;
+      background-color: var(--startup-canvas);
+      background-image:
+        linear-gradient(var(--startup-grid) 1px, transparent 1px),
+        linear-gradient(90deg, var(--startup-grid) 1px, transparent 1px);
+      background-size: 32px 32px;
+      text-align: center;
+      animation: startup-arrive 500ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+    }
+
+    .startup-leaving {
+      opacity: 0;
+      transform: scale(0.99);
+      transition:
+        opacity 180ms ease,
+        transform 180ms ease;
+      animation: none;
+      pointer-events: none;
+    }
+
+    .startup-mark {
+      display: block;
+      width: 112px;
+      height: 112px;
+      margin: 0 0 22px;
+      object-fit: contain;
+      filter: drop-shadow(0 16px 24px rgba(20, 44, 50, 0.16));
+      animation: startup-mark-arrive 650ms 80ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+    }
+
+    .startup h1 {
+      margin: 0;
+      font-family: "Aptos Display", "Segoe UI Variable Display", "Trebuchet MS", sans-serif;
+      font-size: 28px;
+      font-weight: 650;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    .startup-status {
+      display: flex;
+      min-height: 32px;
+      margin-top: 24px;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      color: var(--startup-muted);
+      font-family: "Aptos", "Segoe UI Variable Text", "Trebuchet MS", sans-serif;
+      font-size: 15px;
+      line-height: 1.4;
+      letter-spacing: 0;
+    }
+
+    .startup-spinner {
+      width: 26px;
+      height: 26px;
+      box-sizing: border-box;
+      flex: 0 0 26px;
+      border: 3px solid var(--startup-track);
+      border-top-color: var(--startup-teal);
+      border-right-color: var(--startup-blue);
+      border-bottom-color: var(--startup-gold);
+      border-radius: 50%;
+      animation: startup-spin 900ms linear infinite;
+    }
+
+    .startup-progress {
+      position: relative;
+      width: min(220px, 70vw);
+      height: 4px;
+      margin-top: 20px;
+      overflow: hidden;
+      border-radius: 2px;
+      background: var(--startup-track);
+    }
+
+    .startup-progress::after {
+      position: absolute;
+      inset: 0 auto 0 -45%;
+      width: 45%;
+      background: linear-gradient(
+        90deg,
+        var(--startup-teal),
+        var(--startup-blue) 58%,
+        var(--startup-gold));
+      content: "";
+      animation: startup-progress 1400ms ease-in-out infinite;
+    }
+
+    .startup-retry {
+      min-width: 92px;
+      min-height: 38px;
+      margin-top: 22px;
+      padding: 8px 18px;
+      border: 1px solid #315b62;
+      border-radius: 6px;
+      background: #244a51;
+      color: #ffffff;
+      font: 600 14px/1.2 "Aptos", "Segoe UI Variable Text", "Trebuchet MS", sans-serif;
+      letter-spacing: 0;
+      cursor: pointer;
+    }
+
+    .startup-actions {
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .startup-storage {
+      border-color: #82979c;
+      background: #ffffff;
+      color: #244a51;
+    }
+
+    .startup-storage:hover {
+      background: #e8eff0;
+    }
+
+    .startup-retry:hover {
+      background: #193b42;
+    }
+
+    .startup-retry:focus-visible {
+      outline: 3px solid rgba(98, 175, 226, 0.5);
+      outline-offset: 3px;
+    }
+
+    .startup-retry[hidden] {
+      display: none;
+    }
+
+    .startup-failed .startup-spinner {
+      display: none;
+    }
+
+    .startup-failed .startup-status {
+      color: var(--startup-error);
+    }
+
+    .startup-failed .startup-progress::after {
+      inset: 0;
+      width: 100%;
+      background: var(--startup-error);
+      animation: none;
+    }
+
+    @keyframes startup-arrive {
+      from {
+        opacity: 0;
+        transform: translateY(10px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    @keyframes startup-mark-arrive {
+      from {
+        opacity: 0;
+        transform: scale(0.88);
+      }
+
+      to {
+        opacity: 1;
+        transform: scale(1);
+      }
+    }
+
+    @keyframes startup-spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    @keyframes startup-progress {
+      0% {
+        transform: translateX(0);
+      }
+
+      55%,
+      100% {
+        transform: translateX(325%);
+      }
+    }
+
+    @keyframes toast-arrive {
+      from {
+        opacity: 0;
+        transform: translateY(-8px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .startup,
+      .startup-mark,
+      .startup-spinner,
+      .startup-progress::after {
+        animation: none;
+      }
+
+      .browser-toast {
+        animation: none;
+      }
+
+      .startup-progress::after {
+        inset: 0;
+        width: 100%;
+      }
+    }
+
+    @media (max-height: 420px) {
+      .startup {
+        padding-block: 20px;
+        grid-template-columns: auto 1fr;
+        column-gap: 20px;
+        text-align: left;
+      }
+
+      .startup-mark {
+        width: 84px;
+        height: 84px;
+        margin: 0;
+        grid-row: 1 / 4;
+      }
+
+      .startup-status {
+        margin-top: 12px;
+        justify-self: start;
+      }
+
+      .startup-progress,
+      .startup-actions {
+        justify-self: start;
+      }
+    }
+
+    @media (max-width: 520px) {
+      .storage-manager-form {
+        padding: 18px;
+      }
+
+      .storage-manager-row {
+        grid-template-columns: 1fr;
+        padding-block: 8px;
+        gap: 2px;
+      }
+
+      .storage-manager-row strong {
+        text-align: left;
+      }
+
+      .kusto-profile-form {
+        padding: 18px;
+      }
+
+      .kusto-profile-copy-row {
+        grid-template-columns: 1fr;
+      }
+
+      .kusto-profile-file-actions {
+        grid-template-columns: 1fr;
+      }
+
+      .kusto-profile-actions {
+        align-items: stretch;
+        flex-direction: column-reverse;
+      }
+    }
+
+    @media (prefers-contrast: more) {
+      .startup-spinner,
+      .startup-retry {
+        border-width: 3px;
+      }
+
+      .startup-progress {
+        outline: 1px solid currentColor;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main id="out" aria-label="Open Kusto Explorer workbench">
+    <section class="startup" aria-labelledby="startup-title">
+      <img
+        class="startup-mark"
+        src="open-kusto-explorer.png"
+        alt=""
+        width="112"
+        height="112" />
+      <h1 id="startup-title">Open Kusto Explorer</h1>
+      <div class="startup-status" role="status" aria-live="polite">
+        <span class="startup-spinner" aria-hidden="true"></span>
+        <span id="startup-message">Preparing your workspace</span>
+      </div>
+      <div class="startup-progress" aria-hidden="true"></div>
+      <div class="startup-actions">
+        <button id="startup-retry" class="startup-retry" type="button" hidden>Retry</button>
+        <button
+        id="startup-storage"
+        class="startup-retry startup-storage"
+        type="button"
+        hidden>Manage storage</button>
+      </div>
+    </section>
+  </main>
+  <aside
+      id="toast-region"
+      class="browser-toast-region"
+      aria-label="Notifications"
+      aria-live="polite"></aside>
+  <dialog
+      id="kusto-profile-import"
+      class="kusto-profile-import"
+      aria-labelledby="kusto-profile-title">
+    <form method="dialog" class="kusto-profile-form">
+      <h2 id="kusto-profile-title">Import from Microsoft Kusto Explorer</h2>
+      <p>Edge blocks websites from opening this protected Windows folder. Select only the Kusto Explorer files instead.</p>
+      <div class="kusto-profile-copy-row">
+        <code id="kusto-profile-path" class="kusto-profile-path">%LOCALAPPDATA%\Kusto.Explorer</code>
+        <button id="kusto-profile-copy-path" type="button">Copy path</button>
+      </div>
+      <p class="kusto-profile-help">Paste the path into the file picker's address bar, then select <strong>UserConnections.xml</strong> and <strong>UserConnectionGroups.xml</strong>. Open tabs are optional <strong>.kebak</strong> files in the <strong>Recovery</strong> subfolder.</p>
+      <div class="kusto-profile-file-actions">
+        <button id="kusto-profile-choose-files" type="button">Choose profile files</button>
+        <button id="kusto-profile-choose-recovery" type="button">Add recovery files</button>
+      </div>
+      <p id="kusto-profile-error" class="kusto-profile-error" role="alert" hidden></p>
+      <p id="kusto-profile-status" class="kusto-profile-status" role="status"></p>
+      <div class="kusto-profile-actions">
+        <button id="kusto-profile-cancel" type="button">Cancel</button>
+        <button id="kusto-profile-import-selected" class="kusto-profile-primary" type="button" disabled>Import selected</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="storage-manager" class="storage-manager" aria-labelledby="storage-manager-title">
+    <form method="dialog" class="storage-manager-form">
+      <header class="storage-manager-header">
+        <h2 id="storage-manager-title">Browser storage</h2>
+        <button class="storage-manager-close" value="close" aria-label="Close storage manager">&times;</button>
+      </header>
+      <section class="storage-manager-summary" aria-label="Storage status">
+        <div class="storage-manager-row">
+          <span>Application data</span>
+          <strong id="storage-app-usage">Loading</strong>
+        </div>
+        <div class="storage-manager-row">
+          <span>Browser origin usage</span>
+          <strong id="storage-origin-usage">Loading</strong>
+        </div>
+        <div class="storage-manager-row">
+          <span>Retention</span>
+          <strong id="storage-persistence">Loading</strong>
+        </div>
+        <div class="storage-manager-row">
+          <span>Recovery archives</span>
+          <strong id="storage-recoveries">Loading</strong>
+        </div>
+      </section>
+      <p id="storage-manager-error" class="storage-manager-error" role="alert" hidden></p>
+      <div class="storage-manager-actions">
+        <button id="storage-backup" type="button">Download backup</button>
+        <button id="storage-restore" type="button">Restore backup</button>
+        <button id="storage-persist" type="button">Request persistent storage</button>
+        <button id="storage-clear" class="storage-manager-danger" type="button">Clear browser data</button>
+        <input id="storage-restore-input" type="file" accept="application/json,.json" hidden />
+      </div>
+      <footer class="storage-manager-footer">
+        <p id="storage-manager-status" class="storage-manager-status" role="status">Loading</p>
+        <button class="storage-manager-primary" value="close">Done</button>
+      </footer>
+    </form>
+  </dialog>
+  <script type="module" src="main.js"></script>
+</body>
+</html>

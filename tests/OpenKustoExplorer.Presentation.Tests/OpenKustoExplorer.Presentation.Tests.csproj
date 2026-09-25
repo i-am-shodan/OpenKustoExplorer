@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\OpenKustoExplorer.Desktop\OpenKustoExplorer.Desktop.csproj" />
+    <ProjectReference Include="..\..\src\OpenKustoExplorer.Portable\OpenKustoExplorer.Portable.csproj" />
     <ProjectReference Include="..\..\src\OpenKustoExplorer.Presentation\OpenKustoExplorer.Presentation.csproj" />
   </ItemGroup>
 

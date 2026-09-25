@@ -2,6 +2,7 @@ using Microsoft.Data.Sqlite;
 using OpenKustoExplorer.Graph;
 using OpenKustoExplorer.Graph.Query;
 using OpenKustoExplorer.Infrastructure.Graph.Query;
+using OpenKustoExplorer.Portable.Graphs;
 
 namespace OpenKustoExplorer.Infrastructure.Graph;
 
@@ -11,10 +12,10 @@ namespace OpenKustoExplorer.Infrastructure.Graph;
 public sealed class SqliteGraphStore : IGraphStore, IGraphQueryService, IDisposable
 {
     private const string DefaultGraphName = "Default graph";
-    private const int MaximumNeighborhoodDepth = 10;
-    private const int MaximumViewportEntityCount = 500;
-    private const int MaximumViewportRelationshipCount = 2_000;
-    private const int MaximumSearchResults = 500;
+    private const int MaximumNeighborhoodDepth = GraphStorageLimits.MaximumNeighborhoodDepth;
+    private const int MaximumViewportEntityCount = GraphStorageLimits.MaximumViewportEntityCount;
+    private const int MaximumViewportRelationshipCount = GraphStorageLimits.MaximumViewportRelationshipCount;
+    private const int MaximumSearchResults = GraphStorageLimits.MaximumSearchResults;
     private readonly string connectionString;
     private readonly SemaphoreSlim writeGate = new(1, 1);
     private bool isDisposed;
@@ -634,6 +635,29 @@ public sealed class SqliteGraphStore : IGraphStore, IGraphQueryService, IDisposa
         return Task.FromResult(results);
     }
 
+    /// <summary>
+    /// Validates generation counts against the storage limits shared by every host.
+    /// </summary>
+    /// <param name="entityCount">The retained entity count.</param>
+    /// <param name="relationshipCount">The retained relationship count.</param>
+    internal static void ValidateGenerationStorageLimits(long entityCount, long relationshipCount)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(entityCount);
+        ArgumentOutOfRangeException.ThrowIfNegative(relationshipCount);
+        if (entityCount > GraphStorageLimits.MaximumEntityCount)
+        {
+            throw new InvalidDataException(
+                $"A graph generation cannot contain more than {GraphStorageLimits.MaximumEntityCount:N0} entities.");
+        }
+
+        if (relationshipCount > GraphStorageLimits.MaximumRelationshipCount)
+        {
+            throw new InvalidDataException(
+                "A graph generation cannot contain more than "
+                + $"{GraphStorageLimits.MaximumRelationshipCount:N0} relationships.");
+        }
+    }
+
     private static void ValidateNeighborhoodLimits(
         IReadOnlyCollection<GraphEntityKey> centers,
         int maximumDepth,
@@ -672,6 +696,30 @@ public sealed class SqliteGraphStore : IGraphStore, IGraphQueryService, IDisposa
     {
         string localApplicationData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         return Path.Combine(localApplicationData, "OpenKustoExplorer", "graph.db");
+    }
+
+    private static void EnsureGenerationWithinStorageLimits(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        Guid generationId)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT
+                (SELECT COUNT(*) FROM graph_entities WHERE generation_id = $generationId),
+                (SELECT COUNT(*) FROM graph_relationships WHERE generation_id = $generationId);
+            """;
+        command.Parameters.AddWithValue(
+            "$generationId",
+            generationId.ToString("D", System.Globalization.CultureInfo.InvariantCulture));
+        using SqliteDataReader reader = command.ExecuteReader();
+        if (!reader.Read())
+        {
+            throw new InvalidDataException("The imported graph generation counts could not be read.");
+        }
+
+        ValidateGenerationStorageLimits(reader.GetInt64(0), reader.GetInt64(1));
     }
 
     private static int ImportEntities(
@@ -891,6 +939,7 @@ public sealed class SqliteGraphStore : IGraphStore, IGraphQueryService, IDisposa
                     generationId);
             }
 
+            EnsureGenerationWithinStorageLimits(connection, transaction, generationId);
             cancellationToken.ThrowIfCancellationRequested();
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return new GraphImportResult(

@@ -6,7 +6,7 @@ $ErrorActionPreference = 'Stop'
 
 $bundleScript = Join-Path $PSScriptRoot 'New-MacOSApplicationBundle.ps1'
 $bundleSupportScript = Join-Path $PSScriptRoot 'MacOSApplicationBundle.Common.ps1'
-$iconSource = Join-Path $PSScriptRoot '../src/OpenKustoExplorer.Desktop/Assets/OpenKustoExplorer.png'
+$iconSource = Join-Path $PSScriptRoot '../src/OpenKustoExplorer.Browser/wwwroot/open-kusto-explorer.png'
 $utf8 = [Text.UTF8Encoding]::new($false, $true)
 . $bundleSupportScript
 

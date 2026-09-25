@@ -5,6 +5,7 @@ using OpenKustoExplorer.Application.Execution;
 using OpenKustoExplorer.Application.Language;
 using OpenKustoExplorer.Application.Sessions;
 using OpenKustoExplorer.Infrastructure.Sessions;
+using OpenKustoExplorer.Portable.Sessions;
 
 namespace OpenKustoExplorer.Infrastructure.Tests.Sessions;
 

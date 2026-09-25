@@ -1,4 +1,5 @@
 using Microsoft.Identity.Client;
+using OpenKustoExplorer.Kusto.Authentication;
 
 namespace OpenKustoExplorer.Infrastructure.Execution;
 

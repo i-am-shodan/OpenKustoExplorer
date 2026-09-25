@@ -6,8 +6,8 @@ using OpenKustoExplorer.Application.Language;
 using OpenKustoExplorer.Application.Sessions;
 using OpenKustoExplorer.Domain.Schema;
 using OpenKustoExplorer.Infrastructure.Assistance;
-using OpenKustoExplorer.Infrastructure.Language;
 using OpenKustoExplorer.Infrastructure.Sessions;
+using OpenKustoExplorer.Portable.Sessions;
 
 namespace OpenKustoExplorer.Infrastructure.Tests.Sessions;
 
@@ -181,132 +181,16 @@ public sealed class RecordedInvestigationTests
         string directoryPath = CreateTemporaryDirectory();
         string filePath = Path.Combine(directoryPath, "recorded-sessions.db");
         KustoDatabaseSchema schema = CreateSchema();
-        KustoPredicateInterestExtractor interestExtractor = new();
-        KustoRecordedRelationExtractor relationExtractor = new();
         DateTimeOffset startedAtUtc = new(2026, 9, 6, 14, 0, 0, TimeSpan.Zero);
 
         try
         {
             using SqliteKustoRecordedSessionStore store = new(filePath);
-            KustoRecordingPeriod period = await store.CreateSessionAsync(
-                "Malware C2 investigation",
+            RecordedInvestigation investigation = await RecordMinimalUrlToHostInvestigationAsync(
+                store,
+                schema,
                 startedAtUtc);
-            RecordedQuery first = await RecordAsync(
-                store,
-                period,
-                schema,
-                interestExtractor,
-                relationExtractor,
-                "OutboundBrowsing | where url == \"" + MalwareUrl + "\"",
-                CreateTable(
-                    "PrimaryResult",
-                    ["url", "src_ip"],
-                    [
-                        ["https://benign.example.test/", "192.0.2.20"],
-                        [MalwareUrl, IpAddress],
-                    ]),
-                startedAtUtc);
-
-            RecordedQuery authentication = await RecordAsync(
-                store,
-                period,
-                schema,
-                interestExtractor,
-                relationExtractor,
-                "AuthenticationEvents | where src_ip == \"" + IpAddress + "\"",
-                CreateTable(
-                    "PrimaryResult",
-                    ["src_ip", "username"],
-                    [
-                        ["192.0.2.20", "benign-user"],
-                        [IpAddress, Username],
-                    ]),
-                startedAtUtc.AddMinutes(1));
-
-            RecordedQuery employeeByUsername = await RecordAsync(
-                store,
-                period,
-                schema,
-                interestExtractor,
-                relationExtractor,
-                "Employees | where username == \"" + Username + "\"",
-                CreateEmployeesTable(),
-                startedAtUtc.AddMinutes(2));
-
-            RecordedQuery emptyEmail = await RecordAsync(
-                store,
-                period,
-                schema,
-                interestExtractor,
-                relationExtractor,
-                "Email | where recipient == \"" + EmailAddress + "\"",
-                CreateTable("PrimaryResult", ["recipient", "sender"], []),
-                startedAtUtc.AddMinutes(3));
-
-            RecordedQuery employeeByEmail = await RecordAsync(
-                store,
-                period,
-                schema,
-                interestExtractor,
-                relationExtractor,
-                "Employees | where email_addr == \"" + EmailAddress + "\"",
-                CreateEmployeesTable(),
-                startedAtUtc.AddMinutes(4));
-            KustoRecordedValueCoordinate hostnameCoordinate = new(employeeByEmail.ExecutionId, 0, 1, 3);
-            KustoRecordedValueCoordinate urlCoordinate = new(first.ExecutionId, 0, 1, 0);
-            await store.SetEndpointAsync(period.SessionId, KustoChainEndpointRole.Start, urlCoordinate);
-            await store.SetEndpointAsync(period.SessionId, KustoChainEndpointRole.End, hostnameCoordinate);
-            await store.StopRecordingAsync(period.Id, startedAtUtc.AddMinutes(5));
-
-            KustoRecordedSession session = Assert.IsType<KustoRecordedSession>(
-                await store.GetSessionAsync(period.SessionId));
-            Assert.Equal(5, session.Executions.Count);
-            Assert.Empty(Assert.Single(session.Executions.Single(
-                execution => execution.Id == emptyEmail.ExecutionId).Result!.Tables).Rows);
-            Assert.Contains(
-                session.Interests,
-                interest => interest.DeclaredExecutionId == employeeByUsername.ExecutionId
-                    && interest.Identity.CanonicalValue == Username);
-            KustoResultRow authenticationRow = session.Executions.Single(
-                execution => execution.Id == authentication.ExecutionId).Result!.Tables[0].Rows[1];
-            KustoRecordedValueIdentity earlierUsername = KustoRecordedValueCanonicalizer.Create(
-                "string",
-                authenticationRow.ResultValues[1]);
-            Assert.Contains(session.Interests, interest => interest.Identity.Equals(earlierUsername));
-
-            KustoRecordedChainSearcher searcher = new(store);
-            KustoQueryChain chain = Assert.IsType<KustoQueryChain>(await searcher.FindAsync(
-                period.SessionId,
-                urlCoordinate,
-                hostnameCoordinate));
-            Assert.Equal(3, chain.TotalCost);
-            Assert.Equal(2, chain.Pivots.Count);
-            Assert.Equal(["OutboundBrowsing", "Employees"], chain.Pivots.Select(pivot => pivot.SourceTableName));
-            Assert.Equal(KustoPivotEvidenceKind.PredicateToManual, chain.Pivots[0].Kind);
-            Assert.Equal(KustoPivotEvidenceKind.PriorInterestToManual, chain.Pivots[1].Kind);
-            Assert.Equal("src_ip", chain.Pivots[0].OutputSourceColumnName);
-            Assert.Equal("ip_addr", chain.Pivots[1].InputSourceColumnName);
-
-            KustoRecordedRelationPlanner planner = new();
-            KustoRelationalChainPlan plan = Assert.IsType<KustoRelationalChainPlan>(
-                planner.CreatePlan(session, chain));
-            Assert.Equal(["OutboundBrowsing", "Employees"], plan.Steps.Select(step => step.SourceTableName));
-            Assert.DoesNotContain(plan.Steps, step => step.ExecutionId == authentication.ExecutionId);
-            Assert.DoesNotContain(plan.Steps, step => step.ExecutionId == emptyEmail.ExecutionId);
-
-            KustoRecordedChainQueryGenerator generator = new();
-            KustoGeneratedChainQuery generated = generator.Generate(plan, schema);
-            Assert.True(generated.Succeeded, string.Join(Environment.NewLine, generated.Diagnostics));
-            Assert.Contains("let chain_input = '" + MalwareUrl + "';", generated.QueryText, StringComparison.Ordinal);
-            Assert.Contains("OutboundBrowsing", generated.QueryText, StringComparison.Ordinal);
-            Assert.Contains("join kind=inner", generated.QueryText, StringComparison.Ordinal);
-            Assert.Contains("Employees", generated.QueryText, StringComparison.Ordinal);
-            Assert.Contains("$left.src_ip == $right.ip_addr", generated.QueryText, StringComparison.Ordinal);
-            Assert.Contains("project url, hostname", generated.QueryText, StringComparison.Ordinal);
-            Assert.DoesNotContain("AuthenticationEvents", generated.QueryText, StringComparison.Ordinal);
-            Assert.DoesNotContain("Email |", generated.QueryText, StringComparison.Ordinal);
-            Assert.DoesNotContain("username ==", generated.QueryText, StringComparison.Ordinal);
-            Assert.DoesNotContain("email_addr ==", generated.QueryText, StringComparison.Ordinal);
+            await VerifyMinimalUrlToHostQueryAsync(store, schema, investigation);
         }
         finally
         {
@@ -314,8 +198,166 @@ public sealed class RecordedInvestigationTests
         }
     }
 
+    /// <summary>
+    /// Verifies the Browser JSON session aggregate retains all data required for URL-to-host KQL generation.
+    /// </summary>
+    /// <returns>A task that completes after the reloaded recorded investigation is analyzed.</returns>
+    [Fact]
+    public async Task BrowserRecordedInvestigationBuildsMinimalUrlToHostQueryAfterReload()
+    {
+        MemoryRecordedSessionSnapshotStore snapshotStore = new();
+        KustoDatabaseSchema schema = CreateSchema();
+        DateTimeOffset startedAtUtc = new(2026, 9, 6, 14, 0, 0, TimeSpan.Zero);
+        RecordedInvestigation investigation;
+
+        using (JsonKustoRecordedSessionStore store = await JsonKustoRecordedSessionStore.CreateAsync(snapshotStore))
+        {
+            investigation = await RecordMinimalUrlToHostInvestigationAsync(store, schema, startedAtUtc);
+        }
+
+        using JsonKustoRecordedSessionStore reloaded = await JsonKustoRecordedSessionStore.CreateAsync(snapshotStore);
+        await VerifyMinimalUrlToHostQueryAsync(reloaded, schema, investigation);
+    }
+
+    private static async Task<RecordedInvestigation> RecordMinimalUrlToHostInvestigationAsync(
+        IKustoRecordedSessionStore store,
+        KustoDatabaseSchema schema,
+        DateTimeOffset startedAtUtc)
+    {
+        KustoPredicateInterestExtractor interestExtractor = new();
+        KustoRecordedRelationExtractor relationExtractor = new();
+        KustoRecordingPeriod period = await store.CreateSessionAsync(
+            "Malware C2 investigation",
+            startedAtUtc);
+        RecordedQuery first = await RecordAsync(
+            store,
+            period,
+            schema,
+            interestExtractor,
+            relationExtractor,
+            "OutboundBrowsing | where url == \"" + MalwareUrl + "\"",
+            CreateTable(
+                "PrimaryResult",
+                ["url", "src_ip"],
+                [
+                    ["https://benign.example.test/", "192.0.2.20"],
+                    [MalwareUrl, IpAddress],
+                ]),
+            startedAtUtc);
+        RecordedQuery authentication = await RecordAsync(
+            store,
+            period,
+            schema,
+            interestExtractor,
+            relationExtractor,
+            "AuthenticationEvents | where src_ip == \"" + IpAddress + "\"",
+            CreateTable(
+                "PrimaryResult",
+                ["src_ip", "username"],
+                [
+                    ["192.0.2.20", "benign-user"],
+                    [IpAddress, Username],
+                ]),
+            startedAtUtc.AddMinutes(1));
+        RecordedQuery employeeByUsername = await RecordAsync(
+            store,
+            period,
+            schema,
+            interestExtractor,
+            relationExtractor,
+            "Employees | where username == \"" + Username + "\"",
+            CreateEmployeesTable(),
+            startedAtUtc.AddMinutes(2));
+        RecordedQuery emptyEmail = await RecordAsync(
+            store,
+            period,
+            schema,
+            interestExtractor,
+            relationExtractor,
+            "Email | where recipient == \"" + EmailAddress + "\"",
+            CreateTable("PrimaryResult", ["recipient", "sender"], []),
+            startedAtUtc.AddMinutes(3));
+        RecordedQuery employeeByEmail = await RecordAsync(
+            store,
+            period,
+            schema,
+            interestExtractor,
+            relationExtractor,
+            "Employees | where email_addr == \"" + EmailAddress + "\"",
+            CreateEmployeesTable(),
+            startedAtUtc.AddMinutes(4));
+        KustoRecordedValueCoordinate hostnameCoordinate = new(employeeByEmail.ExecutionId, 0, 1, 3);
+        KustoRecordedValueCoordinate urlCoordinate = new(first.ExecutionId, 0, 1, 0);
+        await store.SetEndpointAsync(period.SessionId, KustoChainEndpointRole.Start, urlCoordinate);
+        await store.SetEndpointAsync(period.SessionId, KustoChainEndpointRole.End, hostnameCoordinate);
+        await store.StopRecordingAsync(period.Id, startedAtUtc.AddMinutes(5));
+        return new RecordedInvestigation(
+            period.SessionId,
+            authentication.ExecutionId,
+            employeeByUsername.ExecutionId,
+            emptyEmail.ExecutionId,
+            urlCoordinate,
+            hostnameCoordinate);
+    }
+
+    private static async Task VerifyMinimalUrlToHostQueryAsync(
+        IKustoRecordedSessionStore store,
+        KustoDatabaseSchema schema,
+        RecordedInvestigation investigation)
+    {
+        KustoRecordedSession session = Assert.IsType<KustoRecordedSession>(
+            await store.GetSessionAsync(investigation.SessionId));
+        Assert.Equal(5, session.Executions.Count);
+        Assert.Empty(Assert.Single(session.Executions.Single(
+            execution => execution.Id == investigation.EmptyEmailExecutionId).Result!.Tables).Rows);
+        Assert.Contains(
+            session.Interests,
+            interest => interest.DeclaredExecutionId == investigation.EmployeeByUsernameExecutionId
+                && interest.Identity.CanonicalValue == Username);
+        KustoResultRow authenticationRow = session.Executions.Single(
+            execution => execution.Id == investigation.AuthenticationExecutionId).Result!.Tables[0].Rows[1];
+        KustoRecordedValueIdentity earlierUsername = KustoRecordedValueCanonicalizer.Create(
+            "string",
+            authenticationRow.ResultValues[1]);
+        Assert.Contains(session.Interests, interest => interest.Identity.Equals(earlierUsername));
+
+        KustoRecordedChainSearcher searcher = new(store);
+        KustoQueryChain chain = Assert.IsType<KustoQueryChain>(await searcher.FindAsync(
+            investigation.SessionId,
+            investigation.UrlCoordinate,
+            investigation.HostnameCoordinate,
+            schema));
+        Assert.Equal(3, chain.TotalCost);
+        Assert.Equal(2, chain.Pivots.Count);
+        Assert.Equal(["OutboundBrowsing", "Employees"], chain.Pivots.Select(pivot => pivot.SourceTableName));
+        Assert.Equal(KustoPivotEvidenceKind.PredicateToManual, chain.Pivots[0].Kind);
+        Assert.Equal(KustoPivotEvidenceKind.PriorInterestToManual, chain.Pivots[1].Kind);
+        Assert.Equal("src_ip", chain.Pivots[0].OutputSourceColumnName);
+        Assert.Equal("ip_addr", chain.Pivots[1].InputSourceColumnName);
+
+        KustoRecordedRelationPlanner planner = new();
+        KustoRelationalChainPlan plan = Assert.IsType<KustoRelationalChainPlan>(
+            planner.CreatePlan(session, chain));
+        Assert.Equal(["OutboundBrowsing", "Employees"], plan.Steps.Select(step => step.SourceTableName));
+        Assert.DoesNotContain(plan.Steps, step => step.ExecutionId == investigation.AuthenticationExecutionId);
+        Assert.DoesNotContain(plan.Steps, step => step.ExecutionId == investigation.EmptyEmailExecutionId);
+
+        KustoGeneratedChainQuery generated = new KustoRecordedChainQueryGenerator().Generate(plan, schema);
+        Assert.True(generated.Succeeded, string.Join(Environment.NewLine, generated.Diagnostics));
+        Assert.Contains("let chain_input = '" + MalwareUrl + "';", generated.QueryText, StringComparison.Ordinal);
+        Assert.Contains("OutboundBrowsing", generated.QueryText, StringComparison.Ordinal);
+        Assert.Contains("join kind=inner", generated.QueryText, StringComparison.Ordinal);
+        Assert.Contains("Employees", generated.QueryText, StringComparison.Ordinal);
+        Assert.Contains("$left.src_ip == $right.ip_addr", generated.QueryText, StringComparison.Ordinal);
+        Assert.Contains("project url, hostname", generated.QueryText, StringComparison.Ordinal);
+        Assert.DoesNotContain("AuthenticationEvents", generated.QueryText, StringComparison.Ordinal);
+        Assert.DoesNotContain("Email |", generated.QueryText, StringComparison.Ordinal);
+        Assert.DoesNotContain("username ==", generated.QueryText, StringComparison.Ordinal);
+        Assert.DoesNotContain("email_addr ==", generated.QueryText, StringComparison.Ordinal);
+    }
+
     private static async Task<RecordedQuery> RecordAsync(
-        SqliteKustoRecordedSessionStore store,
+        IKustoRecordedSessionStore store,
         KustoRecordingPeriod period,
         KustoDatabaseSchema schema,
         KustoPredicateInterestExtractor interestExtractor,
@@ -431,5 +473,31 @@ public sealed class RecordedInvestigationTests
         }
     }
 
+    private sealed record RecordedInvestigation(
+        Guid SessionId,
+        Guid AuthenticationExecutionId,
+        Guid EmployeeByUsernameExecutionId,
+        Guid EmptyEmailExecutionId,
+        KustoRecordedValueCoordinate UrlCoordinate,
+        KustoRecordedValueCoordinate HostnameCoordinate);
+
     private sealed record RecordedQuery(Guid ExecutionId);
+
+    private sealed class MemoryRecordedSessionSnapshotStore : IKustoRecordedSessionSnapshotStore
+    {
+        private string? json;
+
+        public Task<string?> LoadAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(json);
+        }
+
+        public Task SaveAsync(string snapshotJson, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            json = snapshotJson;
+            return Task.CompletedTask;
+        }
+    }
 }

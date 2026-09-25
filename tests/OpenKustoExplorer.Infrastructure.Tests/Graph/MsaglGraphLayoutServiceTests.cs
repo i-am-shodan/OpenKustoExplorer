@@ -1,6 +1,6 @@
 using OpenKustoExplorer.Application.Graphs;
 using OpenKustoExplorer.Graph;
-using OpenKustoExplorer.Infrastructure.Graph;
+using OpenKustoExplorer.Portable.Graphs;
 
 namespace OpenKustoExplorer.Infrastructure.Tests.Graph;
 

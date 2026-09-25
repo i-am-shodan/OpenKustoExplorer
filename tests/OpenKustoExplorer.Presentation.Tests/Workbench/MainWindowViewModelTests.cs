@@ -13,8 +13,8 @@ using OpenKustoExplorer.Desktop.Editor;
 using OpenKustoExplorer.Domain.Schema;
 using OpenKustoExplorer.Graph;
 using OpenKustoExplorer.Graph.Query;
-using OpenKustoExplorer.Infrastructure.Language;
 using OpenKustoExplorer.Infrastructure.Sessions;
+using OpenKustoExplorer.Portable.Sessions;
 using OpenKustoExplorer.Presentation.Workbench;
 
 namespace OpenKustoExplorer.Presentation.Tests.Workbench;
@@ -24,6 +24,12 @@ namespace OpenKustoExplorer.Presentation.Tests.Workbench;
 /// </summary>
 public sealed class MainWindowViewModelTests
 {
+    private const string WebChainEmail = "brenda_burnett@envolvelabs.com";
+    private const string WebChainHost = "2E2U-MACHINE";
+    private const string WebChainIp = "192.168.3.56";
+    private const string WebChainUrl = "https://categorical-uproots.com/images/search/search/files/modules/share";
+    private const string WebChainUsername = "brburnett";
+
     /// <summary>
     /// Verifies that startup exposes a useful schema snapshot and runnable query.
     /// </summary>
@@ -685,6 +691,29 @@ public sealed class MainWindowViewModelTests
     }
 
     /// <summary>
+    /// Verifies a fixed OpenAI provider selects its configured deployment instead of the automatic placeholder.
+    /// </summary>
+    /// <returns>A task that completes after the selected deployment is sent.</returns>
+    [Fact]
+    public async Task FixedCopilotProviderSelectsConfiguredModel()
+    {
+        StubKustoCopilotService copilotService = new()
+        {
+            ProviderKind = KustoAIProviderKind.AzureOpenAI,
+            AvailableModels = [new KustoCopilotModel("web-deployment", "Web deployment")],
+        };
+        MainWindowViewModel viewModel = CreateViewModel(copilotService: copilotService);
+
+        await viewModel.Copilot.RefreshModelsCommand.ExecuteAsync(null);
+        viewModel.Copilot.Prompt = "Explain this query";
+        await viewModel.Copilot.SendCommand.ExecuteAsync(null);
+
+        Assert.Equal("web-deployment", Assert.Single(viewModel.Copilot.Models).Id);
+        Assert.Equal("web-deployment", viewModel.Copilot.SelectedModel.Id);
+        Assert.Equal("web-deployment", copilotService.Options!.ModelId);
+    }
+
+    /// <summary>
     /// Verifies the global model seeds new Copilot sessions without replacing a per-tab override.
     /// </summary>
     /// <returns>A task that completes after model defaults and overrides are applied.</returns>
@@ -890,15 +919,83 @@ public sealed class MainWindowViewModelTests
         viewModel.QueryText = "print 'keep me'";
         await documentStore.SaveAttempted.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
-        Assert.True(viewModel.HasDocumentSaveError);
-        Assert.Contains("Disk is full", viewModel.DocumentSaveErrorText, StringComparison.Ordinal);
+        Assert.True(viewModel.HasPersistenceError);
+        Assert.Contains("Disk is full", viewModel.PersistenceErrorText, StringComparison.Ordinal);
 
         documentStore.SaveException = null;
-        viewModel.RetryDocumentSaveCommand.Execute(null);
+        viewModel.RetryPersistenceCommand.Execute(null);
+        await documentStore.SaveSucceeded.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
-        Assert.False(viewModel.HasDocumentSaveError);
+        Assert.False(viewModel.HasPersistenceError);
         Assert.Equal("print 'keep me'", Assert.Single(documentStore.SavedWorkspace!.Documents).Text);
         viewModel.Dispose();
+    }
+
+    /// <summary>
+    /// Verifies every catalog save failure remains visible until all latest snapshots are durably retried.
+    /// </summary>
+    /// <returns>A task that completes after all catalog retries succeed.</returns>
+    [Fact]
+    public async Task CatalogPersistenceFailuresAreAggregatedAndRetried()
+    {
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        StubKustoConnectionStore connectionStore = new()
+        {
+            Catalog = new KustoConnectionCatalog(
+                [CreateConnection("https://adx.contoso.com", "Contoso", null)]),
+            SaveException = new IOException("Connection quota exceeded."),
+        };
+        StubKustoDashboardStore dashboardStore = new()
+        {
+            SaveException = new IOException("Dashboard quota exceeded."),
+        };
+        StubKustoAutomationStore automationStore = new()
+        {
+            Catalog = new KustoAutomationCatalog(
+            [
+                new KustoAutomation(
+                    Guid.NewGuid(),
+                    "Monitor",
+                    new Uri("https://adx.contoso.com"),
+                    "ContosoDatabase",
+                    "ContosoTable | count",
+                    TimeSpan.FromMinutes(5),
+                    now,
+                    now.AddMinutes(5),
+                    null,
+                    true,
+                    []),
+            ]),
+            SaveException = new IOException("Automation quota exceeded."),
+        };
+        MainWindowViewModel viewModel = CreateViewModel(
+            connectionStore: connectionStore,
+            dashboardStore: dashboardStore,
+            automationStore: automationStore);
+
+        Assert.Single(viewModel.Clusters).RemoveCommand.Execute(null);
+        viewModel.Dashboard.AddDashboard("Operations");
+        Assert.Single(viewModel.Automations).DeleteCommand.Execute(null);
+        await Task.WhenAll(
+            connectionStore.SaveAttempted.Task,
+            dashboardStore.SaveAttempted.Task,
+            automationStore.SaveAttempted.Task).WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(viewModel.HasPersistenceError);
+        Assert.Contains("Connections are not saved", viewModel.PersistenceErrorText, StringComparison.Ordinal);
+        Assert.Contains("Dashboards are not saved", viewModel.PersistenceErrorText, StringComparison.Ordinal);
+        Assert.Contains("Automations are not saved", viewModel.PersistenceErrorText, StringComparison.Ordinal);
+
+        connectionStore.SaveException = null;
+        dashboardStore.SaveException = null;
+        automationStore.SaveException = null;
+        viewModel.RetryPersistenceCommand.Execute(null);
+        await Task.WhenAll(
+            connectionStore.SaveSucceeded.Task,
+            dashboardStore.SaveSucceeded.Task,
+            automationStore.SaveSucceeded.Task).WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.False(viewModel.HasPersistenceError);
     }
 
     /// <summary>
@@ -1102,6 +1199,139 @@ public sealed class MainWindowViewModelTests
     }
 
     /// <summary>
+    /// Verifies Web JSON recordings generate the URL-to-host KQL through the complete workbench command.
+    /// </summary>
+    /// <returns>A task that completes after the generated query tab is opened.</returns>
+    [Fact]
+    public async Task BrowserRecordedSessionGeneratesUrlToHostQueryAfterReload()
+    {
+        MemoryRecordedSessionSnapshotStore snapshotStore = new();
+        KustoDatabaseSchema schema = CreateWebChainSchema();
+        await SeedWebChainSessionAsync(snapshotStore, schema);
+        using JsonKustoRecordedSessionStore store = await JsonKustoRecordedSessionStore.CreateAsync(snapshotStore);
+        KustoClusterConnection cluster = new(
+            new Uri("https://mock.kusto.example/"),
+            "Mock cluster",
+            [new KustoDatabaseConnection(schema.DatabaseName, schema.DatabaseName, schema)]);
+        MainWindowViewModel viewModel = CreateViewModel(
+            connectionStore: new StubKustoConnectionStore
+            {
+                Catalog = new KustoConnectionCatalog([cluster]),
+            },
+            recordedSessionStore: store,
+            predicateInterestExtractor: new KustoPredicateInterestExtractor(),
+            recordedRelationExtractor: new KustoRecordedRelationExtractor(),
+            recordedChainSearcher: new KustoRecordedChainSearcher(store),
+            recordedRelationPlanner: new KustoRecordedRelationPlanner(),
+            recordedChainGenerator: new KustoRecordedChainQueryGenerator());
+
+        await viewModel.ShowSessionsCommand.ExecuteAsync(null);
+        Assert.True(viewModel.GenerateRecordedChainCommand.CanExecute(null));
+
+        await viewModel.GenerateRecordedChainCommand.ExecuteAsync(null);
+
+        Assert.True(viewModel.IsQueryWorkbenchView);
+        Assert.False(viewModel.Recording.IsChainGenerationDialogOpen);
+        Assert.Equal("Created query from inferred pivot chain", viewModel.StatusText);
+        Assert.Contains("let chain_input = '" + WebChainUrl + "';", viewModel.QueryText, StringComparison.Ordinal);
+        Assert.Contains("$left.src_ip == $right.ip_addr", viewModel.QueryText, StringComparison.Ordinal);
+        Assert.Contains("project url, hostname", viewModel.QueryText, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Verifies repeated Sessions visits retain projected state until explicit refresh.
+    /// </summary>
+    /// <returns>A task that completes after retained and refreshed state are compared.</returns>
+    [Fact]
+    public async Task SessionsWorkspaceLoadsOnceUntilExplicitRefresh()
+    {
+        MemoryRecordedSessionSnapshotStore snapshotStore = new();
+        KustoDatabaseSchema schema = CreateWebChainSchema();
+        await SeedWebChainSessionAsync(snapshotStore, schema);
+        using JsonKustoRecordedSessionStore store = await JsonKustoRecordedSessionStore.CreateAsync(snapshotStore);
+        MainWindowViewModel viewModel = CreateViewModel(
+            recordedSessionStore: store,
+            predicateInterestExtractor: new KustoPredicateInterestExtractor(),
+            recordedRelationExtractor: new KustoRecordedRelationExtractor(),
+            recordedChainSearcher: new KustoRecordedChainSearcher(store),
+            recordedRelationPlanner: new KustoRecordedRelationPlanner(),
+            recordedChainGenerator: new KustoRecordedChainQueryGenerator());
+
+        await viewModel.ShowSessionsCommand.ExecuteAsync(null);
+        KustoRecordedSessionSummaryViewModel initial = Assert.IsType<KustoRecordedSessionSummaryViewModel>(
+            viewModel.Recording.SelectedSessionSummary);
+        viewModel.ShowQueryWorkbenchCommand.Execute(null);
+        await viewModel.ShowSessionsCommand.ExecuteAsync(null);
+
+        Assert.Same(initial, viewModel.Recording.SelectedSessionSummary);
+
+        await viewModel.Recording.RefreshCommand.ExecuteAsync(null);
+
+        Assert.NotSame(initial, viewModel.Recording.SelectedSessionSummary);
+        viewModel.Dispose();
+    }
+
+    /// <summary>
+    /// Verifies repeated Graph visits reuse loaded state until explicit refresh.
+    /// </summary>
+    /// <returns>A task that completes after graph catalog calls are counted.</returns>
+    [Fact]
+    public async Task GraphWorkspaceLoadsOnceUntilExplicitRefresh()
+    {
+        StubGraphStore graphStore = new();
+        MainWindowViewModel viewModel = CreateViewModel(graphStore: graphStore);
+
+        await viewModel.ShowGraphCommand.ExecuteAsync(null);
+        viewModel.ShowQueryWorkbenchCommand.Execute(null);
+        await viewModel.ShowGraphCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, graphStore.CatalogReadCount);
+
+        await viewModel.Graph.RefreshCommand.ExecuteAsync(null);
+
+        Assert.Equal(2, graphStore.CatalogReadCount);
+        viewModel.Dispose();
+    }
+
+    /// <summary>
+    /// Verifies a chain-generation exception is reported in Sessions instead of escaping the Web command.
+    /// </summary>
+    /// <returns>A task that completes after the failure dialog opens.</returns>
+    [Fact]
+    public async Task BrowserRecordedSessionReportsChainGenerationException()
+    {
+        MemoryRecordedSessionSnapshotStore snapshotStore = new();
+        KustoDatabaseSchema schema = CreateWebChainSchema();
+        await SeedWebChainSessionAsync(snapshotStore, schema);
+        using JsonKustoRecordedSessionStore store = await JsonKustoRecordedSessionStore.CreateAsync(snapshotStore);
+        KustoClusterConnection cluster = new(
+            new Uri("https://mock.kusto.example/"),
+            "Mock cluster",
+            [new KustoDatabaseConnection(schema.DatabaseName, schema.DatabaseName, schema)]);
+        MainWindowViewModel viewModel = CreateViewModel(
+            connectionStore: new StubKustoConnectionStore
+            {
+                Catalog = new KustoConnectionCatalog([cluster]),
+            },
+            recordedSessionStore: store,
+            predicateInterestExtractor: new KustoPredicateInterestExtractor(),
+            recordedRelationExtractor: new KustoRecordedRelationExtractor(),
+            recordedChainSearcher: new KustoRecordedChainSearcher(store),
+            recordedRelationPlanner: new KustoRecordedRelationPlanner(),
+            recordedChainGenerator: new ThrowingRecordedChainQueryGenerator());
+
+        await viewModel.ShowSessionsCommand.ExecuteAsync(null);
+        await viewModel.GenerateRecordedChainCommand.ExecuteAsync(null);
+
+        Assert.True(viewModel.IsSessionsView);
+        Assert.True(viewModel.Recording.IsChainGenerationDialogOpen);
+        Assert.Contains(
+            "Could not generate the query: Simulated generator failure",
+            viewModel.Recording.ChainGenerationDialogMessage,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Verifies result columns always fit complete header text, sort state, and filter controls.
     /// </summary>
     /// <returns>A task that completes after header widths are projected.</returns>
@@ -1127,6 +1357,32 @@ public sealed class MainWindowViewModelTests
         Assert.Equal(88, viewModel.ResultColumns[0].DisplayWidth);
         Assert.Equal((LongHeader.Length * 7) + 60, viewModel.ResultColumns[1].DisplayWidth);
         Assert.True(viewModel.ResultColumns[1].DisplayWidth > 360);
+    }
+
+    /// <summary>
+    /// Verifies saturated content width remains capped without changing header sizing.
+    /// </summary>
+    /// <returns>A task that completes after result columns are projected.</returns>
+    [Fact]
+    public async Task ResultColumnContentWidthUsesExistingCap()
+    {
+        KustoResultTable table = new(
+            "Result 1",
+            [new KustoResultColumn("Value", "string")],
+            [
+                new KustoResultRow([new string('x', 500)]),
+                new KustoResultRow(["short"]),
+            ]);
+        MainWindowViewModel viewModel = CreateViewModel(
+            queryService: new StubKustoQueryService
+            {
+                Result = new KustoQueryResult([table], TimeSpan.Zero),
+            });
+
+        await viewModel.RunQueryCommand.ExecuteAsync(null);
+
+        Assert.Equal(360, Assert.Single(viewModel.ResultColumns).DisplayWidth);
+        viewModel.Dispose();
     }
 
     /// <summary>
@@ -2493,6 +2749,27 @@ public sealed class MainWindowViewModelTests
     }
 
     /// <summary>
+    /// Verifies a host import failure becomes actionable workbench status instead of escaping the command.
+    /// </summary>
+    /// <returns>A task that completes after the import failure is reported.</returns>
+    [Fact]
+    public async Task ImportKustoExplorerDataCommandReportsHostFailure()
+    {
+        MainWindowViewModel viewModel = CreateViewModel(
+            importService: new StubKustoExplorerImportService
+            {
+                Exception = new InvalidDataException("The selected profile is malformed."),
+            });
+
+        await viewModel.ImportKustoExplorerDataCommand.ExecuteAsync(null);
+
+        Assert.Equal(
+            "Kusto Explorer import failed: The selected profile is malformed.",
+            viewModel.StatusText);
+        Assert.False(viewModel.IsImportingConnections);
+    }
+
+    /// <summary>
     /// Verifies that selecting another database changes the schema delegated to language analysis.
     /// </summary>
     /// <returns>A task that completes after database selection is verified.</returns>
@@ -2699,6 +2976,102 @@ public sealed class MainWindowViewModelTests
         Assert.NotNull(automationStore.SavedCatalog);
         Assert.Single(automationStore.SavedCatalog.Automations);
         Assert.True(viewModel.AutomationNotifications.IsOpen);
+    }
+
+    /// <summary>
+    /// Verifies Browser capabilities preserve toasts and remove unsupported persisted action channels.
+    /// </summary>
+    /// <returns>A task that completes after the normalized automation is durable.</returns>
+    [Fact]
+    public async Task BrowserCapabilitiesNormalizePersistedAutomationChannels()
+    {
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        KustoAutomationNotificationSettings notifications = new(
+            notifyWhenRowCountChanges: true,
+            KustoAutomationRowCountComparison.None,
+            rowCountValue: 0,
+            desktopEnabled: true,
+            emailEnabled: true,
+            emailRecipient: "analyst@example.com",
+            emailSender: "alerts@example.com",
+            smtpHost: "smtp.example.com",
+            smtpPort: 587,
+            smtpUseSsl: true,
+            KustoAutomationNotificationSettings.DefaultSubjectTemplate,
+            KustoAutomationNotificationSettings.DefaultMessageTemplate,
+            runApplicationEnabled: true,
+            applicationPath: "C:\\Tools\\notify.exe",
+            webhook: new KustoAutomationWebhookSettings(
+                KustoAutomationWebhookEndpointSource.StoredUrl,
+                new Uri("https://hooks.example.com/automation")));
+        StubKustoAutomationStore automationStore = new()
+        {
+            Catalog = new KustoAutomationCatalog(
+            [
+                new KustoAutomation(
+                    Guid.NewGuid(),
+                    "Browser monitor",
+                    new Uri("https://help.kusto.windows.net"),
+                    "Samples",
+                    "StormEvents | count",
+                    TimeSpan.FromMinutes(5),
+                    now,
+                    now.AddMinutes(5),
+                    null,
+                    true,
+                    [],
+                    notifications),
+            ]),
+        };
+        MainWindowViewModel viewModel = CreateViewModel(
+            automationStore: automationStore,
+            copilotService: new StubKustoCopilotService { ProviderKind = KustoAIProviderKind.AzureOpenAI },
+            hostCapabilities: CreateBrowserHostCapabilities());
+
+        await automationStore.SaveAttempted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        KustoAutomationNotificationSettings normalized = Assert.Single(viewModel.Automations).NotificationSettings;
+        Assert.True(normalized.DesktopEnabled);
+        Assert.False(normalized.EmailEnabled);
+        Assert.False(normalized.RunApplicationEnabled);
+        Assert.Null(normalized.Webhook);
+        KustoAutomation persisted = Assert.Single(automationStore.SavedCatalog!.Automations);
+        Assert.False(persisted.NotificationSettings.EmailEnabled);
+        Assert.False(persisted.NotificationSettings.RunApplicationEnabled);
+        Assert.Null(persisted.NotificationSettings.Webhook);
+        Assert.True(viewModel.ImportKustoExplorerDataCommand.CanExecute(null));
+        viewModel.Dispose();
+    }
+
+    /// <summary>
+    /// Verifies unavailable imports are disabled and host-managed provider mismatches fail composition.
+    /// </summary>
+    [Fact]
+    public void HostCapabilitiesEnforceComposition()
+    {
+        WorkbenchHostCapabilities unavailable = new(
+            KustoExplorerImportMode.Unavailable,
+            supportsToastNotifications: true,
+            supportsEmailNotifications: false,
+            supportsApplicationLaunchNotifications: false,
+            toastNotificationName: "Browser toast",
+            WorkbenchAIProviderOwnership.HostManaged,
+            KustoAIProviderKind.AzureOpenAI,
+            "Azure OpenAI",
+            supportsMcp: false,
+            WorkbenchIdentityMode.HostAuthenticatedAccount,
+            WorkbenchStorageManagementMode.BrowserDialog,
+            maximumGraphEntityCount: 25_000,
+            maximumGraphRelationshipCount: 100_000);
+        MainWindowViewModel viewModel = CreateViewModel(
+            copilotService: new StubKustoCopilotService { ProviderKind = KustoAIProviderKind.AzureOpenAI },
+            hostCapabilities: unavailable);
+
+        Assert.False(viewModel.ImportKustoExplorerDataCommand.CanExecute(null));
+        viewModel.Dispose();
+        Assert.Throws<ArgumentException>(() => CreateViewModel(
+            copilotService: new StubKustoCopilotService { ProviderKind = KustoAIProviderKind.OpenAI },
+            hostCapabilities: unavailable));
     }
 
     /// <summary>
@@ -4214,6 +4587,143 @@ public sealed class MainWindowViewModelTests
         return new KustoDatabaseSchema(clusterName, databaseName, [table]);
     }
 
+    private static KustoDatabaseSchema CreateWebChainSchema()
+    {
+        return new KustoDatabaseSchema(
+            "mock.kusto.example",
+            "SyntheticSecurity",
+            [
+                CreateWebChainTableSchema("OutboundBrowsing", "url", "src_ip"),
+                CreateWebChainTableSchema("AuthenticationEvents", "src_ip", "username"),
+                CreateWebChainTableSchema("Employees", "username", "email_addr", "ip_addr", "hostname"),
+                CreateWebChainTableSchema("Email", "recipient", "sender"),
+            ]);
+    }
+
+    private static KustoTableSchema CreateWebChainTableSchema(string name, params string[] columns)
+    {
+        return new KustoTableSchema(
+            name,
+            columns.Select(column => new KustoColumnSchema(column, KustoScalarType.Text)));
+    }
+
+    private static async Task SeedWebChainSessionAsync(
+        MemoryRecordedSessionSnapshotStore snapshotStore,
+        KustoDatabaseSchema schema)
+    {
+        DateTimeOffset startedAtUtc = new(2026, 9, 15, 12, 0, 0, TimeSpan.Zero);
+        using JsonKustoRecordedSessionStore store = await JsonKustoRecordedSessionStore.CreateAsync(snapshotStore);
+        KustoRecordingPeriod period = await store.CreateSessionAsync("Web chain", startedAtUtc);
+        Guid firstExecutionId = await RecordWebChainExecutionAsync(
+            store,
+            period,
+            schema,
+            "OutboundBrowsing | where url == \"" + WebChainUrl + "\"",
+            CreateWebChainTable(
+                ["url", "src_ip"],
+                [
+                    ["https://benign.example/", "192.168.3.10"],
+                    [WebChainUrl, WebChainIp],
+                ]),
+            startedAtUtc);
+        await RecordWebChainExecutionAsync(
+            store,
+            period,
+            schema,
+            "AuthenticationEvents | where src_ip == \"" + WebChainIp + "\"",
+            CreateWebChainTable(
+                ["src_ip", "username"],
+                [
+                    ["192.168.3.10", "other-user"],
+                    [WebChainIp, WebChainUsername],
+                ]),
+            startedAtUtc.AddMinutes(1));
+        await RecordWebChainExecutionAsync(
+            store,
+            period,
+            schema,
+            "Employees | where username == \"" + WebChainUsername + "\"",
+            CreateWebEmployeesTable(),
+            startedAtUtc.AddMinutes(2));
+        await RecordWebChainExecutionAsync(
+            store,
+            period,
+            schema,
+            "Email | where recipient == \"" + WebChainEmail + "\"",
+            CreateWebChainTable(["recipient", "sender"], []),
+            startedAtUtc.AddMinutes(3));
+        Guid finalExecutionId = await RecordWebChainExecutionAsync(
+            store,
+            period,
+            schema,
+            "Employees | where email_addr == \"" + WebChainEmail + "\"",
+            CreateWebEmployeesTable(),
+            startedAtUtc.AddMinutes(4));
+        await store.SetEndpointAsync(
+            period.SessionId,
+            KustoChainEndpointRole.Start,
+            new KustoRecordedValueCoordinate(firstExecutionId, 0, 1, 0));
+        await store.SetEndpointAsync(
+            period.SessionId,
+            KustoChainEndpointRole.End,
+            new KustoRecordedValueCoordinate(finalExecutionId, 0, 1, 3));
+        await store.StopRecordingAsync(period.Id, startedAtUtc.AddMinutes(5));
+    }
+
+    private static async Task<Guid> RecordWebChainExecutionAsync(
+        JsonKustoRecordedSessionStore store,
+        KustoRecordingPeriod period,
+        KustoDatabaseSchema schema,
+        string queryText,
+        KustoResultTable table,
+        DateTimeOffset startedAtUtc)
+    {
+        KustoPredicateInterestExtractor interestExtractor = new();
+        KustoRecordedRelationExtractor relationExtractor = new();
+        Guid executionId = await store.BeginExecutionAsync(new KustoRecordedExecutionStart(
+            period.Id,
+            Guid.NewGuid(),
+            "Security research",
+            new KustoQueryRequest(
+                new Uri("https://mock.kusto.example/"),
+                schema.DatabaseName,
+                queryText),
+            startedAtUtc,
+            interestExtractor.Extract(queryText, schema),
+            relationExtractor.Extract(queryText, schema)));
+        await store.CompleteExecutionAsync(
+            executionId,
+            new KustoRecordedExecutionCompletion(
+                KustoRecordedExecutionStatus.Succeeded,
+                startedAtUtc.AddSeconds(1),
+                new KustoQueryResult([table], TimeSpan.FromSeconds(1)),
+                null));
+        return executionId;
+    }
+
+    private static KustoResultTable CreateWebEmployeesTable()
+    {
+        return CreateWebChainTable(
+            ["username", "email_addr", "ip_addr", "hostname"],
+            [
+                ["other-user", "other@example.com", "192.168.3.10", "OTHER-MACHINE"],
+                [WebChainUsername, WebChainEmail, WebChainIp, WebChainHost],
+            ]);
+    }
+
+    private static KustoResultTable CreateWebChainTable(
+        IReadOnlyList<string> columns,
+        IReadOnlyList<IReadOnlyList<string>> rows)
+    {
+        return new KustoResultTable(
+            "PrimaryResult",
+            columns.Select(column => new KustoResultColumn(column, "string")),
+            rows.Select(row => new KustoResultRow(row.Select(value => new KustoResultValue(
+                value,
+                null,
+                false)))));
+    }
+
     private static KustoGraphQueryPlan CreateGraphQueryPlan(string queryText)
     {
         return new KustoGraphQueryPlan(
@@ -4282,6 +4792,7 @@ public sealed class MainWindowViewModelTests
         StubKustoGraphIngestionService? graphIngestionService = null,
         StubGraphStore? graphStore = null,
         StubGraphLayoutService? graphLayoutService = null,
+        WorkbenchHostCapabilities? hostCapabilities = null,
         IKustoRecordedSessionStore? recordedSessionStore = null,
         IKustoPredicateInterestExtractor? predicateInterestExtractor = null,
         IKustoRecordedRelationExtractor? recordedRelationExtractor = null,
@@ -4302,12 +4813,50 @@ public sealed class MainWindowViewModelTests
             graphIngestionService ?? new StubKustoGraphIngestionService(),
             graphStore ?? new StubGraphStore(),
             graphLayoutService ?? new StubGraphLayoutService(),
+            hostCapabilities ?? CreateTestHostCapabilities(),
             recordedSessionStore,
             predicateInterestExtractor,
             recordedRelationExtractor,
             recordedChainSearcher,
             recordedRelationPlanner,
             recordedChainGenerator);
+    }
+
+    private static WorkbenchHostCapabilities CreateTestHostCapabilities()
+    {
+        return new WorkbenchHostCapabilities(
+            KustoExplorerImportMode.LocalProfileDiscovery,
+            supportsToastNotifications: true,
+            supportsEmailNotifications: true,
+            supportsApplicationLaunchNotifications: true,
+            toastNotificationName: "Desktop toast",
+            WorkbenchAIProviderOwnership.UserConfigured,
+            managedAIProviderKind: null,
+            managedAIProviderDisplayName: null,
+            supportsMcp: true,
+            WorkbenchIdentityMode.InteractiveMultipleAccounts,
+            WorkbenchStorageManagementMode.LocalDataFolder,
+            maximumGraphEntityCount: 25_000,
+            maximumGraphRelationshipCount: 100_000,
+            supportsWebhookNotifications: true);
+    }
+
+    private static WorkbenchHostCapabilities CreateBrowserHostCapabilities()
+    {
+        return new WorkbenchHostCapabilities(
+            KustoExplorerImportMode.UserSelectedProfileFolder,
+            supportsToastNotifications: true,
+            supportsEmailNotifications: false,
+            supportsApplicationLaunchNotifications: false,
+            toastNotificationName: "Browser toast",
+            WorkbenchAIProviderOwnership.HostManaged,
+            KustoAIProviderKind.AzureOpenAI,
+            managedAIProviderDisplayName: "Azure OpenAI (managed by Web host)",
+            supportsMcp: false,
+            WorkbenchIdentityMode.HostAuthenticatedAccount,
+            WorkbenchStorageManagementMode.BrowserDialog,
+            maximumGraphEntityCount: 25_000,
+            maximumGraphRelationshipCount: 100_000);
     }
 
     private sealed class StubKustoLanguageService : IKustoLanguageService
@@ -4426,6 +4975,8 @@ public sealed class MainWindowViewModelTests
 
         public int MaximumSearchResults { get; private set; }
 
+        public int CatalogReadCount { get; private set; }
+
         public int MaximumViewportEntityCount { get; private set; }
 
         public int MaximumViewportRelationshipCount { get; private set; }
@@ -4516,6 +5067,7 @@ public sealed class MainWindowViewModelTests
 
         public Task<GraphCatalog> GetCatalogAsync(CancellationToken cancellationToken = default)
         {
+            CatalogReadCount++;
             return Task.FromResult(Catalog ?? CreateCatalog(State));
         }
 
@@ -5001,14 +5553,63 @@ public sealed class MainWindowViewModelTests
 
         public KustoConnectionCatalog? SavedCatalog { get; private set; }
 
+        public Exception? SaveException { get; set; }
+
+        public TaskCompletionSource SaveAttempted { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource SaveSucceeded { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
         public KustoConnectionCatalog Load()
         {
             return Catalog;
         }
 
-        public void Save(KustoConnectionCatalog catalog)
+        public Task SaveAsync(
+            KustoConnectionCatalog catalog,
+            CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            SaveAttempted.TrySetResult();
+            if (SaveException is not null)
+            {
+                return Task.FromException(SaveException);
+            }
+
             SavedCatalog = catalog;
+            SaveSucceeded.TrySetResult();
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class MemoryRecordedSessionSnapshotStore : IKustoRecordedSessionSnapshotStore
+    {
+        private string? json;
+
+        public Task<string?> LoadAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(json);
+        }
+
+        public Task SaveAsync(string snapshotJson, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            json = snapshotJson;
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class ThrowingRecordedChainQueryGenerator : IKustoRecordedChainQueryGenerator
+    {
+        public KustoGeneratedChainQuery Generate(
+            KustoRelationalChainPlan plan,
+            KustoDatabaseSchema databaseSchema)
+        {
+            _ = plan;
+            _ = databaseSchema;
+            throw new InvalidOperationException("Simulated generator failure");
         }
     }
 
@@ -5124,9 +5725,16 @@ public sealed class MainWindowViewModelTests
 
         public KustoExplorerImportResult Result { get; init; }
 
+        public Exception? Exception { get; init; }
+
         public Task<KustoExplorerImportResult> ImportConnectionsAsync(
             CancellationToken cancellationToken = default)
         {
+            if (Exception is not null)
+            {
+                return Task.FromException<KustoExplorerImportResult>(Exception);
+            }
+
             return Task.FromResult(Result);
         }
     }
@@ -5147,20 +5755,28 @@ public sealed class MainWindowViewModelTests
         public TaskCompletionSource SaveAttempted { get; } = new(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
+        public TaskCompletionSource SaveSucceeded { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
         public KustoDocumentWorkspace Load()
         {
             return Workspace;
         }
 
-        public void Save(KustoDocumentWorkspace workspace)
+        public Task SaveAsync(
+            KustoDocumentWorkspace workspace,
+            CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             SaveAttempted.TrySetResult();
             if (SaveException is not null)
             {
-                throw SaveException;
+                return Task.FromException(SaveException);
             }
 
             SavedWorkspace = workspace;
+            SaveSucceeded.TrySetResult();
+            return Task.CompletedTask;
         }
     }
 
@@ -5170,14 +5786,33 @@ public sealed class MainWindowViewModelTests
 
         public KustoDashboardCatalog? SavedCatalog { get; private set; }
 
+        public Exception? SaveException { get; set; }
+
+        public TaskCompletionSource SaveAttempted { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource SaveSucceeded { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
         public KustoDashboardCatalog Load()
         {
             return Catalog;
         }
 
-        public void Save(KustoDashboardCatalog catalog)
+        public Task SaveAsync(
+            KustoDashboardCatalog catalog,
+            CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            SaveAttempted.TrySetResult();
+            if (SaveException is not null)
+            {
+                return Task.FromException(SaveException);
+            }
+
             SavedCatalog = catalog;
+            SaveSucceeded.TrySetResult();
+            return Task.CompletedTask;
         }
 
         public KustoDashboard Import(Stream stream)
@@ -5202,14 +5837,33 @@ public sealed class MainWindowViewModelTests
 
         public KustoAutomationCatalog? SavedCatalog { get; private set; }
 
+        public Exception? SaveException { get; set; }
+
+        public TaskCompletionSource SaveAttempted { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource SaveSucceeded { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
         public KustoAutomationCatalog Load()
         {
             return Catalog;
         }
 
-        public void Save(KustoAutomationCatalog catalog)
+        public Task SaveAsync(
+            KustoAutomationCatalog catalog,
+            CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            SaveAttempted.TrySetResult();
+            if (SaveException is not null)
+            {
+                return Task.FromException(SaveException);
+            }
+
             SavedCatalog = catalog;
+            SaveSucceeded.TrySetResult();
+            return Task.CompletedTask;
         }
     }
 }

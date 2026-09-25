@@ -4,6 +4,8 @@
     <PackageReference Include="Azure.AI.OpenAI" />
     <PackageReference Include="Azure.Identity" />
     <ProjectReference Include="..\OpenKustoExplorer.Application\OpenKustoExplorer.Application.csproj" />
+    <ProjectReference Include="..\OpenKustoExplorer.Kusto\OpenKustoExplorer.Kusto.csproj" />
+    <ProjectReference Include="..\OpenKustoExplorer.Portable\OpenKustoExplorer.Portable.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -13,7 +15,6 @@
     <PackageReference Include="Microsoft.Extensions.AI" />
     <PackageReference Include="Microsoft.Extensions.AI.OpenAI" />
     <PackageReference Include="Microsoft.Identity.Client" />
-    <PackageReference Include="Msagl" />
     <PackageReference Include="OpenAI" />
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" />
   </ItemGroup>

@@ -6,74 +6,31 @@ using Microsoft.Data.Sqlite;
 using OpenKustoExplorer.Application.Execution;
 using OpenKustoExplorer.Application.Language;
 using OpenKustoExplorer.Graph;
+using OpenKustoExplorer.Portable.Graphs;
 
 namespace OpenKustoExplorer.Infrastructure.Graph;
 
 /// <summary>
 /// Spools streamed Kusto graph rows to temporary SQLite storage and exposes validated import sequences.
 /// </summary>
-internal sealed class KustoGraphImportStagingSource : IGraphImportSource, IKustoGraphExportSink, IDisposable
+internal sealed class KustoGraphImportStagingSource : IKustoGraphImportStagingSource
 {
     private const string DefaultEntityType = "Entity";
     private const string DefaultRelationshipType = "RelatedTo";
-    private static readonly string[] EntityIdColumnNames =
-    [
-        "id",
-        "entityid",
-        "objectid",
-        "nodeid",
-    ];
-
-    private static readonly string[] EntityLabelColumnNames =
-    [
-        "displayname",
-        "name",
-        "label",
-        "title",
-    ];
-
-    private static readonly string[] EntityTypeColumnNames =
-    [
-        "entitytype",
-        "nodetype",
-        "type",
-        "kind",
-        "category",
-    ];
-
-    private static readonly string[] EntityTypeFallbackColumnNames =
-    [
-        "label",
-    ];
-
-    private static readonly string[] RelationshipIdColumnNames =
-    [
-        "edgeid",
-        "relationshipid",
-        "id",
-    ];
-
-    private static readonly string[] RelationshipTypeColumnNames =
-    [
-        "relationshiptype",
-        "edgetype",
-        "relationship",
-        "type",
-        "label",
-    ];
-
     private readonly SqliteConnection connection;
     private readonly Guid ingestionId;
-    private readonly KustoGraphQueryPlan plan;
+    private readonly KustoGraphExportNormalizer normalizer;
     private readonly string sourceNamespace;
     private readonly string stagingDirectoryPath;
-    private StagedTableMetadata? currentTable;
+    private KustoGraphExportTableMetadata? currentTable;
     private bool isDisposed;
     private GraphIngestion? ingestion;
     private SqliteCommand? insertNodeCommand;
     private SqliteCommand? insertRowCommand;
-    private StagedTableMetadata? edgeTable;
-    private StagedTableMetadata? nodeTable;
+    private KustoGraphExportTableMetadata? edgeTable;
+    private int edgeRowCount;
+    private KustoGraphExportTableMetadata? nodeTable;
+    private int nodeRowCount;
     private int rowOrdinal;
     private SqliteTransaction? transaction;
 
@@ -92,9 +49,9 @@ internal sealed class KustoGraphImportStagingSource : IGraphImportSource, IKusto
         ArgumentNullException.ThrowIfNull(query);
         ArgumentOutOfRangeException.ThrowIfEqual(ingestionId, Guid.Empty);
 
-        this.plan = plan;
         this.ingestionId = ingestionId;
         sourceNamespace = CreateSourceNamespace(query.ClusterUri, query.DatabaseName);
+        normalizer = new KustoGraphExportNormalizer(plan, query, ingestionId);
         stagingDirectoryPath = Path.Combine(
             Path.GetTempPath(),
             "OpenKustoExplorer",
@@ -125,48 +82,29 @@ internal sealed class KustoGraphImportStagingSource : IGraphImportSource, IKusto
     }
 
     /// <inheritdoc />
-    public void BeginTable(
-        KustoGraphExportTableKind kind,
-        string tableName,
-        IReadOnlyList<KustoResultColumn> columns)
+    public ValueTask WriteBatchAsync(
+        KustoGraphExportBatch batch,
+        CancellationToken cancellationToken = default)
     {
-        ObjectDisposedException.ThrowIf(isDisposed, this);
-        ArgumentException.ThrowIfNullOrWhiteSpace(tableName);
-        ArgumentNullException.ThrowIfNull(columns);
-
-        if (ingestion is not null)
+        ArgumentNullException.ThrowIfNull(batch);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (batch.StartsTable)
         {
-            throw new InvalidOperationException("The completed graph staging source cannot receive more tables.");
+            BeginTable(batch.Kind, batch.TableName!, batch.Columns);
         }
 
-        if (currentTable is not null)
+        foreach (IReadOnlyList<string> row in batch.Rows)
         {
-            throw new InvalidOperationException("A graph export table is already being staged.");
+            cancellationToken.ThrowIfCancellationRequested();
+            WriteRow(batch.Kind, row);
         }
 
-        string expectedTableName = kind == KustoGraphExportTableKind.Nodes
-            ? plan.NodeTableName
-            : plan.EdgeTableName;
-        if (!string.Equals(tableName, expectedTableName, StringComparison.Ordinal))
+        if (batch.EndsTable)
         {
-            throw new InvalidDataException($"Unexpected graph export table '{tableName}'.");
+            EndTable(batch.Kind);
         }
 
-        if ((kind == KustoGraphExportTableKind.Nodes && nodeTable is not null)
-            || (kind == KustoGraphExportTableKind.Edges && edgeTable is not null))
-        {
-            throw new InvalidDataException($"Graph export table '{tableName}' was staged more than once.");
-        }
-
-        currentTable = new StagedTableMetadata(kind, tableName, columns, plan);
-        rowOrdinal = 0;
-        transaction = connection.BeginTransaction();
-        insertRowCommand = CreateInsertRowCommand(connection, transaction);
-
-        if (kind == KustoGraphExportTableKind.Nodes)
-        {
-            insertNodeCommand = CreateInsertNodeCommand(connection, transaction);
-        }
+        return ValueTask.CompletedTask;
     }
 
     /// <inheritdoc />
@@ -182,32 +120,6 @@ internal sealed class KustoGraphImportStagingSource : IGraphImportSource, IKusto
             {
                 Directory.Delete(stagingDirectoryPath, true);
             }
-        }
-    }
-
-    /// <inheritdoc />
-    public void EndTable(KustoGraphExportTableKind kind)
-    {
-        ObjectDisposedException.ThrowIf(isDisposed, this);
-        StagedTableMetadata metadata = GetCurrentTable(kind);
-
-        try
-        {
-            transaction!.Commit();
-            metadata.RowCount = rowOrdinal;
-
-            if (kind == KustoGraphExportTableKind.Nodes)
-            {
-                nodeTable = metadata;
-            }
-            else
-            {
-                edgeTable = metadata;
-            }
-        }
-        finally
-        {
-            DisposeCurrentTable();
         }
     }
 
@@ -232,68 +144,18 @@ internal sealed class KustoGraphImportStagingSource : IGraphImportSource, IKusto
         return ReadRelationshipObservations();
     }
 
-    /// <inheritdoc />
-    public void WriteRow(KustoGraphExportTableKind kind, IReadOnlyList<string> values)
-    {
-        ObjectDisposedException.ThrowIf(isDisposed, this);
-        ArgumentNullException.ThrowIfNull(values);
-        StagedTableMetadata metadata = GetCurrentTable(kind);
-
-        if (values.Count != metadata.Columns.Length)
-        {
-            throw new InvalidDataException(
-                $"Graph export table '{metadata.TableName}' returned {values.Count} values for "
-            + $"{metadata.Columns.Length} columns.");
-        }
-
-        string rowJson = WriteRowJson(metadata.Columns, values);
-        string contentHash = ComputeContentHash(metadata.SchemaJson, rowJson);
-        string sourceHash = string.Empty;
-        string targetHash = string.Empty;
-        string relationshipType = string.Empty;
-        string discriminator = string.Empty;
-
-        if (kind == KustoGraphExportTableKind.Nodes)
-        {
-            StageNode(metadata, values);
-        }
-        else
-        {
-            sourceHash = GetRequiredValue(values, metadata.SourceHashIndex, "source hash");
-            targetHash = GetRequiredValue(values, metadata.TargetHashIndex, "target hash");
-            relationshipType = GetOptionalValue(values, metadata.RelationshipTypeIndex);
-            relationshipType = string.IsNullOrWhiteSpace(relationshipType)
-                ? DefaultRelationshipType
-                : relationshipType.Trim();
-            discriminator = GetOptionalValue(values, metadata.RelationshipIdIndex);
-            discriminator = string.IsNullOrWhiteSpace(discriminator) ? contentHash : discriminator.Trim();
-        }
-
-        SqliteCommand command = insertRowCommand!;
-        command.Parameters["$tableKind"].Value = (int)kind;
-        command.Parameters["$rowOrdinal"].Value = rowOrdinal;
-        command.Parameters["$rowJson"].Value = rowJson;
-        command.Parameters["$contentHash"].Value = contentHash;
-        command.Parameters["$sourceHash"].Value = sourceHash;
-        command.Parameters["$targetHash"].Value = targetHash;
-        command.Parameters["$relationshipType"].Value = relationshipType;
-        command.Parameters["$discriminator"].Value = discriminator;
-        command.ExecuteNonQuery();
-        rowOrdinal++;
-    }
-
     /// <summary>
     /// Marks staged rows as eligible for import after parser-level validation succeeds.
     /// </summary>
-    /// <param name="completedIngestion">The completed query provenance.</param>
-    /// <param name="export">The parser-validated export summary.</param>
-    internal void Complete(GraphIngestion completedIngestion, KustoGraphExportSummary export)
+    /// <param name="ingestion">The completed query provenance.</param>
+    /// <param name="exportSummary">The parser-validated export summary.</param>
+    public void Complete(GraphIngestion ingestion, KustoGraphExportSummary exportSummary)
     {
         ObjectDisposedException.ThrowIf(isDisposed, this);
-        ArgumentNullException.ThrowIfNull(completedIngestion);
-        ArgumentNullException.ThrowIfNull(export);
+        ArgumentNullException.ThrowIfNull(ingestion);
+        ArgumentNullException.ThrowIfNull(exportSummary);
 
-        if (ingestion is not null)
+        if (this.ingestion is not null)
         {
             throw new InvalidOperationException("The graph staging source is already complete.");
         }
@@ -303,25 +165,25 @@ internal sealed class KustoGraphImportStagingSource : IGraphImportSource, IKusto
             throw new InvalidDataException("Both graph export tables must finish before import.");
         }
 
-        if (completedIngestion.Id != ingestionId)
+        if (ingestion.Id != ingestionId)
         {
-            throw new ArgumentException("The ingestion identifier does not match the staged export.", nameof(completedIngestion));
+            throw new ArgumentException("The ingestion identifier does not match the staged export.", nameof(ingestion));
         }
 
-        if (export.NodeCount != nodeTable.RowCount || export.EdgeCount != edgeTable.RowCount)
+        if (exportSummary.NodeCount != nodeRowCount || exportSummary.EdgeCount != edgeRowCount)
         {
             throw new InvalidDataException("The staged graph row counts do not match the validated export.");
         }
 
         ValidateEdgeEndpoints();
-        ingestion = completedIngestion;
+        this.ingestion = ingestion;
     }
 
     /// <summary>
     /// Gets distinct staged identities for target-graph duplicate preflight.
     /// </summary>
     /// <returns>The staged identity candidates.</returns>
-    internal IEnumerable<GraphEntityIdentityCandidate> GetIdentityCandidates()
+    public IEnumerable<GraphEntityIdentityCandidate> GetIdentityCandidates()
     {
         EnsureReady();
         using SqliteCommand command = connection.CreateCommand();
@@ -356,7 +218,7 @@ internal sealed class KustoGraphImportStagingSource : IGraphImportSource, IKusto
     /// Gets staged identities whose normalized value or display label matches under different inferred types.
     /// </summary>
     /// <returns>The distinct identity conflicts.</returns>
-    internal IReadOnlyList<GraphEntityIdentityConflict> GetIdentityConflicts()
+    public IReadOnlyList<GraphEntityIdentityConflict> GetIdentityConflicts()
     {
         EnsureReady();
         using SqliteCommand command = connection.CreateCommand();
@@ -430,7 +292,7 @@ internal sealed class KustoGraphImportStagingSource : IGraphImportSource, IKusto
     /// Remaps staged candidates in one approved conflict to its suggested identity.
     /// </summary>
     /// <param name="conflict">The approved identity conflict.</param>
-    internal void MergeIdentityConflict(GraphEntityIdentityConflict conflict)
+    public void MergeIdentityConflict(GraphEntityIdentityConflict conflict)
     {
         ArgumentNullException.ThrowIfNull(conflict);
         EnsureReady();
@@ -558,13 +420,6 @@ internal sealed class KustoGraphImportStagingSource : IGraphImportSource, IKusto
         return candidates.ToArray();
     }
 
-    private static string ComputeContentHash(string schemaJson, string rowJson)
-    {
-        string content = string.Concat(schemaJson, "\n", rowJson);
-        byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(content));
-        return Convert.ToHexString(hash).ToLowerInvariant();
-    }
-
     private static Guid CreateObservationId(string occurrenceId)
     {
         byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(occurrenceId));
@@ -686,61 +541,9 @@ internal sealed class KustoGraphImportStagingSource : IGraphImportSource, IKusto
             $"{clusterUri.Host.ToLowerInvariant()}/{databaseName.Trim().ToLowerInvariant()}");
     }
 
-    private static GraphEntityKind InferEntityKind(string typeName)
-    {
-        string normalizedType = NormalizeName(typeName);
-        GraphEntityKind kind = normalizedType switch
-        {
-            "account" or "githubuser" or "person" => GraphEntityKind.User,
-            "computer" or "machine" => GraphEntityKind.Host,
-            "ip" => GraphEntityKind.IpAddress,
-            "principal" => GraphEntityKind.Identity,
-            "publickey" or "sshkey" => GraphEntityKind.Credential,
-            "resource" => GraphEntityKind.CloudResource,
-            "tenant" => GraphEntityKind.CloudTenant,
-            "vm" => GraphEntityKind.VirtualMachine,
-            _ => Enum.TryParse(normalizedType, true, out GraphEntityKind parsedKind)
-                ? parsedKind
-                : GraphEntityKind.Unknown,
-        };
-        return kind;
-    }
-
-    private static string GetOptionalValue(IReadOnlyList<string> values, int index)
-    {
-        return index >= 0 ? values[index] : string.Empty;
-    }
-
-    private static string GetRequiredValue(
-        IReadOnlyList<string> values,
-        int index,
-        string valueDescription)
-    {
-        string value = GetOptionalValue(values, index);
-
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            throw new InvalidDataException($"A graph export row contains no {valueDescription}.");
-        }
-
-        return value.Trim();
-    }
-
-    private static string NormalizeName(string value)
-    {
-        StringBuilder builder = new(value.Length);
-
-        foreach (char character in value.Where(char.IsLetterOrDigit))
-        {
-            builder.Append(char.ToLowerInvariant(character));
-        }
-
-        return builder.ToString();
-    }
-
     private static Dictionary<string, string> ReadProperties(
         string rowJson,
-        HashSet<string> controlColumnNames)
+        IReadOnlySet<string> controlColumnNames)
     {
         Dictionary<string, string> properties = new(StringComparer.Ordinal);
         using JsonDocument document = JsonDocument.Parse(rowJson);
@@ -755,24 +558,98 @@ internal sealed class KustoGraphImportStagingSource : IGraphImportSource, IKusto
         return properties;
     }
 
-    private static string WriteRowJson(
-        KustoResultColumn[] columns,
-        IReadOnlyList<string> values)
+    private void BeginTable(
+        KustoGraphExportTableKind kind,
+        string tableName,
+        IReadOnlyList<KustoResultColumn> columns)
     {
-        using MemoryStream stream = new();
-        using (Utf8JsonWriter writer = new(stream))
+        ObjectDisposedException.ThrowIf(isDisposed, this);
+        ArgumentException.ThrowIfNullOrWhiteSpace(tableName);
+        ArgumentNullException.ThrowIfNull(columns);
+
+        if (ingestion is not null)
         {
-            writer.WriteStartObject();
-
-            for (int index = 0; index < columns.Length; index++)
-            {
-                writer.WriteString(columns[index].Name, values[index]);
-            }
-
-            writer.WriteEndObject();
+            throw new InvalidOperationException("The completed graph staging source cannot receive more tables.");
         }
 
-        return Encoding.UTF8.GetString(stream.ToArray());
+        if (currentTable is not null)
+        {
+            throw new InvalidOperationException("A graph export table is already being staged.");
+        }
+
+        if ((kind == KustoGraphExportTableKind.Nodes && nodeTable is not null)
+            || (kind == KustoGraphExportTableKind.Edges && edgeTable is not null))
+        {
+            throw new InvalidDataException($"Graph export table '{tableName}' was staged more than once.");
+        }
+
+        currentTable = normalizer.CreateTableMetadata(kind, tableName, columns);
+        rowOrdinal = 0;
+        transaction = connection.BeginTransaction();
+        insertRowCommand = CreateInsertRowCommand(connection, transaction);
+
+        if (kind == KustoGraphExportTableKind.Nodes)
+        {
+            insertNodeCommand = CreateInsertNodeCommand(connection, transaction);
+        }
+    }
+
+    private void EndTable(KustoGraphExportTableKind kind)
+    {
+        ObjectDisposedException.ThrowIf(isDisposed, this);
+        KustoGraphExportTableMetadata metadata = GetCurrentTable(kind);
+
+        try
+        {
+            transaction!.Commit();
+            if (kind == KustoGraphExportTableKind.Nodes)
+            {
+                nodeTable = metadata;
+                nodeRowCount = rowOrdinal;
+            }
+            else
+            {
+                edgeTable = metadata;
+                edgeRowCount = rowOrdinal;
+            }
+        }
+        finally
+        {
+            DisposeCurrentTable();
+        }
+    }
+
+    private void WriteRow(KustoGraphExportTableKind kind, IReadOnlyList<string> values)
+    {
+        ObjectDisposedException.ThrowIf(isDisposed, this);
+        ArgumentNullException.ThrowIfNull(values);
+        KustoGraphExportTableMetadata metadata = GetCurrentTable(kind);
+        int maximumRowCount = kind == KustoGraphExportTableKind.Nodes
+            ? GraphStorageLimits.MaximumEntityCount
+            : GraphStorageLimits.MaximumRelationshipCount;
+        if (rowOrdinal >= maximumRowCount)
+        {
+            throw new InvalidDataException(
+                $"The graph export exceeds the {maximumRowCount:N0} {kind.ToString().ToLowerInvariant()} limit.");
+        }
+
+        KustoGraphExportRow row = normalizer.NormalizeRow(metadata, values, rowOrdinal);
+        if (kind == KustoGraphExportTableKind.Nodes)
+        {
+            StageNode(row);
+        }
+
+        SqliteCommand command = insertRowCommand!;
+        command.Parameters["$tableKind"].Value = (int)kind;
+        command.Parameters["$rowOrdinal"].Value = rowOrdinal;
+        command.Parameters["$rowJson"].Value = row.RowJson;
+        command.Parameters["$contentHash"].Value = row.ContentHash;
+        command.Parameters["$sourceHash"].Value = row.SourceHash;
+        command.Parameters["$targetHash"].Value = row.TargetHash;
+        command.Parameters["$relationshipType"].Value = row.RelationshipType;
+        command.Parameters["$discriminator"].Value = row.Discriminator;
+        command.ExecuteNonQuery();
+        rowOrdinal++;
     }
 
     private void DisposeCurrentTable()
@@ -797,7 +674,7 @@ internal sealed class KustoGraphImportStagingSource : IGraphImportSource, IKusto
         }
     }
 
-    private StagedTableMetadata GetCurrentTable(KustoGraphExportTableKind kind)
+    private KustoGraphExportTableMetadata GetCurrentTable(KustoGraphExportTableKind kind)
     {
         if (currentTable is null || currentTable.Kind != kind)
         {
@@ -875,7 +752,7 @@ internal sealed class KustoGraphImportStagingSource : IGraphImportSource, IKusto
         {
             KustoGraphExportTableKind kind = (KustoGraphExportTableKind)reader.GetInt32(0);
             int ordinal = reader.GetInt32(1);
-            StagedTableMetadata metadata = kind == KustoGraphExportTableKind.Nodes
+            KustoGraphExportTableMetadata metadata = kind == KustoGraphExportTableKind.Nodes
                 ? nodeTable!
                 : edgeTable!;
 
@@ -948,44 +825,16 @@ internal sealed class KustoGraphImportStagingSource : IGraphImportSource, IKusto
         }
     }
 
-    private void StageNode(StagedTableMetadata metadata, IReadOnlyList<string> values)
+    private void StageNode(KustoGraphExportRow row)
     {
-        string nodeHash = GetRequiredValue(values, metadata.NodeHashIndex, "node hash");
-        string typeName = GetOptionalValue(values, metadata.EntityTypeIndex);
-        bool usesTypeFallback = string.IsNullOrWhiteSpace(typeName);
-
-        if (usesTypeFallback)
-        {
-            typeName = GetOptionalValue(values, metadata.EntityTypeFallbackIndex);
-        }
-
-        typeName = string.IsNullOrWhiteSpace(typeName) ? DefaultEntityType : typeName.Trim();
-        string canonicalId = GetOptionalValue(values, metadata.EntityIdIndex);
-        canonicalId = string.IsNullOrWhiteSpace(canonicalId) ? nodeHash : canonicalId.Trim();
-        string displayLabel = usesTypeFallback
-            ? GetOptionalValue(values, metadata.EntityIdIndex)
-            : GetOptionalValue(values, metadata.EntityLabelIndex);
-
-        if (string.IsNullOrWhiteSpace(displayLabel))
-        {
-            displayLabel = GetOptionalValue(values, metadata.EntityIdIndex);
-        }
-
-        if (string.IsNullOrWhiteSpace(displayLabel))
-        {
-            displayLabel = values
-                .Where((value, index) => index != metadata.NodeHashIndex && !string.IsNullOrWhiteSpace(value))
-                .FirstOrDefault() ?? canonicalId;
-        }
-
         SqliteCommand command = insertNodeCommand!;
-        command.Parameters["$nodeHash"].Value = nodeHash;
+        command.Parameters["$nodeHash"].Value = row.NodeHash;
         command.Parameters["$rowOrdinal"].Value = rowOrdinal;
-        command.Parameters["$entityKind"].Value = (int)InferEntityKind(typeName);
-        command.Parameters["$typeName"].Value = typeName;
-        command.Parameters["$sourceTypeName"].Value = typeName;
-        command.Parameters["$canonicalId"].Value = canonicalId;
-        command.Parameters["$displayLabel"].Value = displayLabel.Trim();
+        command.Parameters["$entityKind"].Value = (int)row.EntityKind;
+        command.Parameters["$typeName"].Value = row.TypeName;
+        command.Parameters["$sourceTypeName"].Value = row.SourceTypeName;
+        command.Parameters["$canonicalId"].Value = row.CanonicalId;
+        command.Parameters["$displayLabel"].Value = row.DisplayLabel;
         command.ExecuteNonQuery();
     }
 
@@ -1008,159 +857,6 @@ internal sealed class KustoGraphImportStagingSource : IGraphImportSource, IKusto
         {
             throw new InvalidDataException(
                 $"The graph export contains {missingEndpointCount:N0} edge rows with unresolved endpoints.");
-        }
-    }
-
-    private sealed class StagedTableMetadata
-    {
-        internal StagedTableMetadata(
-            KustoGraphExportTableKind kind,
-            string tableName,
-            IReadOnlyList<KustoResultColumn> columns,
-            KustoGraphQueryPlan plan)
-        {
-            if (columns.Count == 0)
-            {
-                throw new InvalidDataException($"Graph export table '{tableName}' contains no columns.");
-            }
-
-            KustoResultColumn[] columnSnapshot = columns.ToArray();
-            string? duplicateColumnName = columnSnapshot
-                .GroupBy(column => column.Name, StringComparer.Ordinal)
-                .Where(group => group.Count() > 1)
-                .Select(group => group.Key)
-                .FirstOrDefault();
-            if (duplicateColumnName is not null)
-            {
-                throw new InvalidDataException(
-                    $"Graph export table '{tableName}' contains duplicate column '{duplicateColumnName}'.");
-            }
-
-            Kind = kind;
-            TableName = tableName;
-            Columns = columnSnapshot;
-            NodeHashIndex = kind == KustoGraphExportTableKind.Nodes
-                ? FindColumnIndex(columnSnapshot, plan.NodeHashColumnName)
-                : -1;
-            SourceHashIndex = kind == KustoGraphExportTableKind.Edges
-                ? FindColumnIndex(columnSnapshot, plan.SourceHashColumnName)
-                : -1;
-            TargetHashIndex = kind == KustoGraphExportTableKind.Edges
-                ? FindColumnIndex(columnSnapshot, plan.TargetHashColumnName)
-                : -1;
-
-            if ((kind == KustoGraphExportTableKind.Nodes && NodeHashIndex < 0)
-                || (kind == KustoGraphExportTableKind.Edges
-                    && (SourceHashIndex < 0 || TargetHashIndex < 0)))
-            {
-                throw new InvalidDataException($"Graph export table '{tableName}' is missing generated hash columns.");
-            }
-
-            HashSet<int> controlIndexes = [NodeHashIndex, SourceHashIndex, TargetHashIndex];
-            controlIndexes.Remove(-1);
-            EntityIdIndex = FindMappedColumnIndex(columnSnapshot, EntityIdColumnNames, controlIndexes);
-            EntityLabelIndex = FindMappedColumnIndex(columnSnapshot, EntityLabelColumnNames, controlIndexes);
-            EntityTypeIndex = FindMappedColumnIndex(columnSnapshot, EntityTypeColumnNames, controlIndexes);
-            EntityTypeFallbackIndex = FindMappedColumnIndex(
-                columnSnapshot,
-                EntityTypeFallbackColumnNames,
-                controlIndexes);
-            RelationshipIdIndex = FindMappedColumnIndex(
-                columnSnapshot,
-                RelationshipIdColumnNames,
-                controlIndexes);
-            RelationshipTypeIndex = FindMappedColumnIndex(
-                columnSnapshot,
-                RelationshipTypeColumnNames,
-                controlIndexes);
-            ControlColumnNames = controlIndexes
-                .Select(index => columnSnapshot[index].Name)
-                .ToHashSet(StringComparer.Ordinal);
-            SchemaJson = WriteSchemaJson(columnSnapshot);
-        }
-
-        internal KustoResultColumn[] Columns { get; }
-
-        internal HashSet<string> ControlColumnNames { get; }
-
-        internal int EntityIdIndex { get; }
-
-        internal int EntityLabelIndex { get; }
-
-        internal int EntityTypeIndex { get; }
-
-        internal int EntityTypeFallbackIndex { get; }
-
-        internal KustoGraphExportTableKind Kind { get; }
-
-        internal int NodeHashIndex { get; }
-
-        internal int RelationshipIdIndex { get; }
-
-        internal int RelationshipTypeIndex { get; }
-
-        internal int RowCount { get; set; }
-
-        internal string SchemaJson { get; }
-
-        internal int SourceHashIndex { get; }
-
-        internal string TableName { get; }
-
-        internal int TargetHashIndex { get; }
-
-        private static int FindColumnIndex(KustoResultColumn[] columns, string columnName)
-        {
-            for (int index = 0; index < columns.Length; index++)
-            {
-                if (string.Equals(columns[index].Name, columnName, StringComparison.Ordinal))
-                {
-                    return index;
-                }
-            }
-
-            return -1;
-        }
-
-        private static int FindMappedColumnIndex(
-            KustoResultColumn[] columns,
-            string[] candidateNames,
-            HashSet<int> excludedIndexes)
-        {
-            for (int index = 0; index < columns.Length; index++)
-            {
-                if (!excludedIndexes.Contains(index)
-                    && candidateNames.Contains(NormalizeName(columns[index].Name), StringComparer.Ordinal))
-                {
-                    return index;
-                }
-            }
-
-            return -1;
-        }
-
-        private static string WriteSchemaJson(KustoResultColumn[] columns)
-        {
-            using MemoryStream stream = new();
-            using (Utf8JsonWriter writer = new(stream))
-            {
-                writer.WriteStartObject();
-                writer.WritePropertyName("columns");
-                writer.WriteStartArray();
-
-                foreach (KustoResultColumn column in columns)
-                {
-                    writer.WriteStartObject();
-                    writer.WriteString("name", column.Name);
-                    writer.WriteString("type", column.TypeName);
-                    writer.WriteEndObject();
-                }
-
-                writer.WriteEndArray();
-                writer.WriteEndObject();
-            }
-
-            return Encoding.UTF8.GetString(stream.ToArray());
         }
     }
 }

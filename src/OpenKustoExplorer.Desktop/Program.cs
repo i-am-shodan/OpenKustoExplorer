@@ -21,9 +21,11 @@ using OpenKustoExplorer.Infrastructure.Dashboards;
 using OpenKustoExplorer.Infrastructure.Documents;
 using OpenKustoExplorer.Infrastructure.Execution;
 using OpenKustoExplorer.Infrastructure.Graph;
-using OpenKustoExplorer.Infrastructure.Language;
 using OpenKustoExplorer.Infrastructure.Sessions;
 using OpenKustoExplorer.Infrastructure.Updates;
+using OpenKustoExplorer.Kusto.Language;
+using OpenKustoExplorer.Portable.Graphs;
+using OpenKustoExplorer.Portable.Sessions;
 using OpenKustoExplorer.Presentation.Workbench;
 
 namespace OpenKustoExplorer.Desktop;
@@ -123,6 +125,8 @@ internal static class Program
         services.AddSingleton<SqliteKustoRecordedSessionStore>();
         services.AddSingleton<IKustoRecordedSessionStore>(serviceProvider =>
             serviceProvider.GetRequiredService<SqliteKustoRecordedSessionStore>());
+        services.AddSingleton<IKustoRecordedSessionArchiveStore>(serviceProvider =>
+            serviceProvider.GetRequiredService<SqliteKustoRecordedSessionStore>());
         services.AddSingleton<KustoRecordedSessionArchiveService>();
         services.AddSingleton<IKustoRecordedSessionArchiveService>(serviceProvider =>
             serviceProvider.GetRequiredService<KustoRecordedSessionArchiveService>());
@@ -132,6 +136,23 @@ internal static class Program
         services.AddSingleton<IKustoRecordedRelationPlanner, KustoRecordedRelationPlanner>();
         services.AddSingleton<IKustoRecordedChainQueryGenerator, KustoRecordedChainQueryGenerator>();
         services.AddSingleton(TimeProvider.System);
+        services.AddSingleton(new WorkbenchHostCapabilities(
+            OperatingSystem.IsWindows()
+                ? KustoExplorerImportMode.LocalProfileDiscovery
+                : KustoExplorerImportMode.Unavailable,
+            supportsToastNotifications: true,
+            supportsEmailNotifications: true,
+            supportsApplicationLaunchNotifications: true,
+            toastNotificationName: "Desktop toast",
+            WorkbenchAIProviderOwnership.UserConfigured,
+            managedAIProviderKind: null,
+            managedAIProviderDisplayName: null,
+            supportsMcp: true,
+            WorkbenchIdentityMode.InteractiveMultipleAccounts,
+            WorkbenchStorageManagementMode.LocalDataFolder,
+            GraphStorageLimits.MaximumEntityCount,
+            GraphStorageLimits.MaximumRelationshipCount,
+            supportsWebhookNotifications: true));
         services.AddSingleton<AppearanceSettings>();
         services.AddSingleton<IKustoAIProviderConfiguration>(serviceProvider =>
             serviceProvider.GetRequiredService<AppearanceSettings>());

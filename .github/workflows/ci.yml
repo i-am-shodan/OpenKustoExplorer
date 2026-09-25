@@ -23,6 +23,9 @@ jobs:
         with:
           dotnet-version: 10.0.401
 
+      - name: Restore WebAssembly workload
+        run: dotnet workload restore src/OpenKustoExplorer.Browser/OpenKustoExplorer.Browser.csproj
+
       - name: Restore and audit all dependencies
         run: dotnet restore OpenKustoExplorer.slnx -p:AuditPipeline=true
 
@@ -91,6 +94,9 @@ jobs:
       - name: Install Linux Native AOT prerequisites
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install --yes clang unzip zip zlib1g-dev
+
+      - name: Restore WebAssembly workload
+        run: dotnet workload restore src/OpenKustoExplorer.Browser/OpenKustoExplorer.Browser.csproj
 
       - name: Restore
         run: dotnet restore OpenKustoExplorer.slnx
@@ -555,3 +561,62 @@ jobs:
           fi
 
           echo "Released ${tag} from ${RELEASE_SHA}." >> "${GITHUB_STEP_SUMMARY}"
+
+  browser-smoke:
+    name: Browser runtime smoke
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.302
+
+      - name: Install Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tests/OpenKustoExplorer.BrowserSmoke/package-lock.json
+
+      - name: Restore WebAssembly workload
+        run: dotnet workload restore src/OpenKustoExplorer.Browser/OpenKustoExplorer.Browser.csproj
+
+      - name: Restore Web host
+        run: dotnet restore src/OpenKustoExplorer.Web/OpenKustoExplorer.Web.csproj
+
+      - name: Build Web host without warnings
+        run: dotnet build src/OpenKustoExplorer.Web/OpenKustoExplorer.Web.csproj --configuration Release --no-restore -warnaserror
+
+      - name: Install Browser smoke dependencies
+        working-directory: tests/OpenKustoExplorer.BrowserSmoke
+        run: npm ci
+
+      - name: Install Chromium
+        working-directory: tests/OpenKustoExplorer.BrowserSmoke
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Browser smoke
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          ASPNETCORE_ENVIRONMENT=Development \
+            ASPNETCORE_URLS=http://127.0.0.1:5216 \
+            dotnet run --project src/OpenKustoExplorer.Web/OpenKustoExplorer.Web.csproj \
+              --configuration Release --no-build --no-launch-profile \
+              > artifacts/browser-smoke-host.log 2>&1 &
+          host_pid=$!
+          trap 'kill "$host_pid" 2>/dev/null || true' EXIT
+          OPEN_KUSTO_EXPLORER_WEB_URL=http://127.0.0.1:5216 \
+            npm test --prefix tests/OpenKustoExplorer.BrowserSmoke
+
+      - name: Upload Browser smoke log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: OpenKustoExplorer-browser-smoke-log
+          path: artifacts/browser-smoke-host.log
+          if-no-files-found: warn

@@ -4,8 +4,8 @@ using Microsoft.Data.Sqlite;
 using OpenKustoExplorer.Application.Execution;
 using OpenKustoExplorer.Application.Sessions;
 using OpenKustoExplorer.Domain.Schema;
-using OpenKustoExplorer.Infrastructure.Language;
 using OpenKustoExplorer.Infrastructure.Sessions;
+using OpenKustoExplorer.Portable.Sessions;
 using OpenKustoExplorer.Presentation.Workbench;
 
 namespace OpenKustoExplorer.Presentation.Tests.Workbench;

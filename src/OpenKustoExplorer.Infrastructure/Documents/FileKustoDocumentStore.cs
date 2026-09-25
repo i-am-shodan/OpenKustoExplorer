@@ -1,6 +1,7 @@
 using System.Text.Json;
 using OpenKustoExplorer.Application.Documents;
 using OpenKustoExplorer.Infrastructure.Storage;
+using OpenKustoExplorer.Portable.Storage;
 
 namespace OpenKustoExplorer.Infrastructure.Documents;
 
@@ -51,7 +52,10 @@ public sealed class FileKustoDocumentStore : IKustoDocumentStore
             static () => new KustoDocumentWorkspace([], null));
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Saves the document workspace synchronously.
+    /// </summary>
+    /// <param name="workspace">The document workspace.</param>
     public void Save(KustoDocumentWorkspace workspace)
     {
         ArgumentNullException.ThrowIfNull(workspace);
@@ -67,6 +71,16 @@ public sealed class FileKustoDocumentStore : IKustoDocumentStore
                 : "The recovery copy could not be written either.";
             throw new IOException(message, exception);
         }
+    }
+
+    /// <inheritdoc />
+    public Task SaveAsync(
+        KustoDocumentWorkspace workspace,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Save(workspace);
+        return Task.CompletedTask;
     }
 
     private static string GetDefaultFilePath()

@@ -7,7 +7,7 @@ namespace OpenKustoExplorer.Desktop;
 /// <summary>
 /// Delivers evaluated automation actions through application, desktop, webhook, and SMTP channels.
 /// </summary>
-internal sealed class AutomationNotificationDispatcher : IDisposable
+internal sealed class AutomationNotificationDispatcher : IWorkbenchAutomationNotificationDispatcher, IDisposable
 {
     private const string SmtpPasswordEnvironmentVariable = "OPENKUSTOEXPLORER_SMTP_PASSWORD";
     private const string SmtpUsernameEnvironmentVariable = "OPENKUSTOEXPLORER_SMTP_USERNAME";

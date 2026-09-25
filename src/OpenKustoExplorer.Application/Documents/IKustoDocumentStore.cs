@@ -15,5 +15,9 @@ public interface IKustoDocumentStore
     /// Atomically saves all open documents and the selected tab.
     /// </summary>
     /// <param name="workspace">The immutable workspace snapshot.</param>
-    public void Save(KustoDocumentWorkspace workspace);
+    /// <param name="cancellationToken">Cancels waiting for durable storage.</param>
+    /// <returns>A task that completes after the workspace is durable.</returns>
+    public Task SaveAsync(
+        KustoDocumentWorkspace workspace,
+        CancellationToken cancellationToken = default);
 }

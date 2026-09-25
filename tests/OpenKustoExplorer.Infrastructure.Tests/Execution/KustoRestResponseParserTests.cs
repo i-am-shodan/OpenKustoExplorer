@@ -1,5 +1,5 @@
 using OpenKustoExplorer.Application.Execution;
-using OpenKustoExplorer.Infrastructure.Execution;
+using OpenKustoExplorer.Kusto.Execution;
 
 namespace OpenKustoExplorer.Infrastructure.Tests.Execution;
 
@@ -205,6 +205,42 @@ public sealed class KustoRestResponseParserTests
 
         Assert.NotNull(result.Visualization);
         Assert.Equal(expectedKind, result.Visualization.Kind);
+    }
+
+    /// <summary>
+    /// Verifies non-finite server axis bounds remain unspecified and safe for the gateway wire.
+    /// </summary>
+    /// <param name="bound">The non-finite server value.</param>
+    [Theory]
+    [InlineData("NaN")]
+    [InlineData("Infinity")]
+    [InlineData("-Infinity")]
+    public void ParseIgnoresNonFiniteVisualizationBounds(string bound)
+    {
+        string response = $$"""
+            {
+              "Tables": [
+                {
+                  "TableName": "PrimaryResult",
+                  "Columns": [{ "ColumnName": "Events", "ColumnType": "long" }],
+                  "Rows": [[42]]
+                },
+                {
+                  "TableName": "@ExtendedProperties",
+                  "Columns": [
+                    { "ColumnName": "Key", "ColumnType": "string" },
+                    { "ColumnName": "Value", "ColumnType": "dynamic" }
+                  ],
+                  "Rows": [["Visualization", { "Visualization": "columnchart", "YMin": "{{bound}}" }]]
+                }
+              ]
+            }
+            """;
+
+        KustoQueryResult result = KustoRestResponseParser.Parse(response, TimeSpan.Zero, 10);
+
+        Assert.NotNull(result.Visualization);
+        Assert.Null(result.Visualization.YMinimum);
     }
 
     /// <summary>

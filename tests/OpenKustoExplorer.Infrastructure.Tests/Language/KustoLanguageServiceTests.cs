@@ -1,7 +1,7 @@
 using OpenKustoExplorer.Application.Execution;
 using OpenKustoExplorer.Application.Language;
 using OpenKustoExplorer.Domain.Schema;
-using OpenKustoExplorer.Infrastructure.Language;
+using OpenKustoExplorer.Kusto.Language;
 
 namespace OpenKustoExplorer.Infrastructure.Tests.Language;
 

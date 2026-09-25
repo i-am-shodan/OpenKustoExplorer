@@ -1,0 +1,9 @@
+<Application
+    x:Class="OpenKustoExplorer.Desktop.App"
+    xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    RequestedThemeVariant="Default">
+  <Application.Styles>
+    <StyleInclude Source="avares://OpenKustoExplorer.Avalonia/WorkbenchStyles.axaml" />
+  </Application.Styles>
+</Application>

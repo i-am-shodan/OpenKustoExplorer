@@ -13,7 +13,7 @@ param(
     [ValidatePattern('^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$')]
     [string] $Version,
 
-    [string] $IconSource = (Join-Path $PSScriptRoot '../src/OpenKustoExplorer.Desktop/Assets/OpenKustoExplorer.png')
+    [string] $IconSource = (Join-Path $PSScriptRoot '../src/OpenKustoExplorer.Browser/wwwroot/open-kusto-explorer.png')
 )
 
 Set-StrictMode -Version Latest

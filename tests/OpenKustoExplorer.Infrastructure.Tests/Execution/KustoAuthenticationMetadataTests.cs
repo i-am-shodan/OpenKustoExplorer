@@ -1,4 +1,4 @@
-using OpenKustoExplorer.Infrastructure.Execution;
+using OpenKustoExplorer.Kusto.Authentication;
 
 namespace OpenKustoExplorer.Infrastructure.Tests.Execution;
 

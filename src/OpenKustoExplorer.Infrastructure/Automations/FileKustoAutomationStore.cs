@@ -1,5 +1,6 @@
 using OpenKustoExplorer.Application.Automations;
 using OpenKustoExplorer.Infrastructure.Storage;
+using OpenKustoExplorer.Portable.Storage;
 
 namespace OpenKustoExplorer.Infrastructure.Automations;
 
@@ -37,11 +38,24 @@ public sealed class FileKustoAutomationStore : IKustoAutomationStore
             static () => new KustoAutomationCatalog([]));
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Saves the automation catalog synchronously.
+    /// </summary>
+    /// <param name="catalog">The automation catalog.</param>
     public void Save(KustoAutomationCatalog catalog)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         AtomicFileStore.Write(filePath, stream => KustoAutomationCatalogJson.Write(stream, catalog));
+    }
+
+    /// <inheritdoc />
+    public Task SaveAsync(
+        KustoAutomationCatalog catalog,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Save(catalog);
+        return Task.CompletedTask;
     }
 
     private static string GetDefaultFilePath()

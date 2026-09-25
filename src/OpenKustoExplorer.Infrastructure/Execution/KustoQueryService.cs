@@ -1,15 +1,12 @@
-using System.Collections.ObjectModel;
-using System.Diagnostics;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Headers;
-using System.Text.Json;
 using Microsoft.Identity.Client;
 using OpenKustoExplorer.Application.Connections;
 using OpenKustoExplorer.Application.Execution;
 using OpenKustoExplorer.Application.Language;
-using OpenKustoExplorer.Domain.Schema;
-using OpenKustoExplorer.Infrastructure.Connections;
+using OpenKustoExplorer.Kusto.Authentication;
+using OpenKustoExplorer.Kusto.Execution;
 
 namespace OpenKustoExplorer.Infrastructure.Execution;
 
@@ -20,14 +17,13 @@ namespace OpenKustoExplorer.Infrastructure.Execution;
 /// Cluster metadata supplies Microsoft's public-client identity settings. MSAL performs system-browser
 /// authentication, while HTTP and JSON remain explicit to preserve Native AOT compatibility.
 /// </remarks>
-public sealed class KustoQueryService : IKustoCatalogService, IKustoGraphQueryService, IKustoIdentityService, IKustoQueryService, IDisposable
+public sealed class KustoQueryService : IKustoAccessTokenProvider, IKustoCatalogService, IKustoGraphQueryService, IKustoIdentityService, IKustoQueryService, IDisposable
 {
-    private const int MaximumGraphResultRowCount = 2_000_000;
     private const int MaximumProfilePhotoSize = 5 * 1024 * 1024;
-    private const int MaximumResultRowCount = 10_000;
     private static readonly string[] MicrosoftGraphScopes = ["https://graph.microsoft.com/User.Read"];
     private readonly Dictionary<string, KustoAuthenticationSession> authenticationSessions = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> displayNames = new(StringComparer.OrdinalIgnoreCase);
+    private readonly KustoExecutionService executionService;
     private readonly HashSet<string> profilePhotoLookups = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, IPublicClientApplication> publicClientApplications = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, KustoSignedInUser> signedInUsers = new(StringComparer.OrdinalIgnoreCase);
@@ -48,142 +44,52 @@ public sealed class KustoQueryService : IKustoCatalogService, IKustoGraphQuerySe
         {
             Timeout = TimeSpan.FromMinutes(10),
         };
+        executionService = new KustoExecutionService(
+            httpClient,
+            this,
+            new HttpsKustoEndpointPolicy());
     }
 
     /// <inheritdoc />
     public event EventHandler? SignedInUsersChanged;
 
     /// <inheritdoc />
-    public async Task<KustoQueryResult> ExecuteAsync(
+    public Task<KustoQueryResult> ExecuteAsync(
         KustoQueryRequest request,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(request);
         ObjectDisposedException.ThrowIf(isDisposed, this);
-        cancellationToken.ThrowIfCancellationRequested();
-
-        bool isManagementCommand = IsManagementCommand(request.QueryText);
-        KustoQueryResult result = await ExecuteRestAsync(
-            request.ClusterUri,
-            isManagementCommand ? "/v1/rest/mgmt" : "/v1/rest/query",
-            request.DatabaseName,
-            request.QueryText,
-            isManagementCommand ? "Command" : "Query",
-            cancellationToken).ConfigureAwait(false);
-
-        return result;
+        return executionService.ExecuteAsync(request, cancellationToken);
     }
 
     /// <inheritdoc />
-    public async Task<KustoGraphExportSummary> ExecuteGraphAsync(
+    public Task<KustoGraphExportSummary> ExecuteGraphAsync(
         KustoQueryRequest request,
         KustoGraphQueryPlan plan,
         IKustoGraphExportSink sink,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(request);
-        ArgumentNullException.ThrowIfNull(plan);
-        ArgumentNullException.ThrowIfNull(sink);
         ObjectDisposedException.ThrowIf(isDisposed, this);
-        cancellationToken.ThrowIfCancellationRequested();
-
-        if (!string.Equals(request.QueryText.Trim(), plan.Selection.Text, StringComparison.Ordinal))
-        {
-            throw new ArgumentException("The graph export plan does not describe the requested query.", nameof(plan));
-        }
-
-        KustoAuthenticationSession authenticationSession = await GetOrCreateAuthenticationSessionAsync(
-            request.ClusterUri,
-            cancellationToken).ConfigureAwait(false);
-        string accessToken = await authenticationSession.GetAccessTokenAsync(cancellationToken).ConfigureAwait(false);
-        string clientRequestId = $"OpenKustoExplorer.Graph;{Guid.NewGuid():D}";
-        using HttpRequestMessage requestMessage = CreateRestRequest(
-            request.ClusterUri,
-            "/v1/rest/query",
-            request.DatabaseName,
-            plan.ExportQueryText,
-            accessToken,
-            clientRequestId,
-            MaximumGraphResultRowCount);
-        Stopwatch stopwatch = Stopwatch.StartNew();
-        using HttpResponseMessage response = await httpClient.SendAsync(
-            requestMessage,
-            HttpCompletionOption.ResponseHeadersRead,
-            cancellationToken).ConfigureAwait(false);
-
-        if (!response.IsSuccessStatusCode)
-        {
-            string responseContent = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-            string errorMessage = KustoRestResponseParser.ParseError(
-                responseContent,
-                $"Kusto returned {(int)response.StatusCode} {response.ReasonPhrase}.");
-            throw new HttpRequestException(errorMessage, null, response.StatusCode);
-        }
-
-        await using Stream responseStream = await response.Content
-            .ReadAsStreamAsync(cancellationToken)
-            .ConfigureAwait(false);
-        KustoGraphExportSummary parsedSummary = await KustoGraphRestStreamParser.ParseAsync(
-            responseStream,
-            plan,
-            sink,
-            TimeSpan.Zero,
-            cancellationToken: cancellationToken).ConfigureAwait(false);
-        stopwatch.Stop();
-        return new KustoGraphExportSummary(
-            parsedSummary.NodeCount,
-            parsedSummary.EdgeCount,
-            stopwatch.Elapsed,
-            parsedSummary.ResultTable);
+        return executionService.ExecuteGraphAsync(request, plan, sink, cancellationToken);
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<KustoDatabaseInfo>> GetDatabasesAsync(
+    public Task<IReadOnlyList<KustoDatabaseInfo>> GetDatabasesAsync(
         Uri clusterUri,
         CancellationToken cancellationToken = default)
     {
-        ValidateClusterUri(clusterUri);
-        KustoQueryResult result = await ExecuteRestAsync(
-            clusterUri,
-            "/v1/rest/mgmt",
-            string.Empty,
-            ".show databases",
-            "Catalog",
-            cancellationToken).ConfigureAwait(false);
-
-        return CreateDatabaseInfos(result.Tables);
+        ObjectDisposedException.ThrowIf(isDisposed, this);
+        return executionService.GetDatabasesAsync(clusterUri, cancellationToken);
     }
 
     /// <inheritdoc />
-    public async Task<KustoDatabaseSchema> GetDatabaseSchemaAsync(
+    public Task<OpenKustoExplorer.Domain.Schema.KustoDatabaseSchema> GetDatabaseSchemaAsync(
         Uri clusterUri,
         string databaseName,
         CancellationToken cancellationToken = default)
     {
-        ValidateClusterUri(clusterUri);
-        ArgumentException.ThrowIfNullOrWhiteSpace(databaseName);
-
-        string escapedDatabaseName = EscapeEntityName(databaseName);
-        string command = $".show database {escapedDatabaseName} schema as json";
-        KustoQueryResult result = await ExecuteRestAsync(
-            clusterUri,
-            "/v1/rest/mgmt",
-            databaseName,
-            command,
-            "Schema",
-            cancellationToken).ConfigureAwait(false);
-        string schemaJson = FindSchemaJson(result.Tables);
-        KustoQueryResult functionResult = await ExecuteRestAsync(
-            clusterUri,
-            "/v1/rest/mgmt",
-            databaseName,
-            ".show functions",
-            "Functions",
-            cancellationToken).ConfigureAwait(false);
-        ReadOnlyCollection<KustoFunctionSchema> functions = KustoFunctionResultParser.Parse(functionResult.Tables);
-        KustoDatabaseSchema schema = KustoDatabaseSchemaParser.Parse(clusterUri.Host, databaseName, schemaJson);
-
-        return new KustoDatabaseSchema(schema.ClusterName, schema.DatabaseName, schema.Tables, functions);
+        ObjectDisposedException.ThrowIf(isDisposed, this);
+        return executionService.GetDatabaseSchemaAsync(clusterUri, databaseName, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -298,151 +204,16 @@ public sealed class KustoQueryService : IKustoCatalogService, IKustoGraphQuerySe
         }
     }
 
-    /// <summary>
-    /// Determines whether query text represents a dot-prefixed Kusto management command.
-    /// </summary>
-    /// <param name="queryText">The KQL text to classify.</param>
-    /// <returns><see langword="true"/> when the first non-whitespace character is a dot.</returns>
-    internal static bool IsManagementCommand(string queryText)
-    {
-        ReadOnlySpan<char> trimmedQuery = queryText.AsSpan().TrimStart();
-        return !trimmedQuery.IsEmpty && trimmedQuery[0] == '.';
-    }
-
-    private static HttpRequestMessage CreateRestRequest(
+    /// <inheritdoc />
+    async Task<string> IKustoAccessTokenProvider.GetAccessTokenAsync(
         Uri clusterUri,
-        string requestPath,
-        string databaseName,
-        string commandText,
-        string accessToken,
-        string clientRequestId,
-        int maximumRowCount)
+        CancellationToken cancellationToken)
     {
-        Uri requestUri = new(clusterUri, requestPath);
-        HttpRequestMessage requestMessage = new(HttpMethod.Post, requestUri)
-        {
-            Content = CreateRestContent(databaseName, commandText, maximumRowCount),
-        };
-        requestMessage.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        requestMessage.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
-        requestMessage.Headers.Add("x-ms-app", "OpenKustoExplorer");
-        requestMessage.Headers.Add("x-ms-client-request-id", clientRequestId);
-        requestMessage.Headers.Add("x-ms-readonly", "true");
-
-        return requestMessage;
-    }
-
-    private static ByteArrayContent CreateRestContent(
-        string databaseName,
-        string commandText,
-        int maximumRowCount)
-    {
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumRowCount);
-        using MemoryStream contentStream = new();
-        using (Utf8JsonWriter writer = new(contentStream))
-        {
-            writer.WriteStartObject();
-
-            if (!string.IsNullOrWhiteSpace(databaseName))
-            {
-                writer.WriteString("db", databaseName);
-            }
-
-            writer.WriteString("csl", commandText);
-            writer.WritePropertyName("properties");
-            writer.WriteStartObject();
-            writer.WritePropertyName("Options");
-            writer.WriteStartObject();
-            writer.WriteNumber("truncationmaxrecords", maximumRowCount);
-            writer.WriteBoolean("request_readonly", true);
-            writer.WriteEndObject();
-            writer.WriteEndObject();
-            writer.WriteEndObject();
-        }
-
-        ByteArrayContent content = new(contentStream.ToArray());
-        content.Headers.ContentType = new MediaTypeHeaderValue("application/json")
-        {
-            CharSet = "utf-8",
-        };
-
-        return content;
-    }
-
-    private static ReadOnlyCollection<KustoDatabaseInfo> CreateDatabaseInfos(
-        IReadOnlyList<KustoResultTable> tables)
-    {
-        KustoResultTable? databaseTable = null;
-        int databaseNameIndex = -1;
-        int prettyNameIndex = -1;
-
-        foreach (KustoResultTable table in tables)
-        {
-            int candidateIndex = GetColumnIndex(table, "DatabaseName");
-            if (candidateIndex >= 0)
-            {
-                databaseTable = table;
-                databaseNameIndex = candidateIndex;
-                prettyNameIndex = GetColumnIndex(table, "PrettyName");
-            }
-        }
-
-        if (databaseTable is null)
-        {
-            throw new InvalidDataException("Kusto returned no database catalog table.");
-        }
-
-        List<KustoDatabaseInfo> databases = [];
-
-        foreach (IReadOnlyList<string> values in databaseTable.Rows
-            .Select(row => row.Values)
-            .Where(values => !string.IsNullOrWhiteSpace(values[databaseNameIndex]))
-            .DistinctBy(values => values[databaseNameIndex], StringComparer.OrdinalIgnoreCase))
-        {
-            string name = values[databaseNameIndex];
-            string prettyName = prettyNameIndex >= 0 ? values[prettyNameIndex] : string.Empty;
-            string displayName = string.IsNullOrWhiteSpace(prettyName) ? name : prettyName;
-            databases.Add(new KustoDatabaseInfo(name, displayName));
-        }
-
-        return databases.AsReadOnly();
-    }
-
-    private static string EscapeEntityName(string entityName)
-    {
-        string escapedName = entityName.Replace("'", "''", StringComparison.Ordinal);
-        return $"['{escapedName}']";
-    }
-
-    private static string FindSchemaJson(IReadOnlyList<KustoResultTable> tables)
-    {
-        string? schemaJson = tables
-            .SelectMany(table => table.Rows)
-            .SelectMany(row => row.Values)
-            .LastOrDefault(value => value.StartsWith('{')
-                && value.Contains("\"Databases\"", StringComparison.Ordinal));
-
-        if (schemaJson is null)
-        {
-            throw new InvalidDataException("Kusto returned no database schema JSON.");
-        }
-
-        return schemaJson;
-    }
-
-    private static int GetColumnIndex(KustoResultTable table, string columnName)
-    {
-        int columnIndex = -1;
-
-        for (int index = 0; index < table.Columns.Count; index++)
-        {
-            if (string.Equals(table.Columns[index].Name, columnName, StringComparison.OrdinalIgnoreCase))
-            {
-                columnIndex = index;
-            }
-        }
-
-        return columnIndex;
+        ObjectDisposedException.ThrowIf(isDisposed, this);
+        KustoAuthenticationSession authenticationSession = await GetOrCreateAuthenticationSessionAsync(
+            clusterUri,
+            cancellationToken).ConfigureAwait(false);
+        return await authenticationSession.GetAccessTokenAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private static string GetAccountId(IAccount account)
@@ -450,16 +221,6 @@ public sealed class KustoQueryService : IKustoCatalogService, IKustoGraphQuerySe
         return string.IsNullOrWhiteSpace(account.HomeAccountId?.Identifier)
             ? account.Username
             : account.HomeAccountId.Identifier;
-    }
-
-    private static void ValidateClusterUri(Uri clusterUri)
-    {
-        ArgumentNullException.ThrowIfNull(clusterUri);
-
-        if (!clusterUri.IsAbsoluteUri || clusterUri.Scheme != Uri.UriSchemeHttps)
-        {
-            throw new ArgumentException("The cluster URI must be an absolute HTTPS URI.", nameof(clusterUri));
-        }
     }
 
     private async Task RefreshSignedInUserAsync(
@@ -592,46 +353,6 @@ public sealed class KustoQueryService : IKustoCatalogService, IKustoGraphQuerySe
 
             SignedInUsersChanged?.Invoke(this, EventArgs.Empty);
         }
-    }
-
-    private async Task<KustoQueryResult> ExecuteRestAsync(
-        Uri clusterUri,
-        string requestPath,
-        string databaseName,
-        string commandText,
-        string requestCategory,
-        CancellationToken cancellationToken)
-    {
-        KustoAuthenticationSession authenticationSession = await GetOrCreateAuthenticationSessionAsync(
-            clusterUri,
-            cancellationToken).ConfigureAwait(false);
-        string accessToken = await authenticationSession.GetAccessTokenAsync(cancellationToken).ConfigureAwait(false);
-        string clientRequestId = $"OpenKustoExplorer.{requestCategory};{Guid.NewGuid():D}";
-        using HttpRequestMessage requestMessage = CreateRestRequest(
-            clusterUri,
-            requestPath,
-            databaseName,
-            commandText,
-            accessToken,
-            clientRequestId,
-            MaximumResultRowCount);
-        Stopwatch stopwatch = Stopwatch.StartNew();
-        using HttpResponseMessage response = await httpClient.SendAsync(
-            requestMessage,
-            HttpCompletionOption.ResponseHeadersRead,
-            cancellationToken).ConfigureAwait(false);
-        string responseContent = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-        stopwatch.Stop();
-
-        if (!response.IsSuccessStatusCode)
-        {
-            string errorMessage = KustoRestResponseParser.ParseError(
-                responseContent,
-                $"Kusto returned {(int)response.StatusCode} {response.ReasonPhrase}.");
-            throw new HttpRequestException(errorMessage, null, response.StatusCode);
-        }
-
-        return KustoRestResponseParser.Parse(responseContent, stopwatch.Elapsed, MaximumResultRowCount);
     }
 
     private async Task<KustoAuthenticationSession> GetOrCreateAuthenticationSessionAsync(
