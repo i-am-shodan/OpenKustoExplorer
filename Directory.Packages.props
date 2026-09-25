@@ -20,7 +20,7 @@
     <PackageVersion Include="coverlet.collector" Version="10.0.1" />
     <PackageVersion Include="GitHub.Copilot.SDK" Version="1.0.14" />
     <PackageVersion Include="Lucide.Avalonia" Version="0.2.22" />
-    <PackageVersion Include="Meziantou.Analyzer" Version="3.0.259" />
+    <PackageVersion Include="Meziantou.Analyzer" Version="3.0.290" />
     <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.10" />
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.12" />
     <PackageVersion Include="Microsoft.Azure.Kusto.Language" Version="12.4.1" />
