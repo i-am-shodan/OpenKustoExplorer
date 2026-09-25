@@ -493,7 +493,7 @@ public sealed partial class WorkbenchView : UserControl, IDisposable
     /// <summary>
     /// Selects the custom dashboard time range for the Browser performance fixture.
     /// </summary>
-    /// <returns><see langword="true"/> when the custom time-range editor opened.</returns>
+    /// <returns><see langword="true"/> when the custom time-range selection was accepted.</returns>
     internal bool OpenPerformanceCustomTimeRange()
     {
         if (DataContext is not MainWindowViewModel viewModel
@@ -510,7 +510,7 @@ public sealed partial class WorkbenchView : UserControl, IDisposable
         }
 
         viewModel.Dashboard.SelectedTimeRangeOption = customOption;
-        return viewModel.Dashboard.IsCustomTimeRangeOpen;
+        return true;
     }
 
     /// <summary>
