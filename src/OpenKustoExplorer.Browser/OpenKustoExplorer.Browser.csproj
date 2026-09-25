@@ -20,7 +20,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
     <OutputType>Exe</OutputType>
-    <StaticWebAssetBasePath>app</StaticWebAssetBasePath>
+    <StaticWebAssetBasePath Condition="'$(StaticWebAssetBasePath)' == ''">app</StaticWebAssetBasePath>
     <TargetFramework>net10.0-browser</TargetFramework>
     <WasmBuildNative>true</WasmBuildNative>
   </PropertyGroup>

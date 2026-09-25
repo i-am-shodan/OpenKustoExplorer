@@ -1,0 +1,31 @@
+<Project>
+  <PropertyGroup>
+    <AvaloniaBrowserVersion Condition="'$(AvaloniaBrowserVersion)' == ''">12.1.2</AvaloniaBrowserVersion>
+    <AvaloniaBrowserPackageRoot>$(NuGetPackageRoot)avalonia.browser\$(AvaloniaBrowserVersion)</AvaloniaBrowserPackageRoot>
+  </PropertyGroup>
+
+  <Target
+      Name="CopyOpenKustoExplorerAvaloniaBrowserModules"
+      AfterTargets="Build"
+      Condition="'$(OutputPath)' != ''">
+    <PropertyGroup>
+      <OpenKustoExplorerBrowserAssetsOutput>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\$(OutputPath)'))avalonia-browser-assets</OpenKustoExplorerBrowserAssetsOutput>
+    </PropertyGroup>
+    <ItemGroup>
+      <OpenKustoExplorerAvaloniaBrowserModule Include="$(AvaloniaBrowserPackageRoot)\staticwebassets\**\*.*" />
+    </ItemGroup>
+    <RemoveDir Directories="$(OpenKustoExplorerBrowserAssetsOutput)" />
+    <Copy
+        SourceFiles="@(OpenKustoExplorerAvaloniaBrowserModule)"
+        DestinationFiles="@(OpenKustoExplorerAvaloniaBrowserModule->'$(OpenKustoExplorerBrowserAssetsOutput)\%(RecursiveDir)%(Filename)%(Extension)')" />
+  </Target>
+
+  <Target Name="IncludeOpenKustoExplorerAvaloniaBrowserModulesForPublish" BeforeTargets="ComputeFilesToPublish">
+    <ItemGroup>
+      <ResolvedFileToPublish Include="$(AvaloniaBrowserPackageRoot)\staticwebassets\**\*.*">
+        <RelativePath>avalonia-browser-assets\%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+</Project>

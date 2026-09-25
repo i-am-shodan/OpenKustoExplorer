@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="Microsoft.Identity.Client" />
+    <PackageReference Include="Microsoft.Identity.Web" />
+    <ProjectReference Include="..\OpenKustoExplorer.Kusto\OpenKustoExplorer.Kusto.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\OpenKustoExplorer.Web\Assistance\IWebCopilotService.cs" Link="Assistance\IWebCopilotService.cs" />
+    <Compile Include="..\OpenKustoExplorer.Web\Assistance\WebCopilotUnavailableException.cs" Link="Assistance\WebCopilotUnavailableException.cs" />
+    <Compile Include="..\OpenKustoExplorer.Web\Authentication\FederatedWebSignOutService.cs" Link="Authentication\FederatedWebSignOutService.cs" />
+    <Compile Include="..\OpenKustoExplorer.Web\Authentication\IWebSignOutService.cs" Link="Authentication\IWebSignOutService.cs" />
+    <Compile Include="..\OpenKustoExplorer.Web\Authentication\LocalDevelopmentWebSignOutService.cs" Link="Authentication\LocalDevelopmentWebSignOutService.cs" />
+    <Compile Include="..\OpenKustoExplorer.Web\Kusto\IHostAddressResolver.cs" Link="Kusto\IHostAddressResolver.cs" />
+    <Compile Include="..\OpenKustoExplorer.Web\Kusto\KustoGatewayEndpoints.cs" Link="Kusto\KustoGatewayEndpoints.cs" />
+    <Compile Include="..\OpenKustoExplorer.Web\Kusto\KustoOperationRegistry.cs" Link="Kusto\KustoOperationRegistry.cs" />
+    <Compile Include="..\OpenKustoExplorer.Web\Kusto\LocalDevelopmentKustoAccessTokenProvider.cs" Link="Kusto\LocalDevelopmentKustoAccessTokenProvider.cs" />
+    <Compile Include="..\OpenKustoExplorer.Web\Kusto\PublicAdxEndpointPolicy.cs" Link="Kusto\PublicAdxEndpointPolicy.cs" />
+    <Compile Include="..\OpenKustoExplorer.Web\Kusto\SystemHostAddressResolver.cs" Link="Kusto\SystemHostAddressResolver.cs" />
+    <Compile Include="..\OpenKustoExplorer.Web\Kusto\WebKustoAccessTokenProvider.cs" Link="Kusto\WebKustoAccessTokenProvider.cs" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsAotCompatible>false</IsAotCompatible>
+  </PropertyGroup>
+
+</Project>

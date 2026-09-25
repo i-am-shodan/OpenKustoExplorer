@@ -6,7 +6,7 @@ namespace OpenKustoExplorer.Web.Assistance;
 /// <summary>
 /// Executes stateless Copilot turns through the server-configured provider.
 /// </summary>
-internal interface IWebCopilotService
+public interface IWebCopilotService
 {
     /// <summary>Gets the configured model after validating provider settings.</summary>
     /// <returns>The configured model.</returns>

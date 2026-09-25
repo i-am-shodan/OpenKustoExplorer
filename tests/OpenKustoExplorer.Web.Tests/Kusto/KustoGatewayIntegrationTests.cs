@@ -76,6 +76,37 @@ public sealed class KustoGatewayIntegrationTests
     }
 
     /// <summary>
+    /// Verifies the portable client and gateway remain aligned beneath a host path prefix.
+    /// </summary>
+    /// <returns>A task that completes after prefixed and root routes are inspected.</returns>
+    [Fact]
+    public async Task SessionUsesConfiguredGatewayPrefix()
+    {
+        using HttpClient adxClient = new(new CapturingAdxHandler());
+        using TestWebApplicationFactory factory = new(adxClient, routePrefix: "/oke");
+        using HttpClient browserClient = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+            HandleCookies = true,
+        });
+        browserClient.BaseAddress = new Uri(browserClient.BaseAddress!, "oke/");
+        using KustoGatewayClient gatewayClient = new(browserClient);
+
+        KustoGatewaySessionResponse session = await gatewayClient.GetSessionAsync();
+        using HttpResponseMessage prefixedResponse = await browserClient.GetAsync(
+            KustoGatewayRoutes.Session);
+        using HttpResponseMessage rootResponse = await browserClient.GetAsync(
+            new Uri("/api/v1/kusto/session", UriKind.Relative));
+
+        Assert.Equal("test@example.com", session.AccountName);
+        Assert.Equal(
+            "same-origin",
+            Assert.Single(prefixedResponse.Headers.GetValues("Cross-Origin-Opener-Policy")));
+        Assert.False(rootResponse.Headers.Contains("Cross-Origin-Opener-Policy"));
+        Assert.Equal(HttpStatusCode.NotFound, rootResponse.StatusCode);
+    }
+
+    /// <summary>
     /// Verifies database and schema discovery traverse the shared management-query gateway.
     /// </summary>
     /// <returns>A task that completes after catalog and schema results are inspected.</returns>
@@ -675,17 +706,21 @@ public sealed class KustoGatewayIntegrationTests
     {
         private readonly HttpClient adxClient;
         private readonly IWebCopilotService? copilotService;
+        private readonly string routePrefix;
 
         internal TestWebApplicationFactory(
             HttpClient adxClient,
-            IWebCopilotService? copilotService = null)
+            IWebCopilotService? copilotService = null,
+            string routePrefix = "/")
         {
             this.adxClient = adxClient;
             this.copilotService = copilotService;
+            this.routePrefix = routePrefix;
         }
 
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
+            builder.UseSetting("Web:BasePath", routePrefix);
             builder.ConfigureTestServices(services =>
             {
                 services

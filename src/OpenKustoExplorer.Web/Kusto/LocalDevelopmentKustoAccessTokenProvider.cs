@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Headers;
 using Microsoft.Identity.Client;
 using OpenKustoExplorer.Kusto.Authentication;
@@ -15,6 +16,7 @@ internal sealed class LocalDevelopmentKustoAccessTokenProvider : IKustoAccessTok
         new(StringComparer.OrdinalIgnoreCase);
 
     private readonly HttpClient httpClient;
+    private readonly IHttpContextAccessor httpContextAccessor;
     private readonly Dictionary<string, IPublicClientApplication> publicClientApplications =
         new(StringComparer.OrdinalIgnoreCase);
 
@@ -24,10 +26,15 @@ internal sealed class LocalDevelopmentKustoAccessTokenProvider : IKustoAccessTok
     /// <summary>
     /// Initializes a new instance of the <see cref="LocalDevelopmentKustoAccessTokenProvider"/> class.
     /// </summary>
+    /// <param name="httpContextAccessor">Provides the current loopback request.</param>
     /// <param name="httpClient">The client used to retrieve Kusto authentication metadata.</param>
-    public LocalDevelopmentKustoAccessTokenProvider(HttpClient httpClient)
+    public LocalDevelopmentKustoAccessTokenProvider(
+        IHttpContextAccessor httpContextAccessor,
+        HttpClient httpClient)
     {
+        ArgumentNullException.ThrowIfNull(httpContextAccessor);
         ArgumentNullException.ThrowIfNull(httpClient);
+        this.httpContextAccessor = httpContextAccessor;
         this.httpClient = httpClient;
     }
 
@@ -38,6 +45,13 @@ internal sealed class LocalDevelopmentKustoAccessTokenProvider : IKustoAccessTok
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         ArgumentNullException.ThrowIfNull(clusterUri);
+        IPAddress? remoteAddress = httpContextAccessor.HttpContext?.Connection.RemoteIpAddress;
+        if (remoteAddress is null || !IPAddress.IsLoopback(remoteAddress))
+        {
+            throw new UnauthorizedAccessException(
+                "Local development token acquisition accepts loopback requests only.");
+        }
+
         AuthenticationSession session = await GetOrCreateSessionAsync(clusterUri, cancellationToken)
             .ConfigureAwait(false);
         return await session.GetAccessTokenAsync(cancellationToken).ConfigureAwait(false);

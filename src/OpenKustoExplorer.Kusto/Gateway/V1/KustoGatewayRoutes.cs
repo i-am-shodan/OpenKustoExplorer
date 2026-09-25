@@ -43,50 +43,78 @@ public static class KustoGatewayRoutes
     /// <summary>
     /// Gets the Copilot completion endpoint.
     /// </summary>
-    public const string Copilot = "/api/v1/copilot";
+    public const string Copilot = "api/v1/copilot";
 
     /// <summary>
     /// Gets the configured Copilot model endpoint.
     /// </summary>
-    public const string CopilotModels = "/api/v1/copilot/models";
+    public const string CopilotModels = "api/v1/copilot/models";
 
     /// <summary>
     /// Gets the database catalog endpoint.
     /// </summary>
-    public const string Databases = "/api/v1/kusto/databases";
+    public const string Databases = "api/v1/kusto/databases";
 
     /// <summary>
     /// Gets the streaming graph export endpoint.
     /// </summary>
-    public const string Graph = "/api/v1/kusto/graph";
+    public const string Graph = "api/v1/kusto/graph";
 
     /// <summary>
     /// Gets the operation cancellation route prefix.
     /// </summary>
-    public const string Operations = "/api/v1/kusto/operations";
+    public const string Operations = "api/v1/kusto/operations";
 
     /// <summary>
     /// Gets the query endpoint.
     /// </summary>
-    public const string Query = "/api/v1/kusto/query";
+    public const string Query = "api/v1/kusto/query";
 
     /// <summary>
     /// Gets the database schema endpoint.
     /// </summary>
-    public const string Schema = "/api/v1/kusto/schema";
+    public const string Schema = "api/v1/kusto/schema";
 
     /// <summary>
     /// Gets the authenticated gateway session endpoint.
     /// </summary>
-    public const string Session = "/api/v1/kusto/session";
+    public const string Session = "api/v1/kusto/session";
 
     /// <summary>
     /// Gets the top-level Web sign-out endpoint.
     /// </summary>
-    public const string SignOut = "/auth/signout";
+    public const string SignOut = "auth/signout";
 
     /// <summary>
     /// Gets the current wire-protocol version.
     /// </summary>
     public const int Version = 1;
+
+    private const string BrowserEntryPath = "app/index.html";
+
+    /// <summary>
+    /// Gets the same-origin gateway base URI from the browser entry-page URI.
+    /// </summary>
+    /// <param name="browserPageUri">The absolute URI of <c>app/index.html</c>.</param>
+    /// <returns>The host URI ending at the application path base.</returns>
+    public static Uri GetApplicationBaseUri(Uri browserPageUri)
+    {
+        ArgumentNullException.ThrowIfNull(browserPageUri);
+        if (!browserPageUri.IsAbsoluteUri
+            || !browserPageUri.AbsolutePath.EndsWith(BrowserEntryPath, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"The browser page URI must end with '{BrowserEntryPath}'.",
+                nameof(browserPageUri));
+        }
+
+        string basePath = browserPageUri.AbsolutePath[..^BrowserEntryPath.Length];
+        UriBuilder builder = new(browserPageUri)
+        {
+            Path = basePath,
+            Query = string.Empty,
+            Fragment = string.Empty,
+        };
+        return builder.Uri;
+    }
 }

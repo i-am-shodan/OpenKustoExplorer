@@ -8,11 +8,27 @@
     <PackageReference Include="Microsoft.Extensions.AI.OpenAI" />
     <PackageReference Include="Microsoft.Identity.Client" />
     <PackageReference Include="Microsoft.Identity.Web" />
+    <ProjectReference Include="..\OpenKustoExplorer.Web.Hosting\OpenKustoExplorer.Web.Hosting.csproj" />
     <ProjectReference Include="..\OpenKustoExplorer.Kusto\OpenKustoExplorer.Kusto.csproj" />
     <ProjectReference
         Include="..\OpenKustoExplorer.Browser\OpenKustoExplorer.Browser.csproj"
         ReferenceOutputAssembly="false"
         SkipGetTargetFrameworkProperties="true" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="Assistance\IWebCopilotService.cs" />
+    <Compile Remove="Assistance\WebCopilotUnavailableException.cs" />
+    <Compile Remove="Authentication\FederatedWebSignOutService.cs" />
+    <Compile Remove="Authentication\IWebSignOutService.cs" />
+    <Compile Remove="Authentication\LocalDevelopmentWebSignOutService.cs" />
+    <Compile Remove="Kusto\IHostAddressResolver.cs" />
+    <Compile Remove="Kusto\KustoGatewayEndpoints.cs" />
+    <Compile Remove="Kusto\KustoOperationRegistry.cs" />
+    <Compile Remove="Kusto\LocalDevelopmentKustoAccessTokenProvider.cs" />
+    <Compile Remove="Kusto\PublicAdxEndpointPolicy.cs" />
+    <Compile Remove="Kusto\SystemHostAddressResolver.cs" />
+    <Compile Remove="Kusto\WebKustoAccessTokenProvider.cs" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -21,30 +37,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <IsAotCompatible>false</IsAotCompatible>
     <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
-    <AvaloniaBrowserPackageRoot>$(NuGetPackageRoot)avalonia.browser\$(AvaloniaBrowserVersion)</AvaloniaBrowserPackageRoot>
     <UserSecretsId>OpenKustoExplorer-Web-Development</UserSecretsId>
   </PropertyGroup>
 
-  <Target Name="CopyAvaloniaBrowserModules" AfterTargets="Build">
-    <PropertyGroup>
-      <_AvaloniaBrowserAssetsOutput>$(TargetDir)avalonia-browser-assets</_AvaloniaBrowserAssetsOutput>
-    </PropertyGroup>
-    <ItemGroup>
-      <_AvaloniaBrowserModule Include="$(AvaloniaBrowserPackageRoot)\staticwebassets\**\*.*" />
-    </ItemGroup>
-    <RemoveDir Directories="$(_AvaloniaBrowserAssetsOutput)" />
-    <Copy
-        SourceFiles="@(_AvaloniaBrowserModule)"
-        DestinationFiles="@(_AvaloniaBrowserModule->'$(_AvaloniaBrowserAssetsOutput)\%(RecursiveDir)%(Filename)%(Extension)')" />
-  </Target>
-
-  <Target Name="IncludeAvaloniaBrowserModulesForPublish" BeforeTargets="ComputeFilesToPublish">
-    <ItemGroup>
-      <ResolvedFileToPublish Include="$(AvaloniaBrowserPackageRoot)\staticwebassets\**\*.*">
-        <RelativePath>avalonia-browser-assets\%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
-        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-      </ResolvedFileToPublish>
-    </ItemGroup>
-  </Target>
+  <Import Project="..\OpenKustoExplorer.Browser\OpenKustoExplorer.BrowserHost.targets" />
 
 </Project>
