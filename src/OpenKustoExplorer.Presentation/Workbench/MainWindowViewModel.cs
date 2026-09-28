@@ -4549,6 +4549,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
             KustoExplorerImportResult result = await importService.ImportConnectionsAsync(cancellationToken);
             int existingConnectionCount = 0;
             int importedConnectionCount = 0;
+            KustoClusterViewModel? firstImportedCluster = null;
 
             foreach (KustoClusterConnection connection in result.Connections)
             {
@@ -4563,13 +4564,17 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
                 }
                 else
                 {
-                    Clusters.Add(CreateClusterViewModel(connection));
+                    KustoClusterViewModel importedCluster = CreateClusterViewModel(connection);
+                    Clusters.Add(importedCluster);
+                    firstImportedCluster ??= importedCluster;
                     importedConnectionCount++;
                 }
             }
 
             if (importedConnectionCount > 0)
             {
+                SchemaFilterText = string.Empty;
+                SelectedExplorerItem = firstImportedCluster;
                 RebuildFolders();
                 UpdateVisibleClusters();
                 PersistCatalog();
@@ -4583,6 +4588,11 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
                 RefreshExistingTabGroups();
                 SelectedDocument = firstImportedTab;
                 ScheduleDocumentAutosave();
+            }
+
+            if (firstImportedCluster is not null)
+            {
+                SelectedExplorerItem = firstImportedCluster;
             }
 
             int skippedConnectionCount = result.SkippedConnectionCount + existingConnectionCount;

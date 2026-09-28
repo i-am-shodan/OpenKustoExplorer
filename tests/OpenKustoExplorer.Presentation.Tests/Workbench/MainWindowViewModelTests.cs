@@ -2714,6 +2714,7 @@ public sealed class MainWindowViewModelTests
             connectionStore: store,
             documentStore: documentStore,
             importService: importService);
+        viewModel.SchemaFilterText = "does not match imported connections";
 
         await viewModel.ImportKustoExplorerDataCommand.ExecuteAsync(null);
 
@@ -2722,6 +2723,11 @@ public sealed class MainWindowViewModelTests
             viewModel.Clusters,
             cluster => cluster.DisplayName == "Fabrikam");
         Assert.Equal("Imported", imported.FolderName);
+        Assert.Empty(viewModel.SchemaFilterText);
+        Assert.Same(imported, viewModel.SelectedExplorerItem);
+        KustoFolderViewModel importedFolder = Assert.Single(viewModel.Folders);
+        Assert.Contains(importedFolder, viewModel.VisibleExplorerItems);
+        Assert.Contains(imported, importedFolder.VisibleClusters);
         KustoDocumentViewModel[] importedTabs = viewModel.Documents
             .Where(document => document.GroupName == "Kusto Explorer tabs")
             .ToArray();

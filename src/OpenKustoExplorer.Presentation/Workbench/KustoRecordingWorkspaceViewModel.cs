@@ -1227,11 +1227,19 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
 
     private async Task OpenRecordingAsync(CancellationToken cancellationToken)
     {
-        await RefreshAsync(cancellationToken);
         NewSessionName = $"Investigation {timeProvider.GetLocalNow():yyyy-MM-dd HHmm}";
         RecordingErrorText = string.Empty;
         IsAppendMode = false;
         IsRecordingDialogOpen = true;
+
+        try
+        {
+            await RefreshAsync(cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            RecordingErrorText = exception.Message;
+        }
     }
 
     private void CloseRecordingDialog()
@@ -1432,6 +1440,7 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
                     cancellationToken);
             }
 
+            RecordingErrorText = string.Empty;
             activePeriod = null;
             activeSessionId = null;
             activeSessionName = string.Empty;

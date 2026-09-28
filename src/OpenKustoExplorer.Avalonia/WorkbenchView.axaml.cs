@@ -1651,7 +1651,13 @@ public sealed partial class WorkbenchView : UserControl, IDisposable
 
             bool isSelectedDatabase = DataContext is MainWindowViewModel viewModel
                 && ReferenceEquals(viewModel.SelectedExplorerItem, treeViewItem.DataContext);
-            treeViewItem.IsExpanded = treeViewItem.DataContext is KustoClusterViewModel || isSelectedDatabase;
+            bool containsSelectedCluster = DataContext is MainWindowViewModel clusterViewModel
+                && treeViewItem.DataContext is KustoFolderViewModel clusterFolder
+                && clusterViewModel.SelectedExplorerItem is KustoClusterViewModel selectedCluster
+                && clusterFolder.Clusters.Contains(selectedCluster);
+            treeViewItem.IsExpanded = treeViewItem.DataContext is KustoClusterViewModel
+                || isSelectedDatabase
+                || containsSelectedCluster;
         }
     }
 

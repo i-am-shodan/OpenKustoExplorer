@@ -42,6 +42,68 @@ public sealed class KustoRecordingWorkspaceViewModelTests
     }
 
     /// <summary>
+    /// Verifies a recording-storage refresh failure still opens the dialog and exposes the error.
+    /// </summary>
+    /// <returns>A task that completes after the failed refresh.</returns>
+    [Fact]
+    public async Task OpenRecordingFailureStillShowsDialogAndError()
+    {
+        string directoryPath = CreateTemporaryDirectory();
+        string filePath = Path.Combine(directoryPath, "recorded-sessions.db");
+        SqliteKustoRecordedSessionStore store = new(filePath);
+
+        try
+        {
+            KustoRecordingWorkspaceViewModel viewModel = CreateViewModel(store);
+            store.Dispose();
+
+            await viewModel.OpenRecordingCommand.ExecuteAsync(null);
+
+            Assert.True(viewModel.IsRecordingDialogOpen);
+            Assert.True(viewModel.HasRecordingError);
+            Assert.NotEmpty(viewModel.RecordingErrorText);
+        }
+        finally
+        {
+            store.Dispose();
+            DeleteTemporaryDirectory(directoryPath);
+        }
+    }
+
+    /// <summary>
+    /// Verifies a stop failure preserves active recording state and exposes the persistence error.
+    /// </summary>
+    /// <returns>A task that completes after the failed stop.</returns>
+    [Fact]
+    public async Task StopRecordingFailurePreservesStateAndReportsError()
+    {
+        string directoryPath = CreateTemporaryDirectory();
+        string filePath = Path.Combine(directoryPath, "recorded-sessions.db");
+        SqliteKustoRecordedSessionStore store = new(filePath);
+
+        try
+        {
+            KustoRecordingWorkspaceViewModel viewModel = CreateViewModel(store);
+            await viewModel.OpenRecordingCommand.ExecuteAsync(null);
+            viewModel.NewSessionName = "Stop failure";
+            await viewModel.StartRecordingCommand.ExecuteAsync(null);
+            store.Dispose();
+
+            await viewModel.StopRecordingCommand.ExecuteAsync(null);
+
+            Assert.True(viewModel.IsRecording);
+            Assert.True(viewModel.HasActiveRecording);
+            Assert.True(viewModel.HasRecordingError);
+            Assert.NotEmpty(viewModel.RecordingErrorText);
+        }
+        finally
+        {
+            store.Dispose();
+            DeleteTemporaryDirectory(directoryPath);
+        }
+    }
+
+    /// <summary>
     /// Verifies recorded result pages materialize at most 50 rows across result tables.
     /// </summary>
     [Fact]
