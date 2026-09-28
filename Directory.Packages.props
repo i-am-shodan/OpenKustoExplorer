@@ -26,8 +26,8 @@
     <PackageVersion Include="Microsoft.Azure.Kusto.Language" Version="12.4.1" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.12" />
     <PackageVersion Include="Microsoft.Extensions.AI" Version="10.10.0" />
-    <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.10.0" />
-    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.10.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.10.1" />
+    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.10.1" />
     <PackageVersion Include="Microsoft.Identity.Client" Version="4.90.0" />
     <PackageVersion Include="Microsoft.Identity.Web" Version="4.14.2" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
