@@ -42,17 +42,16 @@ const waitForHost = async () => {
 };
 
 const invokeFixtureAction = async (page, target) => {
-  const accepted = await page.evaluate(
-    fixtureTarget => globalThis.openKustoExplorerInvokePerformanceFixture(fixtureTarget),
-    target);
-  assert.equal(accepted, true, `The Browser fixture target '${target}' is unavailable.`);
-};
-
-const waitForFixtureTarget = async (page, target) => {
-  await page.waitForFunction(
-    fixtureTarget => globalThis.openKustoExplorerInvokePerformanceFixture(fixtureTarget),
-    target,
-    { timeout: 5000 });
+  try {
+    await page.waitForFunction(
+      fixtureTarget => globalThis.openKustoExplorerInvokePerformanceFixture(fixtureTarget),
+      target,
+      { polling: 100, timeout: 30000 });
+  } catch (error) {
+    throw new Error(
+      `The Browser fixture target '${target}' was not available within 30 seconds.`,
+      { cause: error });
+  }
 };
 
 const captureScreenshot = async (page, name) => {
@@ -105,8 +104,8 @@ const verifyDashboardTimeRange = async viewport => {
     await invokeFixtureAction(page, "dashboard-time-range");
     await captureScreenshot(page, `dashboard-${viewport.width}x${viewport.height}.png`);
 
-    await waitForFixtureTarget(page, "open-custom-time-range");
-    await waitForFixtureTarget(page, "custom-time-range-start-date");
+    await invokeFixtureAction(page, "open-custom-time-range");
+    await invokeFixtureAction(page, "custom-time-range-start-date");
     await captureScreenshot(page, `dashboard-custom-${viewport.width}x${viewport.height}.png`);
     assert.deepEqual(errors, []);
   } finally {

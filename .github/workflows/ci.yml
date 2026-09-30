@@ -611,6 +611,7 @@ jobs:
           host_pid=$!
           trap 'kill "$host_pid" 2>/dev/null || true' EXIT
           OPEN_KUSTO_EXPLORER_WEB_URL=http://127.0.0.1:5216 \
+            OPEN_KUSTO_EXPLORER_SMOKE_ARTIFACTS="$GITHUB_WORKSPACE/artifacts/browser-smoke" \
             npm test --prefix tests/OpenKustoExplorer.BrowserSmoke
 
       - name: Upload Browser smoke log
@@ -618,5 +619,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: OpenKustoExplorer-browser-smoke-log
-          path: artifacts/browser-smoke-host.log
+          path: |
+            artifacts/browser-smoke-host.log
+            artifacts/browser-smoke
           if-no-files-found: warn
