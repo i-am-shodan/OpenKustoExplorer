@@ -732,6 +732,50 @@
                     </StackPanel>
                   </Button>
                   <Button
+                      AutomationProperties.Name="Pause recording session"
+                      Classes="command"
+                      HorizontalAlignment="Stretch"
+                      HorizontalContentAlignment="Left"
+                      Command="{Binding Recording.PauseRecordingCommand}"
+                      IsVisible="{Binding Recording.IsRecording}"
+                      ToolTip.Tip="Pause query capture temporarily">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <LucideIcon
+                          Kind="Pause"
+                          Size="14"
+                          StrokeWidth="2"
+                          IsVisible="{Binding !Recording.PauseRecordingCommand.IsRunning}" />
+                      <ProgressBar
+                          Width="14"
+                          Height="3"
+                          IsIndeterminate="True"
+                          IsVisible="{Binding Recording.PauseRecordingCommand.IsRunning}" />
+                      <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="Pause recording session" />
+                    </StackPanel>
+                  </Button>
+                  <Button
+                      AutomationProperties.Name="Resume recording session"
+                      Classes="command"
+                      HorizontalAlignment="Stretch"
+                      HorizontalContentAlignment="Left"
+                      Command="{Binding Recording.ResumeRecordingCommand}"
+                      IsVisible="{Binding Recording.IsPaused}"
+                      ToolTip.Tip="Resume query capture">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <LucideIcon
+                          Kind="Play"
+                          Size="14"
+                          StrokeWidth="2"
+                          IsVisible="{Binding !Recording.ResumeRecordingCommand.IsRunning}" />
+                      <ProgressBar
+                          Width="14"
+                          Height="3"
+                          IsIndeterminate="True"
+                          IsVisible="{Binding Recording.ResumeRecordingCommand.IsRunning}" />
+                      <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="Resume recording session" />
+                    </StackPanel>
+                  </Button>
+                  <Button
                       AutomationProperties.Name="Stop recording session"
                       Classes="dangerCommand"
                       HorizontalAlignment="Stretch"
@@ -1249,7 +1293,7 @@
                     <Grid
                         Grid.Row="0"
                         Margin="12,5"
-                        ColumnDefinitions="*,220,Auto,Auto"
+                        ColumnDefinitions="*,220,Auto,Auto,Auto,Auto,Auto"
                         ColumnSpacing="8">
                       <TextBlock
                           Grid.Column="0"
@@ -1286,7 +1330,35 @@
                           FontSize="{DynamicResource TypeSmallSize}"
                           Text="{Binding ResultViewSummary}" />
                       <Button
+                          x:Name="PreviousResultPageButton"
                           Grid.Column="3"
+                          AutomationProperties.Name="Previous result page"
+                          Classes="treeAction"
+                          Command="{Binding PreviousResultPageCommand}"
+                          IsVisible="{Binding HasMultipleResultPages}"
+                          ToolTip.Tip="Previous result page">
+                        <LucideIcon Kind="ChevronLeft" Size="13" />
+                      </Button>
+                      <TextBlock
+                          Grid.Column="4"
+                          VerticalAlignment="Center"
+                          Classes="tertiary"
+                          FontSize="{DynamicResource TypeSmallSize}"
+                          IsVisible="{Binding HasMultipleResultPages}"
+                          Text="{Binding ResultPageText}" />
+                      <Button
+                          x:Name="NextResultPageButton"
+                          Grid.Column="5"
+                          AutomationProperties.Name="Next result page"
+                          Classes="treeAction"
+                          Command="{Binding NextResultPageCommand}"
+                          IsVisible="{Binding HasMultipleResultPages}"
+                          ToolTip.Tip="Next result page">
+                        <LucideIcon Kind="ChevronRight" Size="13" />
+                      </Button>
+                      <Button
+                          x:Name="ClearResultFiltersButton"
+                          Grid.Column="6"
                           AutomationProperties.Name="Clear result filters"
                           Classes="treeAction"
                           Command="{Binding ClearResultFiltersCommand}"
@@ -1445,11 +1517,29 @@
                             Background="Transparent"
                             BorderThickness="0"
                             ContainerPrepared="OnResultRowContainerPrepared"
+                            ContextRequested="OnResultsListContextRequested"
                             ItemsSource="{Binding ResultRows}"
                             KeyDown="OnResultsListKeyDown"
                             SelectionMode="Multiple"
                             ScrollViewer.VerticalScrollBarVisibility="Hidden"
                             TemplateApplied="OnResultsListTemplateApplied">
+                          <ListBox.ContextMenu>
+                            <ContextMenu>
+                              <MenuItem Header="Copy selected values" Click="OnCopyResultValueClick" />
+                              <MenuItem Header="Copy row" Click="OnCopyResultRowClick" />
+                              <Separator />
+                              <MenuItem Header="Filter query by this value" Click="OnAddCellFilterClick" />
+                              <MenuItem Header="Filter query by this row" Click="OnAddRowFilterClick" />
+                              <Separator />
+                              <MenuItem Header="Mark value as interesting" Click="OnMarkRecordedCellClick" />
+                              <MenuItem Header="Mark all values in this column as interesting" Click="OnMarkRecordedColumnClick" />
+                              <MenuItem Header="Remove value mark" Click="OnUnmarkRecordedCellClick" />
+                              <Separator />
+                              <MenuItem Header="Copy selected rows as KQL datatable" Click="OnCopyDatatableClick" />
+                              <MenuItem Header="Copy all rows as KQL datatable" Click="OnCopyAllDatatableClick" />
+                              <MenuItem Header="Conditional formatting..." Click="OnConditionalFormattingClick" />
+                            </ContextMenu>
+                          </ListBox.ContextMenu>
                           <ListBox.Styles>
                             <Style Selector="ListBoxItem">
                               <Setter Property="HorizontalContentAlignment" Value="Stretch" />
@@ -1475,44 +1565,25 @@
                                         BorderBrush="{DynamicResource DecorativeDividerBrush}"
                                         BorderThickness="0,0,1,1"
                                         PointerPressed="OnResultCellPointerPressed">
-                                      <Border.ContextMenu>
-                                        <ContextMenu>
-                                          <MenuItem Header="Copy selected values" Click="OnCopyResultValueClick" />
-                                          <MenuItem Header="Copy row" Click="OnCopyResultRowClick" />
-                                          <Separator />
-                                          <MenuItem Header="Filter query by this value" Click="OnAddCellFilterClick" />
-                                          <MenuItem Header="Filter query by this row" Click="OnAddRowFilterClick" />
-                                          <Separator />
-                                          <MenuItem Header="Mark value as interesting" Click="OnMarkRecordedCellClick" />
-                                          <MenuItem Header="Mark all values in this column as interesting" Click="OnMarkRecordedColumnClick" />
-                                          <MenuItem Header="Remove value mark" Click="OnUnmarkRecordedCellClick" />
-                                          <Separator />
-                                          <MenuItem Header="Copy selected rows as KQL datatable" Click="OnCopyDatatableClick" />
-                                          <MenuItem Header="Copy all rows as KQL datatable" Click="OnCopyAllDatatableClick" />
-                                          <MenuItem Header="Conditional formatting..." Click="OnConditionalFormattingClick" />
-                                        </ContextMenu>
-                                      </Border.ContextMenu>
-                                        <Grid>
-                                          <Border Background="{Binding RecordingHighlightHex}" IsVisible="{Binding HasRecordingAnnotation}" />
-                                          <Grid Margin="10,5" ColumnDefinitions="*,Auto" ColumnSpacing="5">
-                                            <TextBlock
-                                              VerticalAlignment="Center"
-                                              AutomationProperties.Name="{Binding AutomationText}"
-                                              AutomationProperties.HelpText="{Binding RecordingAnnotationText}"
-                                              FontFamily="Cascadia Code, JetBrains Mono, Noto Sans Mono, monospace"
-                                              FontSize="{DynamicResource ResultCellTextSize}"
-                                              Text="{Binding Text}"
-                                              TextTrimming="CharacterEllipsis"
-                                              ToolTip.Tip="{Binding Text}" />
-                                            <LucideIcon
-                                              Grid.Column="1"
-                                              VerticalAlignment="Center"
-                                              Kind="Bookmark"
-                                              Size="11"
-                                              Foreground="{Binding RecordingAccentHex}"
-                                              IsVisible="{Binding HasRecordingAnnotation}"
-                                              ToolTip.Tip="{Binding RecordingAnnotationText}" />
-                                          </Grid>
+                                        <Grid Background="{Binding RecordingHighlightHex}" ColumnDefinitions="*,Auto" ColumnSpacing="5">
+                                          <TextBlock
+                                            Margin="10,5"
+                                            VerticalAlignment="Center"
+                                            AutomationProperties.HelpText="{Binding RecordingAnnotationText}"
+                                            FontFamily="Cascadia Code, JetBrains Mono, Noto Sans Mono, monospace"
+                                            FontSize="{DynamicResource ResultCellTextSize}"
+                                            Text="{Binding Text}"
+                                            TextTrimming="CharacterEllipsis"
+                                            ToolTip.Tip="{Binding Text}" />
+                                          <LucideIcon
+                                            Grid.Column="1"
+                                            Margin="0,5,10,5"
+                                            VerticalAlignment="Center"
+                                            Kind="Bookmark"
+                                            Size="11"
+                                            Foreground="{Binding RecordingAccentHex}"
+                                            IsVisible="{Binding HasRecordingAnnotation}"
+                                            ToolTip.Tip="{Binding RecordingAnnotationText}" />
                                         </Grid>
                                     </Border>
                                   </DataTemplate>
@@ -2951,7 +3022,18 @@
                           Grid.Row="1"
                           AutomationProperties.ControlTypeOverride="DataGrid"
                           AutomationProperties.Name="Recorded query result rows"
+                          ContextRequested="OnRecordedResultsContextRequested"
                           ItemsSource="{Binding Rows}">
+                          <ItemsControl.ContextMenu>
+                            <ContextMenu>
+                              <MenuItem Header="Mark value as interesting" Click="OnMarkHistoricalCellClick" />
+                              <MenuItem Header="Mark all values in this column as interesting" Click="OnMarkHistoricalColumnClick" />
+                              <MenuItem Header="Remove value mark" Click="OnUnmarkHistoricalCellClick" />
+                              <Separator />
+                              <MenuItem Header="Set as chain start" Click="OnSetHistoricalChainStartClick" />
+                              <MenuItem Header="Set as chain end" Click="OnSetHistoricalChainEndClick" />
+                            </ContextMenu>
+                          </ItemsControl.ContextMenu>
                           <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="presentation:KustoResultRowViewModel">
                               <Grid Background="{Binding BackgroundHex}">
@@ -2967,32 +3049,10 @@
                                             BorderBrush="{DynamicResource DecorativeDividerBrush}"
                                             BorderThickness="0,0,1,1"
                                             PointerPressed="OnRecordedResultCellPointerPressed">
-                                          <Border.ContextMenu>
-                                            <ContextMenu>
-                                              <MenuItem Header="Mark value as interesting" Click="OnMarkHistoricalCellClick" />
-                                              <MenuItem Header="Mark all values in this column as interesting" Click="OnMarkHistoricalColumnClick" />
-                                              <MenuItem Header="Remove value mark" Click="OnUnmarkHistoricalCellClick" />
-                                              <Separator />
-                                              <MenuItem Header="Set as chain start" Click="OnSetHistoricalChainStartClick" />
-                                              <MenuItem Header="Set as chain end" Click="OnSetHistoricalChainEndClick" />
-                                            </ContextMenu>
-                                          </Border.ContextMenu>
-                                          <Grid>
-                                            <Border Background="{Binding RecordingHighlightHex}" IsVisible="{Binding HasRecordingAnnotation}" />
+                                          <Grid Background="{Binding RecordingHighlightHex}">
                                             <Grid Margin="8,4" ColumnDefinitions="*,Auto" ColumnSpacing="5">
-                                              <TextBlock VerticalAlignment="Center" AutomationProperties.Name="{Binding AutomationText}" FontFamily="Cascadia Code, JetBrains Mono, Noto Sans Mono, monospace" FontSize="{DynamicResource TypeSmallSize}" Text="{Binding Text}" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Text}" />
-                                              <StackPanel Grid.Column="1" VerticalAlignment="Center" Orientation="Horizontal" Spacing="3">
-                                                <LucideIcon Kind="Sparkles" Size="10" Foreground="{Binding RecordingAccentHex}" IsVisible="{Binding IsRecordedInterestMatch}" ToolTip.Tip="Matches a recorded value of interest" />
-                                                <Border Padding="4,1" Background="{Binding RecordingAccentHex}" CornerRadius="2" IsVisible="{Binding IsRecordedPertinent}">
-                                                  <TextBlock FontSize="{DynamicResource TypeBadgeSize}" FontWeight="SemiBold" Foreground="{DynamicResource OnAccentBrush}" Text="MARKED" />
-                                                </Border>
-                                                <Border Padding="4,1" BorderBrush="{DynamicResource SuccessBrush}" BorderThickness="1" CornerRadius="2" IsVisible="{Binding IsChainStart}">
-                                                  <TextBlock FontSize="{DynamicResource TypeBadgeSize}" FontWeight="SemiBold" Foreground="{DynamicResource SuccessBrush}" Text="START" />
-                                                </Border>
-                                                <Border Padding="4,1" BorderBrush="{DynamicResource InfoBrush}" BorderThickness="1" CornerRadius="2" IsVisible="{Binding IsChainEnd}">
-                                                  <TextBlock FontSize="{DynamicResource TypeBadgeSize}" FontWeight="SemiBold" Foreground="{DynamicResource InfoBrush}" Text="END" />
-                                                </Border>
-                                              </StackPanel>
+                                              <TextBlock VerticalAlignment="Center" AutomationProperties.Name="{Binding AutomationText}" AutomationProperties.HelpText="{Binding RecordingAnnotationText}" FontFamily="Cascadia Code, JetBrains Mono, Noto Sans Mono, monospace" FontSize="{DynamicResource TypeSmallSize}" Text="{Binding Text}" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Text}" />
+                                              <LucideIcon Grid.Column="1" VerticalAlignment="Center" Kind="Bookmark" Size="11" Foreground="{Binding RecordingAccentHex}" IsVisible="{Binding HasRecordingAnnotation}" ToolTip.Tip="{Binding RecordingAnnotationText}" />
                                             </Grid>
                                           </Grid>
                                         </Border>
@@ -5315,20 +5375,21 @@
         IsVisible="{Binding IsOrganizeClusterOpen}"
         Background="#66000000">
       <Border
-          Width="420"
+          MaxWidth="520"
+          Margin="16"
           Padding="20"
-          HorizontalAlignment="Center"
+          HorizontalAlignment="Stretch"
           VerticalAlignment="Center"
           Background="{DynamicResource RaisedSurfaceBrush}"
           BorderBrush="{DynamicResource ControlBoundaryBrush}"
           BorderThickness="1"
           CornerRadius="6">
-        <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="14">
+        <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto" RowSpacing="14">
           <StackPanel Grid.Row="0" Spacing="2">
             <TextBlock
                 FontSize="{DynamicResource TypeTitleSize}"
                 FontWeight="SemiBold"
-                Text="Organize cluster" />
+                Text="{Binding ClusterDialogTitle}" />
             <TextBlock
                 Classes="muted"
                 FontSize="{DynamicResource TypeCompactSize}"
@@ -5336,25 +5397,80 @@
                 TextTrimming="CharacterEllipsis" />
           </StackPanel>
 
-          <StackPanel Grid.Row="1" Spacing="5">
-            <TextBlock Classes="sectionLabel" Text="FOLDER" />
+          <StackPanel Grid.Row="1" Spacing="5" IsVisible="{Binding IsEditingClusterConnection}">
+            <TextBlock Classes="sectionLabel" Text="CLUSTER URL" />
             <TextBox
-                AutomationProperties.Name="Cluster folder"
-              desktop:EnterKeyCommand.Command="{Binding SaveClusterFolderCommand}"
+                AutomationProperties.Name="Cluster URL"
+                desktop:EnterKeyCommand.Command="{Binding SaveClusterFolderCommand}"
                 Height="36"
                 Padding="10,0"
-                PlaceholderText="Leave empty for Explorer root"
-              Text="{Binding OrganizeFolderName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                PlaceholderText="https://cluster.region.kusto.windows.net"
+                Text="{Binding OrganizeClusterAddress, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                 VerticalContentAlignment="Center" />
           </StackPanel>
 
-          <Grid Grid.Row="2" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+          <StackPanel Grid.Row="2" Spacing="5" IsVisible="{Binding IsEditingClusterConnection}">
+            <TextBlock Classes="sectionLabel" Text="DISPLAY NAME" />
+            <TextBox
+                AutomationProperties.Name="Cluster display name"
+                desktop:EnterKeyCommand.Command="{Binding SaveClusterFolderCommand}"
+                Height="36"
+                Padding="10,0"
+                PlaceholderText="Production analytics"
+                Text="{Binding OrganizeClusterDisplayName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                VerticalContentAlignment="Center" />
+          </StackPanel>
+
+          <StackPanel Grid.Row="3" Spacing="5">
+            <TextBlock Classes="sectionLabel" Text="FOLDER" />
+            <TextBox
+                AutomationProperties.Name="Cluster folder"
+                desktop:EnterKeyCommand.Command="{Binding SaveClusterFolderCommand}"
+                Height="36"
+                Padding="10,0"
+                PlaceholderText="Leave empty for Explorer root"
+                Text="{Binding OrganizeFolderName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                VerticalContentAlignment="Center" />
+          </StackPanel>
+
+          <Border
+              Grid.Row="4"
+              Padding="10,8"
+              Background="{DynamicResource SubtleSurfaceBrush}"
+              CornerRadius="5"
+              IsVisible="{Binding IsEditingClusterConnection}">
+            <StackPanel Spacing="2">
+              <TextBlock Classes="sectionLabel" Text="REFERENCED ASSETS" />
+              <TextBlock
+                  Classes="tertiary"
+                  FontSize="{DynamicResource TypeSmallSize}"
+                  Text="{Binding OrganizeClusterReferenceSummary}"
+                  TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
+
+          <Border
+              Grid.Row="5"
+              Padding="10,8"
+              Background="{DynamicResource SubtleSurfaceBrush}"
+              BorderBrush="{DynamicResource ErrorBrush}"
+              BorderThickness="1"
+              CornerRadius="5"
+              IsVisible="{Binding HasOrganizeClusterError}">
+            <TextBlock
+                FontSize="{DynamicResource TypeCompactSize}"
+                Text="{Binding OrganizeClusterErrorText}"
+                TextWrapping="Wrap" />
+          </Border>
+
+          <Grid Grid.Row="6" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
             <TextBlock
                 Grid.Column="0"
                 VerticalAlignment="Center"
                 Classes="tertiary"
                 FontSize="{DynamicResource TypeSmallSize}"
-                Text="Folders are shared by name" />
+                Text="Folders are shared by name"
+                IsVisible="{Binding !IsEditingClusterConnection}" />
             <Button
                 Grid.Column="1"
                 Classes="command"
@@ -5363,10 +5479,10 @@
                 Height="36" />
             <Button
                 Grid.Column="2"
-                AutomationProperties.Name="Save cluster folder"
+              AutomationProperties.Name="{Binding ClusterDialogActionText}"
                 Classes="primaryCommand"
                 Command="{Binding SaveClusterFolderCommand}"
-                Content="Move"
+              Content="{Binding ClusterDialogActionText}"
                 Height="36" />
           </Grid>
         </Grid>

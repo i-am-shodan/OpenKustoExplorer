@@ -13,7 +13,8 @@
     <ProjectReference
         Include="..\OpenKustoExplorer.Browser\OpenKustoExplorer.Browser.csproj"
         ReferenceOutputAssembly="false"
-        SkipGetTargetFrameworkProperties="true" />
+      SkipGetTargetFrameworkProperties="true"
+      AdditionalProperties="StaticWebAssetBasePath=app" />
   </ItemGroup>
 
   <ItemGroup>

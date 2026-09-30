@@ -10,6 +10,8 @@ namespace OpenKustoExplorer.Browser;
 public static partial class BrowserPerformanceExports
 {
     private static BrowserPerformanceFixture? fixture;
+    private static int largeDocumentIndex;
+    private static int resultQueryIndex;
     private static WorkbenchView? workbench;
 
     /// <summary>
@@ -72,9 +74,47 @@ public static partial class BrowserPerformanceExports
             return currentWorkbench.OpenPerformanceCustomTimeRange();
         }
 
-        return string.Equals(action, "large-editor", StringComparison.Ordinal)
-            ? currentWorkbench.FocusPerformanceDocument(BrowserPerformanceFixture.GetLargeDocumentId())
-            : currentWorkbench.FocusPerformanceTarget(action);
+        if (string.Equals(action, "record-large-result", StringComparison.Ordinal))
+        {
+            return currentWorkbench.StartPerformanceRecordedQuery(
+                BrowserPerformanceFixture.LargeResultQueryText,
+                BrowserPerformanceFixture.ResultRowCount);
+        }
+
+        if (string.Equals(action, "large-result-query", StringComparison.Ordinal))
+        {
+            return currentWorkbench.SetPerformanceQuery(
+                BrowserPerformanceFixture.LargeResultQueryText);
+        }
+
+        if (string.Equals(action, "next-large-result-query", StringComparison.Ordinal))
+        {
+            resultQueryIndex++;
+            return currentWorkbench.SetPerformanceQuery(
+                BrowserPerformanceFixture.GetLargeResultQueryText(resultQueryIndex));
+        }
+
+        if (string.Equals(action, "query-document", StringComparison.Ordinal))
+        {
+            return currentWorkbench.FocusPerformanceDocument(
+                BrowserPerformanceFixture.GetDefaultDocumentId());
+        }
+
+        if (string.Equals(action, "next-large-editor", StringComparison.Ordinal))
+        {
+            IReadOnlyList<Guid> documentIds = BrowserPerformanceFixture.GetLargeDocumentIds();
+            largeDocumentIndex = (largeDocumentIndex + 1) % documentIds.Count;
+            return currentWorkbench.FocusPerformanceDocument(documentIds[largeDocumentIndex]);
+        }
+
+        if (string.Equals(action, "large-editor", StringComparison.Ordinal))
+        {
+            largeDocumentIndex = 0;
+            return currentWorkbench.FocusPerformanceDocument(BrowserPerformanceFixture.GetLargeDocumentId());
+        }
+
+        return InvokeTargetAction(currentWorkbench, action)
+            ?? currentWorkbench.FocusPerformanceTarget(action);
     }
 
     /// <summary>
@@ -88,5 +128,29 @@ public static partial class BrowserPerformanceExports
         ArgumentNullException.ThrowIfNull(performanceFixture);
         workbench = view;
         fixture = performanceFixture;
+        largeDocumentIndex = 0;
+        resultQueryIndex = 0;
+    }
+
+    private static bool? InvokeTargetAction(WorkbenchView currentWorkbench, string action)
+    {
+        const string ResultPagePrefix = "result-page-";
+        if (action.StartsWith(ResultPagePrefix, StringComparison.Ordinal))
+        {
+            return action[ResultPagePrefix.Length..] switch
+            {
+                "next" => currentWorkbench.ActivatePerformanceResultPage(next: true),
+                "previous" => currentWorkbench.ActivatePerformanceResultPage(next: false),
+                _ => false,
+            };
+        }
+
+        const string ActivatePrefix = "activate-";
+        if (action.StartsWith(ActivatePrefix, StringComparison.Ordinal))
+        {
+            return currentWorkbench.ActivatePerformanceTarget(action[ActivatePrefix.Length..]);
+        }
+
+        return null;
     }
 }

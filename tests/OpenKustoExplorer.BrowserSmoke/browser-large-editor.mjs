@@ -75,9 +75,9 @@ try {
     () => {
       const profile = JSON.parse(globalThis.openKustoExplorerGetPerformanceProfile());
       return profile.operations.some(operation =>
-        operation.name === "editor.analysis.apply"
+        operation.name === "editor.analysis.deferred"
         && operation.itemCount >= 5000
-        && operation.outcome === "completed");
+        && operation.outcome === "large-document");
     },
     null,
     { timeout: 120000 });
@@ -86,8 +86,8 @@ try {
   const analysisProfile = await page.evaluate(
     () => JSON.parse(globalThis.openKustoExplorerGetPerformanceProfile()));
   const analysis = analysisProfile.operations.find(operation =>
-    operation.name === "editor.analysis.apply" && operation.itemCount >= 5000);
-  assert.ok(analysis, "The 6,000-line fixture did not produce the expected semantic classifications.");
+    operation.name === "editor.analysis.deferred" && operation.itemCount >= 5000);
+  assert.ok(analysis, "The 6,000-line fixture did not defer automatic semantic analysis.");
   await page.evaluate(() => globalThis.openKustoExplorerResetPerformanceProfile());
 
   const scrollDurations = [];
@@ -116,7 +116,7 @@ try {
   const sortedPageDownDurations = pageDownDurations.toSorted((left, right) => left - right);
   const report = {
     analysis: {
-      classificationCount: analysis.itemCount,
+      mode: analysis.outcome,
       duration: analysis.duration
     },
     configuration,

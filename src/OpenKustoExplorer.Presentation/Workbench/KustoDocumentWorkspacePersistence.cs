@@ -54,10 +54,10 @@ internal sealed class KustoDocumentWorkspacePersistence : IDisposable
     /// <summary>
     /// Replaces any pending autosave with the latest immutable workspace snapshot.
     /// </summary>
-    /// <param name="workspace">The latest workspace snapshot.</param>
-    internal void Schedule(KustoDocumentWorkspace workspace)
+    /// <param name="createWorkspace">Creates the latest immutable workspace after the debounce interval.</param>
+    internal void Schedule(Func<KustoDocumentWorkspace> createWorkspace)
     {
-        ArgumentNullException.ThrowIfNull(workspace);
+        ArgumentNullException.ThrowIfNull(createWorkspace);
         CancellationTokenSource cancellationSource = new();
 
         lock (autosaveLock)
@@ -68,12 +68,11 @@ internal sealed class KustoDocumentWorkspacePersistence : IDisposable
                 return;
             }
 
-            latestWorkspace = workspace;
             autosaveCancellationSource?.Cancel();
             autosaveCancellationSource = cancellationSource;
         }
 
-        _ = ObservePersistenceTaskAsync(SaveAfterDelayAsync(workspace, cancellationSource));
+        _ = ObservePersistenceTaskAsync(SaveAfterDelayAsync(createWorkspace, cancellationSource));
     }
 
     /// <summary>
@@ -127,12 +126,19 @@ internal sealed class KustoDocumentWorkspacePersistence : IDisposable
     }
 
     private async Task SaveAfterDelayAsync(
-        KustoDocumentWorkspace workspace,
+        Func<KustoDocumentWorkspace> createWorkspace,
         CancellationTokenSource cancellationSource)
     {
         try
         {
             await Task.Delay(AutosaveDelay, cancellationSource.Token);
+            cancellationSource.Token.ThrowIfCancellationRequested();
+            KustoDocumentWorkspace workspace = createWorkspace();
+            lock (autosaveLock)
+            {
+                latestWorkspace = workspace;
+            }
+
             await SaveAsync(workspace);
         }
         catch (OperationCanceledException)

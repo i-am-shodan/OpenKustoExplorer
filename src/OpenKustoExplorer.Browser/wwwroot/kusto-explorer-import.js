@@ -18,6 +18,17 @@ const isSupportedFile = file => {
 
     const isRecoveryFile = file => file.name.toLowerCase().endsWith(".kebak");
 
+const createUniquePath = (path, selectedEntries) => {
+    let candidate = path;
+    let duplicateNumber = 2;
+    while (selectedEntries.has(candidate.toLowerCase())) {
+        candidate = `Selected-${duplicateNumber}/${path}`;
+        duplicateNumber++;
+    }
+
+    return candidate;
+};
+
 const readTextFile = async file => {
     const bytes = new Uint8Array(await file.arrayBuffer());
     if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
@@ -210,7 +221,11 @@ globalThis.openKustoExplorerSelectProfile = () => {
             try {
                 const entries = await select();
                 for (const entry of entries) {
-                    selectedEntries.set(entry.path.toLowerCase(), entry);
+                    const uniquePath = createUniquePath(entry.path, selectedEntries);
+                    selectedEntries.set(uniquePath.toLowerCase(), {
+                        ...entry,
+                        path: uniquePath
+                    });
                 }
 
                 updateStatus();

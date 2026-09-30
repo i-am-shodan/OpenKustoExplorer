@@ -8,7 +8,12 @@ const profilingEnabled = queryParameters.has("profile");
 const performanceFixtureEnabled = profilingEnabled
     && queryParameters.get("fixture") === "performance"
     && ["localhost", "127.0.0.1", "[::1]"].includes(globalThis.location.hostname);
-const maximumObservedEntryCount = 200;
+const requestedProfileCapacity = Number.parseInt(queryParameters.get("profileCapacity") ?? "", 10);
+const maximumObservedEntryCount = Number.isInteger(requestedProfileCapacity)
+    && requestedProfileCapacity >= 200
+    && requestedProfileCapacity <= 10000
+    ? requestedProfileCapacity
+    : 200;
 const runtimeResourceVersion = "1";
 const observedAnimationFrames = [];
 const observedEvents = [];

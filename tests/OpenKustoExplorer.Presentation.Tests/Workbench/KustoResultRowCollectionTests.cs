@@ -42,4 +42,36 @@ public sealed class KustoResultRowCollectionTests
         Assert.True(rows.ReplaceWith([second, first]));
         Assert.Equal(1, resetCount);
     }
+
+    /// <summary>
+    /// Verifies repeated recording annotation passes do not publish redundant cell notifications.
+    /// </summary>
+    [Fact]
+    public void IdenticalRecordingAnnotationDoesNotRaisePropertyChanges()
+    {
+        KustoResultColumn[] columns = [new KustoResultColumn("Value", "string")];
+        KustoResultRowViewModel row = new(new KustoResultRow(["value"]), 0, columns);
+        KustoResultCellViewModel cell = Assert.Single(row.Cells);
+        cell.SetRecordingAnnotation(
+            matchesInterest: true,
+            isPertinent: false,
+            isStart: false,
+            isEnd: false,
+            matchesManualInterest: false,
+            accentColorHex: "#001122",
+            highlightColorHex: "#33112233");
+        int propertyChangeCount = 0;
+        cell.PropertyChanged += (_, _) => propertyChangeCount++;
+
+        cell.SetRecordingAnnotation(
+            matchesInterest: true,
+            isPertinent: false,
+            isStart: false,
+            isEnd: false,
+            matchesManualInterest: false,
+            accentColorHex: "#001122",
+            highlightColorHex: "#33112233");
+
+        Assert.Equal(0, propertyChangeCount);
+    }
 }

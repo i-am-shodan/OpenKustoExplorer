@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using OpenKustoExplorer.Application.Diagnostics;
 using OpenKustoExplorer.Application.Execution;
 using OpenKustoExplorer.Application.Language;
 using OpenKustoExplorer.Application.Sessions;
@@ -24,6 +25,7 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
     private readonly IKustoRecordedRelationExtractor? relationExtractor;
     private readonly IKustoRecordedRelationPlanner? relationPlanner;
     private readonly IKustoRecordedSessionStore? store;
+    private readonly IWorkbenchPerformanceSink performanceSink;
     private readonly TimeProvider timeProvider;
     private Guid? activeSessionId;
     private string activeSessionName = string.Empty;
@@ -39,6 +41,7 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
     private bool isLoading;
     private bool isRenameExecutionOpen;
     private bool isRecordingDialogOpen;
+    private bool isWorkspaceActive = true;
     private string newSessionName = string.Empty;
     private KustoRecordedExecutionViewModel? observedExecution;
     private string recordingErrorText = string.Empty;
@@ -58,7 +61,7 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
     /// Initializes a new instance of the <see cref="KustoRecordingWorkspaceViewModel"/> class without recording services.
     /// </summary>
     public KustoRecordingWorkspaceViewModel()
-        : this(null, null, null, null, null, null, TimeProvider.System, null)
+        : this(null, null, null, null, null, null, TimeProvider.System, null, null)
     {
     }
 
@@ -73,6 +76,7 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
     /// <param name="chainGenerator">The validated KQL generator.</param>
     /// <param name="timeProvider">The application clock.</param>
     /// <param name="archiveService">The optional portable session archive service.</param>
+    /// <param name="performanceSink">The optional detailed workbench performance sink.</param>
     public KustoRecordingWorkspaceViewModel(
         IKustoRecordedSessionStore? store,
         IKustoPredicateInterestExtractor? interestExtractor,
@@ -81,7 +85,8 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
         IKustoRecordedRelationPlanner? relationPlanner,
         IKustoRecordedChainQueryGenerator? chainGenerator,
         TimeProvider? timeProvider = null,
-        IKustoRecordedSessionArchiveService? archiveService = null)
+        IKustoRecordedSessionArchiveService? archiveService = null,
+        IWorkbenchPerformanceSink? performanceSink = null)
     {
         this.store = store;
         this.interestExtractor = interestExtractor;
@@ -91,6 +96,7 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
         this.chainGenerator = chainGenerator;
         this.timeProvider = timeProvider ?? TimeProvider.System;
         this.archiveService = archiveService;
+        this.performanceSink = performanceSink ?? NullWorkbenchPerformanceSink.Instance;
         Sessions = new ObservableCollection<KustoRecordedSessionSummaryViewModel>();
         OpenRecordingCommand = new AsyncRelayCommand(OpenRecordingAsync, () => IsAvailable && !HasActiveRecording);
         CloseRecordingCommand = new RelayCommand(CloseRecordingDialog);
@@ -739,19 +745,43 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
             return false;
         }
 
+        int resultRowCount = completion.Result?.Tables.Sum(table => table.Rows.Count) ?? 0;
+        long completionOperationId = performanceSink.StartOperation(
+            "recording.execution.complete",
+            resultRowCount);
         await RecordingOperationGate.WaitAsync();
         try
         {
             if (discardedExecutionIds.Remove(recordedExecutionId))
             {
                 pendingExecutionPeriods.Remove(recordedExecutionId);
+                performanceSink.CompleteOperation(completionOperationId, "discarded");
                 return false;
             }
 
-            await store.CompleteExecutionAsync(recordedExecutionId, completion);
+            long persistenceOperationId = performanceSink.StartOperation(
+                "recording.execution.persist",
+                resultRowCount);
+            try
+            {
+                await store.CompleteExecutionAsync(recordedExecutionId, completion);
+                performanceSink.CompleteOperation(persistenceOperationId);
+            }
+            catch
+            {
+                performanceSink.CompleteOperation(persistenceOperationId, "failed");
+                throw;
+            }
+
             pendingExecutionPeriods.Remove(recordedExecutionId);
             await ReloadActiveValueInterestsAsync(CancellationToken.None);
+            performanceSink.CompleteOperation(completionOperationId);
             return true;
+        }
+        catch
+        {
+            performanceSink.CompleteOperation(completionOperationId, "failed");
+            throw;
         }
         finally
         {
@@ -1168,6 +1198,15 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
         return true;
     }
 
+    /// <summary>
+    /// Tracks whether historical session projections are currently visible.
+    /// </summary>
+    /// <param name="isActive">Whether the Recorded Sessions workspace is active.</param>
+    internal void SetWorkspaceActive(bool isActive)
+    {
+        isWorkspaceActive = isActive;
+    }
+
     private static string FormatValue(KustoResultValue value)
     {
         if (value.IsNull)
@@ -1448,7 +1487,14 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
             activeManualInterestValues.Clear();
             ActiveInterestsChanged?.Invoke(this, EventArgs.Empty);
             NotifyRecordingStateChanged();
-            await RefreshAsync(cancellationToken);
+            if (isWorkspaceActive)
+            {
+                await RefreshAsync(cancellationToken);
+            }
+            else
+            {
+                isLoaded = false;
+            }
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -1581,7 +1627,23 @@ public sealed class KustoRecordingWorkspaceViewModel : ObservableObject
         contextCell?.SetActionTarget(false);
         SelectedSessionSummary = summary;
         KustoRecordedSession? session = await store.GetSessionAsync(summary.Id, cancellationToken);
-        SelectedSession = session is null ? null : new KustoRecordedSessionViewModel(session);
+        int retainedRowCount = session?.Executions
+            .SelectMany(execution => execution.Result?.Tables ?? [])
+            .Sum(table => table.Rows.Count) ?? 0;
+        long materializeOperationId = performanceSink.StartOperation(
+            "recording.session.materialize",
+            retainedRowCount);
+        try
+        {
+            SelectedSession = session is null ? null : new KustoRecordedSessionViewModel(session);
+            performanceSink.CompleteOperation(materializeOperationId);
+        }
+        catch
+        {
+            performanceSink.CompleteOperation(materializeOperationId, "failed");
+            throw;
+        }
+
         if (SelectedSession?.Executions.FirstOrDefault(execution => execution.Id == selectedExecutionId)
             is { } selectedExecution)
         {

@@ -12,11 +12,15 @@ namespace OpenKustoExplorer.Kusto.Language;
 /// Provides schema-aware KQL editor intelligence using the official Kusto language service.
 /// </summary>
 /// <remarks>
-/// Instances are stateless and safe to use concurrently. Each analysis operates on an immutable
-/// document and schema snapshot, and cancellation is forwarded to the Kusto parser and binder.
+/// Instances retain one immutable script snapshot for incremental consecutive edits and are safe
+/// to use concurrently. Cancellation is forwarded to the Kusto parser and binder.
 /// </remarks>
 public sealed class KustoLanguageService : IKustoLanguageService
 {
+    private readonly Lock scriptCacheLock = new();
+    private KustoDatabaseSchema? cachedDatabaseSchema;
+    private CodeScript? cachedScript;
+
     /// <inheritdoc />
     public KustoGraphQueryPlan? GetGraphQueryPlanAtPosition(string text, int caretPosition)
     {
@@ -127,8 +131,7 @@ public sealed class KustoLanguageService : IKustoLanguageService
         ArgumentOutOfRangeException.ThrowIfGreaterThan(position, text.Length);
         cancellationToken.ThrowIfCancellationRequested();
 
-        GlobalState globalState = KustoGlobalStateFactory.Create(databaseSchema);
-        CodeScript script = CodeScript.From(text, globalState);
+        CodeScript script = GetOrUpdateScript(text, databaseSchema);
         return CreateSyntaxHelp(text, position, script, cancellationToken);
     }
 
@@ -139,14 +142,49 @@ public sealed class KustoLanguageService : IKustoLanguageService
         KustoDatabaseSchema databaseSchema,
         CancellationToken cancellationToken = default)
     {
+        ValidateAnalysisRequest(text, caretPosition, databaseSchema, cancellationToken);
+        CodeScript script = GetOrUpdateScript(text, databaseSchema);
+        return AnalyzeCore(
+            text,
+            caretPosition,
+            databaseSchema,
+            script,
+            includeCaretContext: true,
+            cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public KustoLanguageAnalysis AnalyzeDocument(
+        string text,
+        int caretPosition,
+        KustoDatabaseSchema databaseSchema,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateAnalysisRequest(text, caretPosition, databaseSchema, cancellationToken);
+        CodeScript script = GetOrUpdateScript(text, databaseSchema);
+        return AnalyzeCore(
+            text,
+            caretPosition,
+            databaseSchema,
+            script,
+            includeCaretContext: false,
+            cancellationToken);
+    }
+
+    private static KustoLanguageAnalysis AnalyzeCore(
+        string text,
+        int caretPosition,
+        KustoDatabaseSchema databaseSchema,
+        CodeScript script,
+        bool includeCaretContext,
+        CancellationToken cancellationToken)
+    {
         ArgumentNullException.ThrowIfNull(text);
         ArgumentNullException.ThrowIfNull(databaseSchema);
         ArgumentOutOfRangeException.ThrowIfNegative(caretPosition);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(caretPosition, text.Length);
         cancellationToken.ThrowIfCancellationRequested();
 
-        GlobalState globalState = KustoGlobalStateFactory.Create(databaseSchema);
-        CodeScript script = CodeScript.From(text, globalState);
         List<KustoClassification> classifications = [];
         List<KustoDiagnostic> diagnostics = [];
 
@@ -164,40 +202,61 @@ public sealed class KustoLanguageService : IKustoLanguageService
                 .Select(CreateDiagnostic));
         }
 
-        CodeBlock? completionBlock = GetNearestBlock(script, caretPosition);
-        CompletionInfo completionInfo = completionBlock is null
-            ? CompletionInfo.Empty
-            : completionBlock.Service.GetCompletionItems(
-                Math.Clamp(caretPosition, completionBlock.Start, completionBlock.End),
-                cancellationToken: cancellationToken);
-        int completionEditStart = completionBlock is null ? caretPosition : completionInfo.EditStart;
-        bool isQuerySourceStart = completionBlock is not null
-            && IsQuerySourceStart(completionBlock, caretPosition);
-        CompletionItem[] completionItems = completionInfo.Items
-            .Where(item => !isQuerySourceStart || IsValidAtQuerySourceStart(item.Kind))
-            .ToArray();
-        IReadOnlyList<KustoCompletion> completions = KustoCompletionRanker.Rank(
-            completionItems,
-            text,
-            caretPosition,
-            completionEditStart,
-            isQuerySourceStart,
-            classifications);
-        KustoSyntaxHelp? syntaxHelp = CreateSyntaxHelp(
-            text,
-            caretPosition,
-            script,
-            cancellationToken);
+        int completionEditStart = caretPosition;
+        int completionEditLength = 0;
+        IReadOnlyList<KustoCompletion> completions = Array.Empty<KustoCompletion>();
+        KustoSyntaxHelp? syntaxHelp = null;
+        if (includeCaretContext)
+        {
+            CodeBlock? completionBlock = GetNearestBlock(script, caretPosition);
+            CompletionInfo completionInfo = completionBlock is null
+                ? CompletionInfo.Empty
+                : completionBlock.Service.GetCompletionItems(
+                    Math.Clamp(caretPosition, completionBlock.Start, completionBlock.End),
+                    cancellationToken: cancellationToken);
+            completionEditStart = completionBlock is null ? caretPosition : completionInfo.EditStart;
+            completionEditLength = completionInfo.EditLength;
+            bool isQuerySourceStart = completionBlock is not null
+                && IsQuerySourceStart(completionBlock, caretPosition);
+            CompletionItem[] completionItems = completionInfo.Items
+                .Where(item => !isQuerySourceStart || IsValidAtQuerySourceStart(item.Kind))
+                .ToArray();
+            completions = KustoCompletionRanker.Rank(
+                completionItems,
+                text,
+                caretPosition,
+                completionEditStart,
+                isQuerySourceStart,
+                classifications);
+            syntaxHelp = CreateSyntaxHelp(
+                text,
+                caretPosition,
+                script,
+                cancellationToken);
+        }
 
         KustoLanguageAnalysis analysis = new(
             classifications,
             completions,
             diagnostics,
             completionEditStart,
-            completionInfo.EditLength,
+            completionEditLength,
             syntaxHelp);
 
         return analysis;
+    }
+
+    private static void ValidateAnalysisRequest(
+        string text,
+        int caretPosition,
+        KustoDatabaseSchema databaseSchema,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        ArgumentNullException.ThrowIfNull(databaseSchema);
+        ArgumentOutOfRangeException.ThrowIfNegative(caretPosition);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(caretPosition, text.Length);
+        cancellationToken.ThrowIfCancellationRequested();
     }
 
     private static KustoSyntaxHelp? CreateSyntaxHelp(
@@ -523,5 +582,24 @@ public sealed class KustoLanguageService : IKustoLanguageService
             diagnostic.Length);
 
         return result;
+    }
+
+    private CodeScript GetOrUpdateScript(string text, KustoDatabaseSchema databaseSchema)
+    {
+        lock (scriptCacheLock)
+        {
+            if (cachedScript is not null && ReferenceEquals(cachedDatabaseSchema, databaseSchema))
+            {
+                cachedScript = cachedScript.WithText(text);
+            }
+            else
+            {
+                GlobalState globalState = KustoGlobalStateFactory.Create(databaseSchema);
+                cachedScript = CodeScript.From(text, globalState);
+                cachedDatabaseSchema = databaseSchema;
+            }
+
+            return cachedScript;
+        }
     }
 }

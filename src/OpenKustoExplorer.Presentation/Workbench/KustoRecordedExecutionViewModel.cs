@@ -12,7 +12,7 @@ namespace OpenKustoExplorer.Presentation.Workbench;
 /// </summary>
 public sealed class KustoRecordedExecutionViewModel : ObservableObject
 {
-    private const int RowsPerPage = 50;
+    private const int RowsPerPage = 25;
     private readonly IReadOnlyList<KustoChainEndpoint> endpoints;
     private readonly IReadOnlyList<KustoRecordedInterest> interests;
     private readonly IReadOnlyList<KustoRecordedMark> marks;
@@ -63,7 +63,7 @@ public sealed class KustoRecordedExecutionViewModel : ObservableObject
             () => HasNextPage);
     }
 
-    /// <summary>Occurs after the visible 50-row result page changes.</summary>
+    /// <summary>Occurs after the visible 25-row result page changes.</summary>
     public event EventHandler? PageChanged;
 
     /// <summary>Gets the recorded execution.</summary>
@@ -125,14 +125,14 @@ public sealed class KustoRecordedExecutionViewModel : ObservableObject
     /// <summary>Gets a heading for the selected query result.</summary>
     public string ResultHeading => $"{QueryTitle} results";
 
-    /// <summary>Gets the result-table slices on the current 50-row page.</summary>
+    /// <summary>Gets the result-table slices on the current 25-row page.</summary>
     public ReadOnlyCollection<KustoRecordedResultTableViewModel> Tables
         => tables ??= CreateTables();
 
     /// <summary>Gets the total number of retained result rows.</summary>
     public int TotalRowCount => resultTables.Sum(table => table.Table.Rows.Count);
 
-    /// <summary>Gets the number of 50-row result pages.</summary>
+    /// <summary>Gets the number of 25-row result pages.</summary>
     public int PageCount => (TotalRowCount + RowsPerPage - 1) / RowsPerPage;
 
     /// <summary>Gets the current one-based result page number.</summary>
@@ -163,10 +163,10 @@ public sealed class KustoRecordedExecutionViewModel : ObservableObject
     /// <summary>Gets a value indicating whether a later result page exists.</summary>
     public bool HasNextPage => currentPageIndex + 1 < PageCount;
 
-    /// <summary>Gets the command that displays the previous 50 retained rows.</summary>
+    /// <summary>Gets the command that displays the previous 25 retained rows.</summary>
     public IRelayCommand PreviousPageCommand { get; }
 
-    /// <summary>Gets the command that displays the next 50 retained rows.</summary>
+    /// <summary>Gets the command that displays the next 25 retained rows.</summary>
     public IRelayCommand NextPageCommand { get; }
 
     /// <summary>Gets a value indicating whether retained results exist.</summary>

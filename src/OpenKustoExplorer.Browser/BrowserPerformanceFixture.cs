@@ -21,7 +21,13 @@ internal sealed class BrowserPerformanceFixture :
     IKustoDocumentStore,
     IKustoQueryService
 {
-    private const int ResultRowCount = 5000;
+    /// <summary>Gets the synthetic row count used by large result workloads.</summary>
+    internal const int ResultRowCount = 5000;
+
+    /// <summary>Gets the deterministic query that returns the full synthetic result workload.</summary>
+    internal const string LargeResultQueryText = "SyntheticEvents\n| take 5000";
+
+    private const int LargeDocumentCount = 12;
     private const int LargeQueryLineCount = 6000;
     private const string DatabaseName = "PerformanceDatabase";
     private const string RepairQueryText = """
@@ -37,6 +43,7 @@ internal sealed class BrowserPerformanceFixture :
     private static readonly Uri ClusterUri = new("https://performance.kusto.windows.net");
     private static readonly Uri IdentityClusterUri = new("https://identity.kusto.windows.net");
     private static readonly Uri OperationsClusterUri = new("https://operations.kusto.windows.net");
+    private static readonly Guid DefaultDocumentId = new("2f7cd47c-595c-4cad-9f08-fc69db36eb5d");
     private static readonly Guid LargeDocumentId = new("2ad29a2e-f232-4e57-9a6a-afb48b437cb7");
     private readonly KustoDatabaseSchema schema;
     private KustoConnectionCatalog connectionCatalog;
@@ -99,12 +106,10 @@ internal sealed class BrowserPerformanceFixture :
                 new KustoClusterConnection(IdentityClusterUri, "Identity analytics", []),
                 new KustoClusterConnection(OperationsClusterUri, "Service reliability", []),
             ]);
-        Guid documentId = new("2f7cd47c-595c-4cad-9f08-fc69db36eb5d");
-        string largeQueryText = CreateLargeQueryText();
         documentWorkspace = new KustoDocumentWorkspace(
             [
                 new KustoDocument(
-                    documentId,
+                    DefaultDocumentId,
                     "Alert timeline",
                     TrendQueryText,
                     TrendQueryText.Length,
@@ -139,17 +144,17 @@ internal sealed class BrowserPerformanceFixture :
                     DatabaseName,
                     KustoDocumentTabColor.Orange,
                     "REFERENCE"),
-                new KustoDocument(
-                    LargeDocumentId,
-                    "Imported investigation",
-                    largeQueryText,
+                .. Enumerable.Range(0, LargeDocumentCount).Select(index => new KustoDocument(
+                    GetLargeDocumentId(index),
+                    $"Imported investigation {index + 1:N0}",
+                    CreateLargeQueryText(index),
                     0,
                     ClusterUri,
                     DatabaseName,
                     KustoDocumentTabColor.Purple,
-                    "REFERENCE"),
+                    "REFERENCE")),
             ],
-            documentId);
+            DefaultDocumentId);
     }
 
     /// <inheritdoc />
@@ -255,6 +260,19 @@ internal sealed class BrowserPerformanceFixture :
     /// <returns>The deterministic document identifier.</returns>
     internal static Guid GetLargeDocumentId() => LargeDocumentId;
 
+    /// <summary>Gets the normal query document used by mixed-workload profiling.</summary>
+    /// <returns>The deterministic document identifier.</returns>
+    internal static Guid GetDefaultDocumentId() => DefaultDocumentId;
+
+    /// <summary>Gets every large imported-query document used by tab-switch profiling.</summary>
+    /// <returns>The deterministic document identifiers.</returns>
+    internal static IReadOnlyList<Guid> GetLargeDocumentIds()
+    {
+        return Enumerable.Range(0, LargeDocumentCount)
+            .Select(GetLargeDocumentId)
+            .ToArray();
+    }
+
     /// <summary>Gets the intentionally invalid query used by the Copilot repair capture.</summary>
     /// <returns>The query text whose string timestamp requires an explicit conversion.</returns>
     internal static string GetRepairQueryText() => RepairQueryText;
@@ -263,21 +281,20 @@ internal sealed class BrowserPerformanceFixture :
     /// <returns>The query text that visualizes unique outbound source addresses over time.</returns>
     internal static string GetTrendQueryText() => TrendQueryText;
 
+    /// <summary>Gets a distinct valid large-result query for one mixed-workload cycle.</summary>
+    /// <param name="variant">The non-negative workload variant.</param>
+    /// <returns>The deterministic large-result query.</returns>
+    internal static string GetLargeResultQueryText(int variant)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(variant);
+        return $"{LargeResultQueryText}\n// power-user variant {variant.ToString(CultureInfo.InvariantCulture)}";
+    }
+
     /// <summary>Creates a deterministic query with the imported-tab line count under test.</summary>
     /// <returns>The large query text.</returns>
     internal static string CreateLargeQueryText()
     {
-        StringBuilder text = new();
-        for (int index = 0; index < LargeQueryLineCount - 2; index++)
-        {
-            _ = text.Append("// Imported investigation note ");
-            _ = text.Append(index.ToString("D4", CultureInfo.InvariantCulture));
-            _ = text.AppendLine();
-        }
-
-        _ = text.AppendLine("SyntheticEvents");
-        _ = text.Append("| take 5000");
-        return text.ToString();
+        return CreateLargeQueryText(0);
     }
 
     /// <summary>
@@ -288,6 +305,32 @@ internal sealed class BrowserPerformanceFixture :
     {
         preparedResult ??= CreateResult();
         return true;
+    }
+
+    private static string CreateLargeQueryText(int documentIndex)
+    {
+        StringBuilder text = new();
+        for (int index = 0; index < LargeQueryLineCount - 2; index++)
+        {
+            _ = text.Append("// Imported investigation ");
+            _ = text.Append(documentIndex.ToString("D2", CultureInfo.InvariantCulture));
+            _ = text.Append(" note ");
+            _ = text.Append(index.ToString("D4", CultureInfo.InvariantCulture));
+            _ = text.AppendLine();
+        }
+
+        _ = text.AppendLine("SyntheticEvents");
+        _ = text.Append("| take 5000");
+        return text.ToString();
+    }
+
+    private static Guid GetLargeDocumentId(int index)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(index);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(index, LargeDocumentCount);
+        byte[] bytes = LargeDocumentId.ToByteArray();
+        bytes[^1] = checked((byte)(bytes[^1] + index));
+        return new Guid(bytes);
     }
 
     private static KustoQueryResult CreateResult()

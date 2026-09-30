@@ -277,14 +277,28 @@ public sealed class KustoResultCellViewModel : ObservableObject
         string? accentColorHex = null,
         string? highlightColorHex = null)
     {
+        bool hasAnnotation = matchesInterest || isPertinent || isStart || isEnd || matchesManualInterest;
+        string resolvedAccentColor = hasAnnotation ? accentColorHex ?? "#0078D4" : "#00000000";
+        string resolvedHighlightColor = hasAnnotation ? highlightColorHex ?? "#2E0078D4" : "#00000000";
+        bool isUnchanged = IsRecordedInterestMatch == matchesInterest
+            && IsRecordedManualMatch == matchesManualInterest
+            && IsRecordedPertinent == isPertinent
+            && IsChainStart == isStart
+            && IsChainEnd == isEnd
+            && string.Equals(RecordingAccentHex, resolvedAccentColor, StringComparison.Ordinal)
+            && string.Equals(RecordingHighlightHex, resolvedHighlightColor, StringComparison.Ordinal);
+        if (isUnchanged)
+        {
+            return;
+        }
+
         IsRecordedInterestMatch = matchesInterest;
         IsRecordedManualMatch = matchesManualInterest;
         IsRecordedPertinent = isPertinent;
         IsChainStart = isStart;
         IsChainEnd = isEnd;
-        bool hasAnnotation = matchesInterest || isPertinent || isStart || isEnd || matchesManualInterest;
-        RecordingAccentHex = hasAnnotation ? accentColorHex ?? "#0078D4" : "#00000000";
-        RecordingHighlightHex = hasAnnotation ? highlightColorHex ?? "#2E0078D4" : "#00000000";
+        RecordingAccentHex = resolvedAccentColor;
+        RecordingHighlightHex = resolvedHighlightColor;
         OnPropertyChanged(nameof(HasRecordingAnnotation));
         OnPropertyChanged(nameof(RecordingAnnotationText));
     }

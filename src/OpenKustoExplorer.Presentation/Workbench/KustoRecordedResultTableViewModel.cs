@@ -73,6 +73,8 @@ public sealed class KustoRecordedResultTableViewModel
                 && !interest.Identity.IsNull
                 && interest.Identity.CanonicalValue.Length > 0)
             .ToArray();
+        Dictionary<string, KustoRecordedInterest?> manualInterestsByText = new(
+            StringComparer.Ordinal);
         HashSet<CoordinateKey> cellMarks = marks
             .Where(mark => mark.Kind == KustoRecordedMarkKind.Cell)
             .Select(mark => CoordinateKey.Create(mark.Coordinate))
@@ -94,11 +96,16 @@ public sealed class KustoRecordedResultTableViewModel
             {
                 CoordinateKey coordinate = new(executionId, tableOrdinal, rowOrdinal, cell.ColumnIndex);
                 KustoRecordedValueIdentity identity = KustoRecordedValueCanonicalizer.Create(cell.TypeName, cell.Value);
-                KustoRecordedInterest? manualInterest = !cell.Value.IsNull
-                    ? manualInterests.FirstOrDefault(interest => cell.Text.Contains(
+                KustoRecordedInterest? manualInterest = null;
+                if (!cell.Value.IsNull
+                    && !manualInterestsByText.TryGetValue(cell.Text, out manualInterest))
+                {
+                    manualInterest = manualInterests.FirstOrDefault(interest => cell.Text.Contains(
                         interest.Identity.CanonicalValue,
-                        StringComparison.OrdinalIgnoreCase))
-                    : null;
+                        StringComparison.OrdinalIgnoreCase));
+                    manualInterestsByText.Add(cell.Text, manualInterest);
+                }
+
                 KustoRecordedValueIdentity colorIdentity = manualInterest?.Identity ?? identity;
                 KustoRecordedValueColor color = KustoRecordedValueColorPalette.GetColor(colorIdentity);
                 cell.SetRecordingAnnotation(

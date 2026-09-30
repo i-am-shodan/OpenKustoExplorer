@@ -5,7 +5,9 @@
   "scripts": {
     "large-editor": "node browser-large-editor.mjs",
     "performance": "node browser-performance.mjs",
-    "test": "node browser-smoke.mjs && node browser-large-editor.mjs"
+    "power-user": "node browser-power-user.mjs",
+    "responsiveness": "node browser-responsiveness.mjs",
+    "test": "node browser-smoke.mjs && node browser-large-editor.mjs && node browser-responsiveness.mjs"
   },
   "devDependencies": {
     "playwright": "1.55.1"

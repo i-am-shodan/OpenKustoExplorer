@@ -66,4 +66,21 @@ public interface IKustoLanguageService
         int caretPosition,
         KustoDatabaseSchema databaseSchema,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Analyzes document classifications and diagnostics without computing caret-specific completion or help data.
+    /// </summary>
+    /// <param name="text">The complete KQL document text.</param>
+    /// <param name="caretPosition">The zero-based caret position.</param>
+    /// <param name="databaseSchema">The active cluster and database schema.</param>
+    /// <param name="cancellationToken">A token that cancels parsing and semantic analysis.</param>
+    /// <returns>Classifications and diagnostics for the document snapshot.</returns>
+    public KustoLanguageAnalysis AnalyzeDocument(
+        string text,
+        int caretPosition,
+        KustoDatabaseSchema databaseSchema,
+        CancellationToken cancellationToken = default)
+    {
+        return Analyze(text, caretPosition, databaseSchema, cancellationToken);
+    }
 }
