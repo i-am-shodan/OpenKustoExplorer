@@ -105,7 +105,7 @@ const verifyDashboardTimeRange = async viewport => {
     await invokeFixtureAction(page, "dashboard-time-range");
     await captureScreenshot(page, `dashboard-${viewport.width}x${viewport.height}.png`);
 
-    await invokeFixtureAction(page, "open-custom-time-range");
+    await waitForFixtureTarget(page, "open-custom-time-range");
     await waitForFixtureTarget(page, "custom-time-range-start-date");
     await captureScreenshot(page, `dashboard-custom-${viewport.width}x${viewport.height}.png`);
     assert.deepEqual(errors, []);
