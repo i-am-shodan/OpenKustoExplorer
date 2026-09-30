@@ -38,6 +38,8 @@ public sealed class JsonKustoRecordedSessionStore : IKustoRecordedSessionArchive
     private readonly TimeProvider timeProvider;
     private readonly SemaphoreSlim writeGate = new(1, 1);
     private KustoRecordedSessionSnapshotDocument snapshot;
+    private int snapshotByteCount;
+    private string snapshotJson;
     private bool isDisposed;
 
     private JsonKustoRecordedSessionStore(
@@ -56,6 +58,8 @@ public sealed class JsonKustoRecordedSessionStore : IKustoRecordedSessionArchive
         this.maximumExecutionsPerSession = maximumExecutionsPerSession;
         this.maximumSnapshotBytes = maximumSnapshotBytes;
         this.maximumResultBytesPerExecution = maximumResultBytesPerExecution;
+        snapshotJson = KustoRecordedSessionSnapshotJson.Serialize(snapshot);
+        snapshotByteCount = Encoding.UTF8.GetByteCount(snapshotJson);
     }
 
     /// <summary>
@@ -373,10 +377,9 @@ public sealed class JsonKustoRecordedSessionStore : IKustoRecordedSessionArchive
                     throw new InvalidOperationException("The recorded execution is not running.");
                 }
 
-                long usedBytes = Encoding.UTF8.GetByteCount(KustoRecordedSessionSnapshotJson.Serialize(document));
                 long availableBytes = Math.Min(
                     maximumResultBytesPerExecution,
-                    Math.Max(0, maximumSnapshotBytes - usedBytes - CompletionMetadataReserveBytes));
+                    Math.Max(0, maximumSnapshotBytes - snapshotByteCount - CompletionMetadataReserveBytes));
                 KustoQueryResult? result = completion.Result is null
                     ? null
                     : KustoRecordedResultLimiter.Limit(
@@ -1387,19 +1390,22 @@ public sealed class JsonKustoRecordedSessionStore : IKustoRecordedSessionArchive
     {
         ObjectDisposedException.ThrowIf(isDisposed, this);
         await writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        string originalJson = KustoRecordedSessionSnapshotJson.Serialize(snapshot);
+        string originalJson = snapshotJson;
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
             TResult result = action(snapshot);
             string updatedJson = KustoRecordedSessionSnapshotJson.Serialize(snapshot);
-            if (Encoding.UTF8.GetByteCount(updatedJson) > maximumSnapshotBytes)
+            int updatedByteCount = Encoding.UTF8.GetByteCount(updatedJson);
+            if (updatedByteCount > maximumSnapshotBytes)
             {
                 throw new InvalidOperationException(
                     "Recorded session storage is full. Delete recorded queries or sessions before recording more data.");
             }
 
             await snapshotStore.SaveAsync(updatedJson, cancellationToken).ConfigureAwait(false);
+            snapshotJson = updatedJson;
+            snapshotByteCount = updatedByteCount;
             return result;
         }
         catch

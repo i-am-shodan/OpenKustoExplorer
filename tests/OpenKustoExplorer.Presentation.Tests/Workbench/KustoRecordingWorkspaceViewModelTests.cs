@@ -42,10 +42,104 @@ public sealed class KustoRecordingWorkspaceViewModelTests
     }
 
     /// <summary>
-    /// Verifies recorded result pages materialize at most 50 rows across result tables.
+    /// Verifies a recording-storage refresh failure still opens the dialog and exposes the error.
+    /// </summary>
+    /// <returns>A task that completes after the failed refresh.</returns>
+    [Fact]
+    public async Task OpenRecordingFailureStillShowsDialogAndError()
+    {
+        string directoryPath = CreateTemporaryDirectory();
+        string filePath = Path.Combine(directoryPath, "recorded-sessions.db");
+        SqliteKustoRecordedSessionStore store = new(filePath);
+
+        try
+        {
+            KustoRecordingWorkspaceViewModel viewModel = CreateViewModel(store);
+            store.Dispose();
+
+            await viewModel.OpenRecordingCommand.ExecuteAsync(null);
+
+            Assert.True(viewModel.IsRecordingDialogOpen);
+            Assert.True(viewModel.HasRecordingError);
+            Assert.NotEmpty(viewModel.RecordingErrorText);
+        }
+        finally
+        {
+            store.Dispose();
+            DeleteTemporaryDirectory(directoryPath);
+        }
+    }
+
+    /// <summary>
+    /// Verifies a stop failure preserves active recording state and exposes the persistence error.
+    /// </summary>
+    /// <returns>A task that completes after the failed stop.</returns>
+    [Fact]
+    public async Task StopRecordingFailurePreservesStateAndReportsError()
+    {
+        string directoryPath = CreateTemporaryDirectory();
+        string filePath = Path.Combine(directoryPath, "recorded-sessions.db");
+        SqliteKustoRecordedSessionStore store = new(filePath);
+
+        try
+        {
+            KustoRecordingWorkspaceViewModel viewModel = CreateViewModel(store);
+            await viewModel.OpenRecordingCommand.ExecuteAsync(null);
+            viewModel.NewSessionName = "Stop failure";
+            await viewModel.StartRecordingCommand.ExecuteAsync(null);
+            store.Dispose();
+
+            await viewModel.StopRecordingCommand.ExecuteAsync(null);
+
+            Assert.True(viewModel.IsRecording);
+            Assert.True(viewModel.HasActiveRecording);
+            Assert.True(viewModel.HasRecordingError);
+            Assert.NotEmpty(viewModel.RecordingErrorText);
+        }
+        finally
+        {
+            store.Dispose();
+            DeleteTemporaryDirectory(directoryPath);
+        }
+    }
+
+    /// <summary>
+    /// Verifies stopping a hidden recording defers historical projection until Sessions is opened.
+    /// </summary>
+    /// <returns>A task that completes after the deferred refresh.</returns>
+    [Fact]
+    public async Task HiddenWorkspaceDefersStopRefreshUntilNextLoad()
+    {
+        string directoryPath = CreateTemporaryDirectory();
+        string filePath = Path.Combine(directoryPath, "recorded-sessions.db");
+        using SqliteKustoRecordedSessionStore store = new(filePath);
+
+        try
+        {
+            KustoRecordingWorkspaceViewModel viewModel = CreateViewModel(store);
+            viewModel.SetWorkspaceActive(isActive: false);
+            await viewModel.OpenRecordingCommand.ExecuteAsync(null);
+            viewModel.NewSessionName = "Deferred refresh";
+            await viewModel.StartRecordingCommand.ExecuteAsync(null);
+
+            await viewModel.StopRecordingCommand.ExecuteAsync(null);
+
+            Assert.False(viewModel.HasActiveRecording);
+            Assert.True(await viewModel.EnsureLoadedAsync(CancellationToken.None));
+            Assert.False(await viewModel.EnsureLoadedAsync(CancellationToken.None));
+            Assert.Single(viewModel.Sessions);
+        }
+        finally
+        {
+            DeleteTemporaryDirectory(directoryPath);
+        }
+    }
+
+    /// <summary>
+    /// Verifies recorded result pages materialize at most 25 rows across result tables.
     /// </summary>
     [Fact]
-    public void RecordedResultsPageFiftyRowsAcrossTables()
+    public void RecordedResultsPageTwentyFiveRowsAcrossTables()
     {
         KustoResultTable firstTable = CreatePagedResultTable("First", 0, 40);
         KustoResultTable secondTable = CreatePagedResultTable("Second", 40, 40);
@@ -68,10 +162,10 @@ public sealed class KustoRecordingWorkspaceViewModelTests
             null);
         KustoRecordedExecutionViewModel viewModel = new(execution, [], [], []);
 
-        Assert.Equal(50, viewModel.Tables.Sum(table => table.Rows.Count));
-        Assert.Equal("Rows 1-50 of 110", viewModel.PageText);
-        Assert.Equal([0, 39], [viewModel.Tables[0].Rows[0].RowIndex, viewModel.Tables[0].Rows[^1].RowIndex]);
-        Assert.Equal([0, 9], [viewModel.Tables[1].Rows[0].RowIndex, viewModel.Tables[1].Rows[^1].RowIndex]);
+        KustoRecordedResultTableViewModel firstPage = Assert.Single(viewModel.Tables);
+        Assert.Equal(25, firstPage.Rows.Count);
+        Assert.Equal("Rows 1-25 of 110", viewModel.PageText);
+        Assert.Equal([0, 24], [firstPage.Rows[0].RowIndex, firstPage.Rows[^1].RowIndex]);
         Assert.False(viewModel.PreviousPageCommand.CanExecute(null));
         Assert.True(viewModel.NextPageCommand.CanExecute(null));
         int pageChanges = 0;
@@ -79,18 +173,20 @@ public sealed class KustoRecordingWorkspaceViewModelTests
 
         viewModel.NextPageCommand.Execute(null);
 
-        Assert.Equal(50, viewModel.Tables.Sum(table => table.Rows.Count));
-        Assert.Equal("Rows 51-100 of 110", viewModel.PageText);
-        Assert.Equal([10, 39], [viewModel.Tables[0].Rows[0].RowIndex, viewModel.Tables[0].Rows[^1].RowIndex]);
-        Assert.Equal([0, 19], [viewModel.Tables[1].Rows[0].RowIndex, viewModel.Tables[1].Rows[^1].RowIndex]);
+        Assert.Equal(25, viewModel.Tables.Sum(table => table.Rows.Count));
+        Assert.Equal("Rows 26-50 of 110", viewModel.PageText);
+        Assert.Equal([25, 39], [viewModel.Tables[0].Rows[0].RowIndex, viewModel.Tables[0].Rows[^1].RowIndex]);
+        Assert.Equal([0, 9], [viewModel.Tables[1].Rows[0].RowIndex, viewModel.Tables[1].Rows[^1].RowIndex]);
 
+        viewModel.NextPageCommand.Execute(null);
+        viewModel.NextPageCommand.Execute(null);
         viewModel.NextPageCommand.Execute(null);
 
         KustoRecordedResultTableViewModel lastPage = Assert.Single(viewModel.Tables);
         Assert.Equal(10, lastPage.Rows.Count);
         Assert.Equal([20, 29], [lastPage.Rows[0].RowIndex, lastPage.Rows[^1].RowIndex]);
         Assert.Equal("Rows 101-110 of 110", viewModel.PageText);
-        Assert.Equal(2, pageChanges);
+        Assert.Equal(4, pageChanges);
         Assert.True(viewModel.PreviousPageCommand.CanExecute(null));
         Assert.False(viewModel.NextPageCommand.CanExecute(null));
     }
@@ -255,14 +351,15 @@ public sealed class KustoRecordingWorkspaceViewModelTests
             KustoRecordedExecutionViewModel execution = Assert.IsType<KustoRecordedExecutionViewModel>(
                 viewModel.SelectedExecution);
             execution.NextPageCommand.Execute(null);
+            execution.NextPageCommand.Execute(null);
             KustoResultCellViewModel selectedCell = Assert.Single(execution.Tables).Rows[10].Cells[0];
             Assert.Equal(60, selectedCell.Row.RowIndex);
             viewModel.SetResultContext(selectedCell);
 
             await viewModel.MarkSelectedCellCommand.ExecuteAsync(null);
 
-            Assert.Equal("Rows 51-100 of 120", viewModel.SelectedExecution.PageText);
-            Assert.Equal(50, Assert.Single(viewModel.SelectedExecution.Tables).Rows.Count);
+            Assert.Equal("Rows 51-75 of 120", viewModel.SelectedExecution.PageText);
+            Assert.Equal(25, Assert.Single(viewModel.SelectedExecution.Tables).Rows.Count);
             Assert.Contains("row 61", viewModel.SelectedResultValueLocationText, StringComparison.Ordinal);
             Assert.True(viewModel.SelectedResultValueIsMarked);
         }

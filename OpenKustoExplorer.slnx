@@ -11,6 +11,7 @@
     <Project Path="src/OpenKustoExplorer.Portable/OpenKustoExplorer.Portable.csproj" />
     <Project Path="src/OpenKustoExplorer.Presentation/OpenKustoExplorer.Presentation.csproj" />
     <Project Path="src/OpenKustoExplorer.Web/OpenKustoExplorer.Web.csproj" />
+    <Project Path="src/OpenKustoExplorer.Web.Hosting/OpenKustoExplorer.Web.Hosting.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/OpenKustoExplorer.AotSmoke/OpenKustoExplorer.AotSmoke.csproj" />

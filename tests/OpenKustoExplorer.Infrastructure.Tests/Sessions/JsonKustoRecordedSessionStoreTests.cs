@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using OpenKustoExplorer.Application.Execution;
 using OpenKustoExplorer.Application.Language;
 using OpenKustoExplorer.Application.Sessions;
@@ -10,6 +11,56 @@ namespace OpenKustoExplorer.Infrastructure.Tests.Sessions;
 /// </summary>
 public sealed class JsonKustoRecordedSessionStoreTests
 {
+    /// <summary>
+    /// Verifies a maximum-row browser recording persists within a bounded unit-test budget.
+    /// </summary>
+    /// <returns>A task that completes after the recorded result is persisted.</returns>
+    [Fact]
+    public async Task CompleteFiveHundredRowExecutionPersistsWithinBudget()
+    {
+        const int RowCount = 500;
+        MemorySnapshotStore snapshotStore = new();
+        DateTimeOffset startedAtUtc = new(2026, 9, 28, 12, 0, 0, TimeSpan.Zero);
+        using JsonKustoRecordedSessionStore store = await JsonKustoRecordedSessionStore.CreateAsync(snapshotStore);
+        KustoRecordingPeriod period = await store.CreateSessionAsync("Performance", startedAtUtc);
+        Guid executionId = await store.BeginExecutionAsync(new KustoRecordedExecutionStart(
+            period.Id,
+            Guid.NewGuid(),
+            "Large result",
+            new KustoQueryRequest(
+                new Uri("https://mock.kusto.example/"),
+                "SyntheticSecurity",
+                "Events | take 500"),
+            startedAtUtc,
+            [],
+            null));
+        KustoResultTable table = new(
+            "PrimaryResult",
+            [
+                new KustoResultColumn("Id", "long"),
+                new KustoResultColumn("Value", "string"),
+            ],
+            Enumerable.Range(0, RowCount).Select(index => new KustoResultRow(
+                [$"{index}", $"synthetic-value-{index:D4}"])));
+
+        Stopwatch stopwatch = Stopwatch.StartNew();
+        await store.CompleteExecutionAsync(
+            executionId,
+            new KustoRecordedExecutionCompletion(
+                KustoRecordedExecutionStatus.Succeeded,
+                startedAtUtc.AddSeconds(1),
+                new KustoQueryResult([table], TimeSpan.FromSeconds(1)),
+                null));
+        stopwatch.Stop();
+
+        KustoRecordedSession session = Assert.IsType<KustoRecordedSession>(
+            await store.GetSessionAsync(period.SessionId));
+        Assert.Equal(RowCount, Assert.Single(session.Executions).Result!.Tables[0].Rows.Count);
+        Assert.True(
+            stopwatch.Elapsed < TimeSpan.FromSeconds(5),
+            $"Recording persistence took {stopwatch.Elapsed.TotalMilliseconds:N0} ms.");
+    }
+
     /// <summary>
     /// Verifies typed results, inferred interests, annotations, and endpoints survive snapshot reload.
     /// </summary>

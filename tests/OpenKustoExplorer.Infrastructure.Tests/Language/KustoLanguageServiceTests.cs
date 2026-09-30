@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using OpenKustoExplorer.Application.Execution;
 using OpenKustoExplorer.Application.Language;
 using OpenKustoExplorer.Domain.Schema;
@@ -197,6 +198,56 @@ public sealed class KustoLanguageServiceTests
 
         Assert.NotNull(analysis.SyntaxHelp);
         Assert.Equal("summarize", analysis.SyntaxHelp.Title);
+    }
+
+    /// <summary>
+    /// Verifies background document analysis omits expensive caret features while retaining editor styling and errors.
+    /// </summary>
+    [Fact]
+    public void AnalyzeDocumentOmitsCaretFeatures()
+    {
+        const string Query = "StormEvents | where MissingColumn == 1";
+        KustoLanguageService languageService = new();
+
+        KustoLanguageAnalysis analysis = languageService.AnalyzeDocument(
+            Query,
+            Query.Length,
+            CreateDatabaseSchema());
+
+        Assert.NotEmpty(analysis.Classifications);
+        Assert.NotEmpty(analysis.Diagnostics);
+        Assert.Empty(analysis.Completions);
+        Assert.Null(analysis.SyntaxHelp);
+        Assert.Equal(Query.Length, analysis.CompletionEditStart);
+        Assert.Equal(0, analysis.CompletionEditLength);
+    }
+
+    /// <summary>
+    /// Verifies a small edit reuses the large document analysis state within a bounded unit-test budget.
+    /// </summary>
+    [Fact]
+    public void AnalyzeDocumentLargeIncrementalEditCompletesWithinBudget()
+    {
+        const int LineCount = 6000;
+        string query = string.Concat(
+            Enumerable.Range(0, LineCount - 2).Select(index => $"// investigation note {index:D4}\n"))
+            + "StormEvents\n| take 5000";
+        KustoLanguageService languageService = new();
+        KustoDatabaseSchema schema = CreateDatabaseSchema();
+        _ = languageService.AnalyzeDocument(query, query.Length, schema);
+        string updatedQuery = string.Concat(query, " ");
+
+        Stopwatch stopwatch = Stopwatch.StartNew();
+        KustoLanguageAnalysis analysis = languageService.AnalyzeDocument(
+            updatedQuery,
+            updatedQuery.Length,
+            schema);
+        stopwatch.Stop();
+
+        Assert.NotEmpty(analysis.Classifications);
+        Assert.True(
+            stopwatch.Elapsed < TimeSpan.FromSeconds(2),
+            $"Incremental analysis took {stopwatch.Elapsed.TotalMilliseconds:N0} ms.");
     }
 
     /// <summary>
@@ -433,6 +484,12 @@ public sealed class KustoLanguageServiceTests
 
         Assert.Throws<OperationCanceledException>(
             () => languageService.Analyze(
+                string.Empty,
+                0,
+                CreateDatabaseSchema(),
+                cancellationSource.Token));
+        Assert.Throws<OperationCanceledException>(
+            () => languageService.AnalyzeDocument(
                 string.Empty,
                 0,
                 CreateDatabaseSchema(),

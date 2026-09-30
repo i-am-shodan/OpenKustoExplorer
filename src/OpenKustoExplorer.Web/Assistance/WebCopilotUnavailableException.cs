@@ -10,7 +10,7 @@ public sealed class WebCopilotUnavailableException : Exception
     /// </summary>
     /// <param name="message">The safe user-facing message.</param>
     /// <param name="innerException">The optional underlying provider failure.</param>
-    internal WebCopilotUnavailableException(string message, Exception? innerException = null)
+    public WebCopilotUnavailableException(string message, Exception? innerException = null)
         : base(message, innerException)
     {
     }

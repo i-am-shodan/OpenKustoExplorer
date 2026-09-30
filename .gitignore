@@ -12,3 +12,5 @@ publish/
 *.nupkg
 *.snupkg
 **/node_modules/**
+
+/video/**

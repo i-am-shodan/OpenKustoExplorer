@@ -25,6 +25,7 @@ namespace OpenKustoExplorer.Presentation.Workbench;
 /// </summary>
 public sealed class MainWindowViewModel : ObservableObject, IDisposable
 {
+    private const int ResultRowsPerPage = 50;
     private const string HiddenTargetText = "(cluster and database hidden by user)";
     private static readonly IReadOnlyList<SchemaTableViewModel> EmptyTables = Array.Empty<SchemaTableViewModel>();
     private static readonly string[] ConditionalFormattingColors =
@@ -58,6 +59,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     private readonly IKustoQueryService queryService;
     private readonly IKustoLanguageService languageService;
     private readonly IWorkbenchPerformanceSink performanceSink;
+    private IReadOnlyList<KustoResultRowViewModel> resultViewRows = Array.Empty<KustoResultRowViewModel>();
     private Guid? activeRecordedExecutionId;
     private KustoDatabaseViewModel? activeDatabase;
     private Uri? activeExecutedClusterUri;
@@ -97,6 +99,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     private bool hasLiveResultAnnotations;
     private bool isGroupTabOpen;
     private bool isImportingConnections;
+    private bool isEditingClusterConnection;
     private bool isOrganizeClusterOpen;
     private bool isRenameAutomationOpen;
     private bool isRenameTabOpen;
@@ -126,6 +129,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     private KustoResultCellViewModel? inspectedResultCell;
     private KustoResultCellViewModel? resultContextCell;
     private string resultSearchText = string.Empty;
+    private int resultPageIndex;
     private string resultSummary = "Run a query to see results";
     private string schemaFilterText = string.Empty;
     private KustoAutomationViewModel? selectedAutomation;
@@ -267,7 +271,9 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
                     recordedRelationPlanner,
                     recordedChainGenerator,
                     timeProvider,
-                    recordedSessionArchiveService);
+                    recordedSessionArchiveService,
+                    this.performanceSink);
+        Recording.SetWorkspaceActive(isActive: false);
         Recording.ActiveInterestsChanged += OnRecordingActiveInterestsChanged;
         AutomationNotifications = new KustoAutomationNotificationEditorViewModel(
             AutomationNotificationsSaved);
@@ -345,6 +351,12 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         ClearResultFiltersCommand = new RelayCommand(
             ClearResultFilters,
             () => HasResultFilters);
+        PreviousResultPageCommand = new RelayCommand(
+            () => SetResultPage(resultPageIndex - 1),
+            () => HasPreviousResultPage);
+        NextResultPageCommand = new RelayCommand(
+            () => SetResultPage(resultPageIndex + 1),
+            () => HasNextResultPage);
         ShowDashboardsCommand = new RelayCommand(ShowDashboards);
         ShowAutomationsCommand = new RelayCommand(ShowAutomations);
         ShowSessionsCommand = new AsyncRelayCommand(ShowSessionsAsync);
@@ -730,7 +742,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         {
             if (!HasResultFilters)
             {
-                return $"{resultSourceRows.Count:N0} rows";
+                return $"{ResultViewRowCount:N0} rows";
             }
 
             List<string> transforms = [];
@@ -745,7 +757,39 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
                 transforms.Add($"{ActiveResultColumnFilterCount:N0} column {noun}");
             }
 
-            return $"{ResultRows.Count:N0} of {resultSourceRows.Count:N0} rows · {string.Join(" + ", transforms)}";
+            int sourceRowCount = activeResultTable?.Rows.Count ?? resultSourceRows.Count;
+            return $"{resultViewRows.Count:N0} of {sourceRowCount:N0} rows · {string.Join(" + ", transforms)}";
+        }
+    }
+
+    /// <summary>Gets the complete filtered result row count before presentation paging.</summary>
+    public int ResultViewRowCount => !HasResultTransforms() && activeResultTable is not null
+        ? activeResultTable.Rows.Count
+        : resultViewRows.Count;
+
+    /// <summary>Gets a value indicating whether the filtered result projection spans multiple UI pages.</summary>
+    public bool HasMultipleResultPages => GetResultPageCount() > 1;
+
+    /// <summary>Gets a value indicating whether an earlier result page is available.</summary>
+    public bool HasPreviousResultPage => resultPageIndex > 0;
+
+    /// <summary>Gets a value indicating whether a later result page is available.</summary>
+    public bool HasNextResultPage => resultPageIndex + 1 < GetResultPageCount();
+
+    /// <summary>Gets the current result page summary.</summary>
+    public string ResultPageText
+    {
+        get
+        {
+            int resultViewRowCount = ResultViewRowCount;
+            if (resultViewRowCount == 0)
+            {
+                return "No rows";
+            }
+
+            int firstRow = (resultPageIndex * ResultRowsPerPage) + 1;
+            int lastRow = Math.Min(firstRow + ResultRows.Count - 1, resultViewRowCount);
+            return $"{firstRow:N0}-{lastRow:N0} of {resultViewRowCount:N0}";
         }
     }
 
@@ -1005,6 +1049,12 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     /// </summary>
     public IRelayCommand ClearResultFiltersCommand { get; }
 
+    /// <summary>Gets the command that displays the previous live-result page.</summary>
+    public IRelayCommand PreviousResultPageCommand { get; }
+
+    /// <summary>Gets the command that displays the next live-result page.</summary>
+    public IRelayCommand NextResultPageCommand { get; }
+
     /// <summary>
     /// Gets the command that closes the full result value viewer.
     /// </summary>
@@ -1223,6 +1273,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
                 "workbench.mode.set");
             if (SetProperty(ref workbenchMode, value))
             {
+                Recording.SetWorkspaceActive(value == KustoWorkbenchMode.Sessions);
                 OnPropertyChanged(nameof(IsAutomationView));
                 OnPropertyChanged(nameof(IsDashboardView));
                 OnPropertyChanged(nameof(IsGraphView));
@@ -1715,6 +1766,28 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
+    /// Gets a value indicating whether the cluster dialog is editing connection properties instead of folder placement.
+    /// </summary>
+    public bool IsEditingClusterConnection
+    {
+        get => isEditingClusterConnection;
+        private set
+        {
+            if (SetProperty(ref isEditingClusterConnection, value))
+            {
+                OnPropertyChanged(nameof(ClusterDialogTitle));
+                OnPropertyChanged(nameof(ClusterDialogActionText));
+            }
+        }
+    }
+
+    /// <summary>Gets the cluster dialog title for the active editing mode.</summary>
+    public string ClusterDialogTitle => IsEditingClusterConnection ? "Edit connection" : "Move cluster";
+
+    /// <summary>Gets the cluster dialog primary action label for the active editing mode.</summary>
+    public string ClusterDialogActionText => IsEditingClusterConnection ? "Save changes" : "Move";
+
+    /// <summary>
     /// Gets or sets the display name of the cluster currently being organized.
     /// </summary>
     public string OrganizeClusterDisplayName
@@ -2066,6 +2139,26 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
+    /// Analyzes classifications and diagnostics without computing completion or help data.
+    /// </summary>
+    /// <param name="text">The complete KQL document text.</param>
+    /// <param name="caretPosition">The zero-based caret position.</param>
+    /// <param name="cancellationToken">A token that cancels parsing and semantic analysis.</param>
+    /// <returns>The lightweight document analysis.</returns>
+    public KustoLanguageAnalysis AnalyzeDocument(
+        string text,
+        int caretPosition,
+        CancellationToken cancellationToken = default)
+    {
+        KustoDatabaseSchema databaseSchema = GetActiveDatabaseSchema();
+        return languageService.AnalyzeDocument(
+            text,
+            caretPosition,
+            databaseSchema,
+            cancellationToken);
+    }
+
+    /// <summary>
     /// Gets contextual help for the KQL syntax element at a document position.
     /// </summary>
     /// <param name="text">The complete KQL document text.</param>
@@ -2378,7 +2471,9 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
             activeExecutedQueryText,
             Environment.NewLine,
             Environment.NewLine,
-            CreateClipboardText(ResultRows));
+            KustoResultDataExporter.CreateClipboardText(
+                activeResultTable ?? throw new InvalidOperationException("Run a query before copying results."),
+                GetDisplayedSourceRows()));
     }
 
     /// <summary>
@@ -2414,7 +2509,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     {
         KustoResultTable table = activeResultTable
             ?? throw new InvalidOperationException("Run a query before copying results.");
-        return KustoResultDataExporter.CreateKqlDatatable(table, GetSourceRows(ResultRows));
+        return KustoResultDataExporter.CreateKqlDatatable(table, GetDisplayedSourceRows());
     }
 
     /// <summary>
@@ -2426,7 +2521,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     {
         KustoResultTable table = activeResultTable
             ?? throw new InvalidOperationException("Run a query before exporting results.");
-        return KustoResultDataExporter.CreateFile(table, GetSourceRows(ResultRows), format);
+        return KustoResultDataExporter.CreateFile(table, GetDisplayedSourceRows(), format);
     }
 
     /// <summary>
@@ -3064,6 +3159,8 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         ResultColumns.Clear();
         ResultRows.Clear();
         resultSourceRows.Clear();
+        resultViewRows = Array.Empty<KustoResultRowViewModel>();
+        resultPageIndex = 0;
         resultSearchText = string.Empty;
         Visualization = null;
         VisualizationMessage = "Run a query to create a visualization";
@@ -3794,8 +3891,9 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
             }
         }
 
-        if (eventArguments.PropertyName is nameof(KustoDocumentViewModel.Text)
-            or nameof(KustoDocumentViewModel.Title))
+        if (TabSearchText.Length > 0
+            && eventArguments.PropertyName is nameof(KustoDocumentViewModel.Text)
+                or nameof(KustoDocumentViewModel.Title))
         {
             UpdateTabSearchResults();
         }
@@ -3965,7 +4063,10 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
             CaretPosition);
         KustoQueryResult result = await queryService.ExecuteAsync(request, cancellationToken);
         KustoVisualization? effectiveVisualization = result.Visualization ?? queryVisualization;
-        ApplyQueryResult(result, effectiveVisualization);
+        await ApplyQueryResultAsync(
+            result,
+            effectiveVisualization,
+            cancellationToken);
         activeExecutedClusterUri = request.ClusterUri;
         activeExecutedDatabaseName = request.DatabaseName;
         activeExecutedQueryText = request.QueryText;
@@ -4030,7 +4131,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
             graphRequest,
             cancellationToken);
         QueryInfo.CompleteGraph(graphResult, DateTimeOffset.Now);
-        ApplyGraphQueryResult(graphResult);
+        await ApplyGraphQueryResultAsync(graphResult, cancellationToken);
         activeExecutedClusterUri = request.ClusterUri;
         activeExecutedDatabaseName = request.DatabaseName;
         activeExecutedQueryText = request.QueryText;
@@ -4182,7 +4283,10 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         }
     }
 
-    private void ApplyQueryResult(KustoQueryResult result, KustoVisualization? visualizationInstructions)
+    private async Task ApplyQueryResultAsync(
+        KustoQueryResult result,
+        KustoVisualization? visualizationInstructions,
+        CancellationToken cancellationToken)
     {
         int resultRowCount = result.Tables.Count > 0 ? result.Tables[0].Rows.Count : 0;
         using WorkbenchPerformanceScope applyMeasurement = new(
@@ -4213,25 +4317,18 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
                 column.PropertyChanged += OnResultColumnPropertyChanged;
             }
 
-            using (new WorkbenchPerformanceScope(
-                performanceSink,
-                "results.rows.project",
-                primaryTable.Rows.Count))
-            {
-                for (int rowIndex = 0; rowIndex < primaryTable.Rows.Count; rowIndex++)
-                {
-                    resultSourceRows.Add(new KustoResultRowViewModel(
-                        primaryTable.Rows[rowIndex],
-                        rowIndex,
-                        primaryTable.Columns,
-                        columnWidths));
-                }
-            }
-
-            ApplyResultView();
-            ApplyRecordingAnnotations();
-
             ResultSummary = $"{primaryTable.Rows.Count:N0} rows · {primaryTable.Columns.Count:N0} columns · {result.Duration.TotalMilliseconds:N0} ms";
+            int initialRowCount = await ProjectResultRowsAsync(
+                primaryTable,
+                columnWidths,
+                cancellationToken);
+            ApplyRecordingAnnotations();
+            long remainingRowsOperationId = performanceSink.StartOperation(
+                "results.rows.remaining-project",
+                Math.Max(0, primaryTable.Rows.Count - initialRowCount));
+            performanceSink.CompleteOperation(
+                remainingRowsOperationId,
+                primaryTable.Rows.Count > initialRowCount ? "deferred" : "completed");
 
             if (visualizationInstructions is not null)
             {
@@ -4255,7 +4352,100 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         AddConditionalFormattingRuleCommand.NotifyCanExecuteChanged();
     }
 
-    private void ApplyGraphQueryResult(KustoGraphIngestionResult result)
+    private async Task<int> ProjectResultRowsAsync(
+        KustoResultTable table,
+        IReadOnlyList<double> columnWidths,
+        CancellationToken cancellationToken)
+    {
+        int initialRowCount = Math.Min(ResultRowsPerPage, table.Rows.Count);
+        try
+        {
+            using (new WorkbenchPerformanceScope(
+                performanceSink,
+                "results.rows.project",
+                initialRowCount))
+            {
+                for (int rowIndex = 0; rowIndex < initialRowCount; rowIndex++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    resultSourceRows.Add(new KustoResultRowViewModel(
+                        table.Rows[rowIndex],
+                        rowIndex,
+                        table.Columns,
+                        columnWidths));
+
+                    if (rowIndex + 1 == initialRowCount)
+                    {
+                        ApplyResultFormatting();
+                        ApplyResultView();
+                        long initialPageOperationId = performanceSink.StartOperation(
+                            "results.initial-page.paint",
+                            table.Rows.Count);
+                        await performanceSink.CompleteOperationAfterRenderAsync(
+                            initialPageOperationId,
+                            $"rows:{initialRowCount}");
+                        cancellationToken.ThrowIfCancellationRequested();
+                    }
+                }
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            ClearQueryResults();
+            throw;
+        }
+
+        return resultSourceRows.Count;
+    }
+
+    private bool MaterializeResultRowsThrough(int rowCount)
+    {
+        if (activeResultTable is null)
+        {
+            return false;
+        }
+
+        int targetRowCount = Math.Clamp(rowCount, 0, activeResultTable.Rows.Count);
+        int rowsToCreate = targetRowCount - resultSourceRows.Count;
+        if (rowsToCreate <= 0)
+        {
+            return false;
+        }
+
+        IReadOnlyList<double> columnWidths = ResultColumns
+            .Select(column => column.DisplayWidth)
+            .ToArray();
+        using (new WorkbenchPerformanceScope(
+            performanceSink,
+            "results.rows.on-demand-project",
+            rowsToCreate))
+        {
+            for (int rowIndex = resultSourceRows.Count; rowIndex < targetRowCount; rowIndex++)
+            {
+                resultSourceRows.Add(new KustoResultRowViewModel(
+                    activeResultTable.Rows[rowIndex],
+                    rowIndex,
+                    activeResultTable.Columns,
+                    columnWidths));
+            }
+        }
+
+        return true;
+    }
+
+    private void EnsureAllResultRowsMaterialized()
+    {
+        if (activeResultTable is not null
+            && MaterializeResultRowsThrough(activeResultTable.Rows.Count))
+        {
+            ApplyResultFormatting();
+            ApplyRecordingAnnotations();
+        }
+    }
+
+    private async Task ApplyGraphQueryResultAsync(
+        KustoGraphIngestionResult result,
+        CancellationToken cancellationToken)
     {
         KustoResultTable? resultTable = result.Export.ResultTable;
 
@@ -4265,9 +4455,10 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         }
         else
         {
-            ApplyQueryResult(
+            await ApplyQueryResultAsync(
                 new KustoQueryResult([resultTable], result.Export.Duration),
-                null);
+                null,
+                cancellationToken);
 
             if (resultTable.Rows.Count < result.Export.EdgeCount)
             {
@@ -4280,14 +4471,19 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     {
         if (activeResultTable is not null && SelectedDocument is not null)
         {
+            if (RequiresCompleteResultFormatting())
+            {
+                _ = MaterializeResultRowsThrough(activeResultTable.Rows.Count);
+            }
+
             using (new WorkbenchPerformanceScope(
                 performanceSink,
                 "results.format.apply",
-                ResultRows.Count))
+                resultSourceRows.Count))
             {
                 KustoResultFormattingEngine.Apply(
                     activeResultTable.Columns,
-                    ResultRows,
+                    resultSourceRows,
                     SelectedDocument.UseAlternatingRows,
                     SelectedDocument.ConditionalFormattingRules);
             }
@@ -4338,6 +4534,18 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         hasLiveResultAnnotations = shouldAnnotate;
     }
 
+    private bool HasResultTransforms()
+    {
+        return HasResultFilters || ResultColumns.Any(column => column.IsSortActive);
+    }
+
+    private bool RequiresCompleteResultFormatting()
+    {
+        return SelectedDocument?.ConditionalFormattingRules.Any(rule =>
+            rule.Comparison is KustoConditionalFormatOperator.TopPercent
+                or KustoConditionalFormatOperator.BottomPercent) == true;
+    }
+
     private void OnRecordingActiveInterestsChanged(object? sender, EventArgs eventArguments)
     {
         _ = sender;
@@ -4352,30 +4560,84 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
             return;
         }
 
+        bool hasResultTransforms = HasResultTransforms();
+        if (hasResultTransforms)
+        {
+            EnsureAllResultRowsMaterialized();
+        }
+
         IReadOnlyList<KustoResultRowViewModel> visibleRows;
         using (new WorkbenchPerformanceScope(
             performanceSink,
             "results.view.transform",
             resultSourceRows.Count))
         {
-            visibleRows = KustoResultViewEngine.Apply(
-                resultSourceRows,
-                ResultColumns,
-                ResultSearchText);
+            visibleRows = hasResultTransforms
+                ? KustoResultViewEngine.Apply(
+                    resultSourceRows,
+                    ResultColumns,
+                    ResultSearchText)
+                : resultSourceRows;
         }
 
-        bool rowsChanged;
+        resultViewRows = visibleRows;
+        resultPageIndex = 0;
+        PublishResultPage();
+    }
+
+    private void SetResultPage(int pageIndex)
+    {
+        int maximumPageIndex = Math.Max(0, GetResultPageCount() - 1);
+        int boundedPageIndex = Math.Clamp(pageIndex, 0, maximumPageIndex);
+        long operationId = performanceSink.StartOperation(
+            "results.page.change",
+            ResultViewRowCount);
+        if (resultPageIndex == boundedPageIndex)
+        {
+            performanceSink.CompleteOperation(
+                operationId,
+                $"unchanged:page:{resultPageIndex + 1}");
+            return;
+        }
+
+        try
+        {
+            if (!HasResultTransforms()
+                && MaterializeResultRowsThrough((boundedPageIndex + 1) * ResultRowsPerPage))
+            {
+                ApplyResultFormatting();
+                ApplyRecordingAnnotations();
+            }
+
+            resultPageIndex = boundedPageIndex;
+            PublishResultPage();
+            performanceSink.CompleteOperation(operationId, $"page:{resultPageIndex + 1}");
+        }
+        catch
+        {
+            performanceSink.CompleteOperation(operationId, "failed");
+            throw;
+        }
+    }
+
+    private int GetResultPageCount()
+    {
+        return (ResultViewRowCount + ResultRowsPerPage - 1) / ResultRowsPerPage;
+    }
+
+    private void PublishResultPage()
+    {
+        int firstRowIndex = resultPageIndex * ResultRowsPerPage;
+        IReadOnlyList<KustoResultRowViewModel> pageRows = resultViewRows
+            .Skip(firstRowIndex)
+            .Take(ResultRowsPerPage)
+            .ToArray();
         using (new WorkbenchPerformanceScope(
             performanceSink,
             "results.collection.replace",
-            visibleRows.Count))
+            resultViewRows.Count))
         {
-            rowsChanged = resultRows.ReplaceWith(visibleRows);
-        }
-
-        if (rowsChanged)
-        {
-            ApplyResultFormatting();
+            _ = resultRows.ReplaceWith(pageRows);
         }
 
         NotifyResultViewChanged();
@@ -4408,7 +4670,14 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(ActiveResultColumnFilterCount));
         OnPropertyChanged(nameof(HasResultFilters));
         OnPropertyChanged(nameof(ResultViewSummary));
+        OnPropertyChanged(nameof(ResultViewRowCount));
+        OnPropertyChanged(nameof(HasMultipleResultPages));
+        OnPropertyChanged(nameof(HasPreviousResultPage));
+        OnPropertyChanged(nameof(HasNextResultPage));
+        OnPropertyChanged(nameof(ResultPageText));
         ClearResultFiltersCommand.NotifyCanExecuteChanged();
+        PreviousResultPageCommand.NotifyCanExecuteChanged();
+        NextResultPageCommand.NotifyCanExecuteChanged();
     }
 
     private void OnResultColumnPropertyChanged(object? sender, PropertyChangedEventArgs eventArguments)
@@ -4481,6 +4750,19 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         return Array.AsReadOnly(sourceRows);
     }
 
+    private IReadOnlyList<KustoResultRow> GetDisplayedSourceRows()
+    {
+        KustoResultTable table = activeResultTable
+            ?? throw new InvalidOperationException("Run a query before copying results.");
+        if (!HasResultTransforms())
+        {
+            return table.Rows;
+        }
+
+        EnsureAllResultRowsMaterialized();
+        return GetSourceRows(resultViewRows);
+    }
+
     private async Task AddClusterAsync(CancellationToken cancellationToken)
     {
         IsAddingCluster = true;
@@ -4549,6 +4831,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
             KustoExplorerImportResult result = await importService.ImportConnectionsAsync(cancellationToken);
             int existingConnectionCount = 0;
             int importedConnectionCount = 0;
+            KustoClusterViewModel? firstImportedCluster = null;
 
             foreach (KustoClusterConnection connection in result.Connections)
             {
@@ -4563,13 +4846,17 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
                 }
                 else
                 {
-                    Clusters.Add(CreateClusterViewModel(connection));
+                    KustoClusterViewModel importedCluster = CreateClusterViewModel(connection);
+                    Clusters.Add(importedCluster);
+                    firstImportedCluster ??= importedCluster;
                     importedConnectionCount++;
                 }
             }
 
             if (importedConnectionCount > 0)
             {
+                SchemaFilterText = string.Empty;
+                SelectedExplorerItem = firstImportedCluster;
                 RebuildFolders();
                 UpdateVisibleClusters();
                 PersistCatalog();
@@ -4583,6 +4870,11 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
                 RefreshExistingTabGroups();
                 SelectedDocument = firstImportedTab;
                 ScheduleDocumentAutosave();
+            }
+
+            if (firstImportedCluster is not null)
+            {
+                SelectedExplorerItem = firstImportedCluster;
             }
 
             int skippedConnectionCount = result.SkippedConnectionCount + existingConnectionCount;
@@ -4780,6 +5072,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     {
         organizingCluster = null;
         IsOrganizeClusterOpen = false;
+        IsEditingClusterConnection = false;
         OrganizeClusterAddress = string.Empty;
         OrganizeClusterDisplayName = string.Empty;
         OrganizeClusterErrorText = string.Empty;
@@ -4793,7 +5086,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
             RefreshClusterAsync,
             RemoveCluster,
             OpenOrganizeCluster,
-            OpenOrganizeCluster);
+            OpenEditCluster);
     }
 
     private KustoDocumentViewModel CreateDocumentViewModel(KustoDocument document)
@@ -4959,6 +5252,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
         _ = cancellationToken;
         if (activeRecordedExecutionId is Guid executionId && resultContextCell is not null)
         {
+            EnsureAllResultRowsMaterialized();
             await Recording.MarkLiveColumnAsync(
                 executionId,
                 resultSourceRows,
@@ -5536,9 +5830,20 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
 
     private void OpenOrganizeCluster(KustoClusterViewModel cluster)
     {
+        OpenClusterDialog(cluster, editConnection: false);
+    }
+
+    private void OpenEditCluster(KustoClusterViewModel cluster)
+    {
+        OpenClusterDialog(cluster, editConnection: true);
+    }
+
+    private void OpenClusterDialog(KustoClusterViewModel cluster, bool editConnection)
+    {
         ArgumentNullException.ThrowIfNull(cluster);
 
         organizingCluster = cluster;
+        IsEditingClusterConnection = editConnection;
         OrganizeClusterAddress = cluster.ClusterUri.AbsoluteUri;
         OrganizeClusterDisplayName = cluster.DisplayName;
         OrganizeFolderName = cluster.FolderName ?? string.Empty;
@@ -5563,7 +5868,7 @@ public sealed class MainWindowViewModel : ObservableObject, IDisposable
     {
         if (!isDisposed)
         {
-            documentPersistence.Schedule(CreateDocumentWorkspace());
+            documentPersistence.Schedule(CreateDocumentWorkspace);
         }
     }
 

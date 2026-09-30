@@ -175,11 +175,12 @@ const runIteration = async iteration => {
     await waitForPaint(page);
     await page.evaluate(() => globalThis.openKustoExplorerResetPerformanceProfile());
 
-    await invokeFixture(page, "editor");
+    await invokeFixture(page, "large-editor");
+    await waitForCompletedOperation(page, "editor.analysis.deferred", 1);
+    await page.evaluate(() => globalThis.openKustoExplorerResetPerformanceProfile());
     await page.keyboard.press("Control+End");
-    await page.keyboard.type("\n| where Mes", { delay: 8 });
-    await waitForCompletedOperation(page, "editor.completion.paint", 1);
-    await page.keyboard.press("Escape");
+    await page.keyboard.type(" ");
+    await waitForCompletedOperation(page, "editor.analysis.deferred", 1);
 
     await page.keyboard.press("F5");
     await waitForCompletedOperation(page, "results.first-row.paint", 1);

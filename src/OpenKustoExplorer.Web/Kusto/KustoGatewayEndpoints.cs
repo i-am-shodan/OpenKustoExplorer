@@ -26,37 +26,44 @@ internal static class KustoGatewayEndpoints
     /// Maps the same-origin Kusto gateway endpoints.
     /// </summary>
     /// <param name="endpoints">The Web endpoint route builder.</param>
+    /// <param name="routePrefix">The path prefix that owns the gateway.</param>
+    /// <param name="authorizationPolicy">The optional host authorization policy.</param>
     /// <returns>The supplied route builder.</returns>
-    public static IEndpointRouteBuilder MapKustoGateway(this IEndpointRouteBuilder endpoints)
+    public static IEndpointRouteBuilder MapKustoGateway(
+        this IEndpointRouteBuilder endpoints,
+        string routePrefix = "/",
+        string? authorizationPolicy = null)
     {
         ArgumentNullException.ThrowIfNull(endpoints);
+        ArgumentException.ThrowIfNullOrWhiteSpace(routePrefix);
 
-        endpoints.MapGet(KustoGatewayRoutes.Session, GetSession)
-            .RequireAuthorization();
-        endpoints.MapPost(KustoGatewayRoutes.SignOut, SignOutAsync)
-            .RequireAuthorization()
+        RouteGroupBuilder routes = endpoints.MapGroup(routePrefix);
+        if (string.IsNullOrWhiteSpace(authorizationPolicy))
+        {
+            routes.RequireAuthorization();
+        }
+        else
+        {
+            routes.RequireAuthorization(authorizationPolicy);
+        }
+
+        routes.MapGet(KustoGatewayRoutes.Session, GetSession);
+        routes.MapPost(KustoGatewayRoutes.SignOut, SignOutAsync)
             .WithMetadata(new RequireAntiforgeryTokenAttribute(true));
-        endpoints.MapPost(KustoGatewayRoutes.Query, ExecuteQueryAsync)
-            .RequireAuthorization()
+        routes.MapPost(KustoGatewayRoutes.Query, ExecuteQueryAsync)
             .WithMetadata(new RequireAntiforgeryTokenAttribute(true));
-        endpoints.MapPost(KustoGatewayRoutes.Graph, ExecuteGraphAsync)
-            .RequireAuthorization()
+        routes.MapPost(KustoGatewayRoutes.Graph, ExecuteGraphAsync)
             .WithMetadata(new RequireAntiforgeryTokenAttribute(true));
-        endpoints.MapGet(KustoGatewayRoutes.CopilotModels, GetCopilotModels)
-            .RequireAuthorization();
-        endpoints.MapPost(KustoGatewayRoutes.Copilot, ExecuteCopilotAsync)
-            .RequireAuthorization()
+        routes.MapGet(KustoGatewayRoutes.CopilotModels, GetCopilotModels);
+        routes.MapPost(KustoGatewayRoutes.Copilot, ExecuteCopilotAsync)
             .WithMetadata(new RequireAntiforgeryTokenAttribute(true));
-        endpoints.MapPost(KustoGatewayRoutes.Databases, GetDatabasesAsync)
-            .RequireAuthorization()
+        routes.MapPost(KustoGatewayRoutes.Databases, GetDatabasesAsync)
             .WithMetadata(new RequireAntiforgeryTokenAttribute(true));
-        endpoints.MapPost(KustoGatewayRoutes.Schema, GetSchemaAsync)
-            .RequireAuthorization()
+        routes.MapPost(KustoGatewayRoutes.Schema, GetSchemaAsync)
             .WithMetadata(new RequireAntiforgeryTokenAttribute(true));
-        endpoints.MapDelete(
+        routes.MapDelete(
             $"{KustoGatewayRoutes.Operations}/{{operationId:guid}}",
             CancelOperationAsync)
-            .RequireAuthorization()
             .WithMetadata(new RequireAntiforgeryTokenAttribute(true));
 
         return endpoints;

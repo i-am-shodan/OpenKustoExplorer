@@ -52,6 +52,7 @@ public enum LucideIconKind
     PanelRightOpen,
     PanelsTopLeft,
     Parentheses,
+    Pause,
     Pencil,
     Pin,
     Play,

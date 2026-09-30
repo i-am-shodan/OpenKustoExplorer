@@ -20,6 +20,7 @@ using Avalonia.Styling;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using AvaloniaEdit;
+using CommunityToolkit.Mvvm.Input;
 using OpenKustoExplorer.Application.Assistance;
 using OpenKustoExplorer.Application.Automations;
 using OpenKustoExplorer.Application.Diagnostics;
@@ -196,6 +197,8 @@ public sealed partial class WorkbenchView : UserControl, IDisposable
     private TextBlock? resultTextZoomValue;
     private long pendingResultSearchOperationId;
     private string? pendingResultSearchText;
+    private Task? performanceFixtureTask;
+    private int performanceRecordingNumber;
     private ScrollViewer? resultScrollViewer;
     private TabControl? resultTabs;
     private ScrollBar? resultVerticalScrollBar;
@@ -458,29 +461,7 @@ public sealed partial class WorkbenchView : UserControl, IDisposable
     internal bool FocusPerformanceTarget(string target)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(target);
-        Control? control = target switch
-        {
-            "connections" => connectionsButton,
-            "create-dashboard" => this.FindControl<Button>("CreateDashboardButton"),
-            "custom-time-range-start-date" => this.GetVisualDescendants()
-                .OfType<CalendarDatePicker>()
-                .FirstOrDefault(item => string.Equals(
-                    AutomationProperties.GetName(item),
-                    "Custom time range start date",
-                    StringComparison.Ordinal)),
-            "copilot-apply-edit" => this.FindControl<Button>("CopilotApplyEditButton"),
-            "copilot-open" => copilotExpandButton,
-            "copilot-prompt" => copilotPrompt,
-            "copilot-send" => this.FindControl<Button>("CopilotSendButton"),
-            "dashboard" => dashboardButton,
-            "dashboard-time-range" => this.FindControl<ComboBox>("DashboardTimeRangeSelector"),
-            "editor" => queryEditor,
-            "fix-query" => this.FindControl<Button>("FixQueryWithCopilotButton"),
-            "graph" => graphButton,
-            "result-search" => this.FindControl<TextBox>("ResultSearchBox"),
-            "sessions" => sessionsButton,
-            _ => null,
-        };
+        Control? control = FindPerformanceTarget(target);
         if (control is null || !control.IsEffectivelyVisible)
         {
             return false;
@@ -491,9 +472,63 @@ public sealed partial class WorkbenchView : UserControl, IDisposable
     }
 
     /// <summary>
+    /// Activates one real button through its routed click event for deterministic stress workloads.
+    /// </summary>
+    /// <param name="target">The constrained fixture target name.</param>
+    /// <returns><see langword="true"/> when a visible enabled button was activated.</returns>
+    internal bool ActivatePerformanceTarget(string target)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(target);
+        if (FindPerformanceTarget(target) is not Button { IsEffectivelyVisible: true, IsEnabled: true } button)
+        {
+            return false;
+        }
+
+        if (button.Command is { } command)
+        {
+            if (!command.CanExecute(button.CommandParameter))
+            {
+                return false;
+            }
+
+            command.Execute(button.CommandParameter);
+        }
+        else
+        {
+            button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Executes one live-result paging command for a sustained Browser workload.
+    /// </summary>
+    /// <param name="next">Whether to advance instead of returning to the previous page.</param>
+    /// <returns><see langword="true"/> when the requested page change was available.</returns>
+    internal bool ActivatePerformanceResultPage(bool next)
+    {
+        if (DataContext is not MainWindowViewModel viewModel)
+        {
+            return false;
+        }
+
+        IRelayCommand command = next
+            ? viewModel.NextResultPageCommand
+            : viewModel.PreviousResultPageCommand;
+        if (!command.CanExecute(null))
+        {
+            return false;
+        }
+
+        command.Execute(null);
+        return true;
+    }
+
+    /// <summary>
     /// Selects the custom dashboard time range for the Browser performance fixture.
     /// </summary>
-    /// <returns><see langword="true"/> when the custom time-range editor opened.</returns>
+    /// <returns><see langword="true"/> when the custom time-range selection was accepted.</returns>
     internal bool OpenPerformanceCustomTimeRange()
     {
         if (DataContext is not MainWindowViewModel viewModel
@@ -510,7 +545,7 @@ public sealed partial class WorkbenchView : UserControl, IDisposable
         }
 
         viewModel.Dashboard.SelectedTimeRangeOption = customOption;
-        return viewModel.Dashboard.IsCustomTimeRangeOpen;
+        return true;
     }
 
     /// <summary>
@@ -547,6 +582,31 @@ public sealed partial class WorkbenchView : UserControl, IDisposable
         }
 
         viewModel.RunQueryCommand.Execute(null);
+        return true;
+    }
+
+    /// <summary>
+    /// Starts, records, and stops one deterministic large query for Browser performance profiling.
+    /// </summary>
+    /// <param name="queryText">The deterministic query text.</param>
+    /// <param name="expectedRowCount">The expected result row count.</param>
+    /// <returns><see langword="true"/> when the operation was started.</returns>
+    internal bool StartPerformanceRecordedQuery(string queryText, int expectedRowCount)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(queryText);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(expectedRowCount);
+        if (DataContext is not MainWindowViewModel viewModel
+            || performanceFixtureTask is { IsCompleted: false })
+        {
+            return false;
+        }
+
+        performanceFixtureTask = RunPerformanceRecordedQueryAsync(
+            this,
+            viewModel,
+            queryText,
+            expectedRowCount);
+        _ = ObservePerformanceTaskAsync(performanceFixtureTask);
         return true;
     }
 
@@ -615,6 +675,42 @@ public sealed partial class WorkbenchView : UserControl, IDisposable
             && !automationCancellationSource.IsCancellationRequested)
         {
             _ = RunAutomationTickAsync(viewModel);
+        }
+    }
+
+    private static async Task RunPerformanceRecordedQueryAsync(
+        WorkbenchView view,
+        MainWindowViewModel viewModel,
+        string queryText,
+        int expectedRowCount)
+    {
+        long operationId = view.performanceSink.StartOperation(
+            "fixture.recording.query",
+            expectedRowCount);
+        try
+        {
+            if (viewModel.Recording.HasActiveRecording)
+            {
+                await viewModel.Recording.StopRecordingCommand.ExecuteAsync(null);
+            }
+
+            await viewModel.Recording.OpenRecordingCommand.ExecuteAsync(null);
+            view.performanceRecordingNumber++;
+            viewModel.Recording.NewSessionName = $"Performance recording {view.performanceRecordingNumber:N0}";
+            await viewModel.Recording.StartRecordingCommand.ExecuteAsync(null);
+            viewModel.ShowQueryWorkbenchCommand.Execute(null);
+            viewModel.QueryText = queryText;
+            viewModel.CaretPosition = queryText.Length;
+            await viewModel.RunQueryCommand.ExecuteAsync(null);
+            await viewModel.Recording.StopRecordingCommand.ExecuteAsync(null);
+            await view.performanceSink.CompleteOperationAfterRenderAsync(
+                operationId,
+                viewModel.Recording.HasRecordingError ? "failed" : "completed");
+        }
+        catch
+        {
+            view.performanceSink.CompleteOperation(operationId, "failed");
+            throw;
         }
     }
 
@@ -757,6 +853,40 @@ public sealed partial class WorkbenchView : UserControl, IDisposable
     private static bool ShouldOverlayCopilot(double width)
     {
         return OperatingSystem.IsBrowser() || width < CompactLayoutBreakpoint;
+    }
+
+    private Control? FindPerformanceTarget(string target)
+    {
+        return target switch
+        {
+            "connections" => connectionsButton,
+            "create-dashboard" => this.FindControl<Button>("CreateDashboardButton"),
+            "custom-time-range-start-date" => this.GetVisualDescendants()
+                .OfType<CalendarDatePicker>()
+                .FirstOrDefault(item => string.Equals(
+                    AutomationProperties.GetName(item),
+                    "Custom time range start date",
+                    StringComparison.Ordinal)),
+            "copilot-apply-edit" => this.FindControl<Button>("CopilotApplyEditButton"),
+            "copilot-open" => copilotExpandButton,
+            "copilot-prompt" => copilotPrompt,
+            "copilot-send" => this.FindControl<Button>("CopilotSendButton"),
+            "dashboard" => dashboardButton,
+            "dashboard-time-range" => this.FindControl<ComboBox>("DashboardTimeRangeSelector"),
+            "editor" => queryEditor,
+            "fix-query" => this.FindControl<Button>("FixQueryWithCopilotButton"),
+            "graph" => graphButton,
+            "clear-result-filters" => this.FindControl<Button>("ClearResultFiltersButton"),
+            "next-result-page" => this.FindControl<Button>("NextResultPageButton"),
+            "previous-result-page" => this.FindControl<Button>("PreviousResultPageButton"),
+            "result-search" => this.FindControl<TextBox>("ResultSearchBox"),
+            "sort-first-result-column" => this.GetVisualDescendants()
+                .OfType<Button>()
+                .FirstOrDefault(button => button.DataContext is KustoResultColumnViewModel { ColumnIndex: 0 }
+                    && AutomationProperties.GetName(button)?.StartsWith("Sort by ", StringComparison.Ordinal) == true),
+            "sessions" => sessionsButton,
+            _ => null,
+        };
     }
 
     private void OnAppearancePropertyChanged(object? sender, PropertyChangedEventArgs eventArguments)
@@ -1279,10 +1409,10 @@ public sealed partial class WorkbenchView : UserControl, IDisposable
 
         pendingResultFirstRowOperationId = performanceSink.StartOperation(
             "results.first-row.paint",
-            viewModel.ResultRows.Count);
+            viewModel.ResultViewRowCount);
         pendingResultContainersOperationId = performanceSink.StartOperation(
             "results.containers.realized",
-            viewModel.ResultRows.Count);
+            viewModel.ResultViewRowCount);
         EventHandler? layoutUpdatedHandler = null;
         layoutUpdatedHandler = (_, _) =>
         {
@@ -1651,7 +1781,13 @@ public sealed partial class WorkbenchView : UserControl, IDisposable
 
             bool isSelectedDatabase = DataContext is MainWindowViewModel viewModel
                 && ReferenceEquals(viewModel.SelectedExplorerItem, treeViewItem.DataContext);
-            treeViewItem.IsExpanded = treeViewItem.DataContext is KustoClusterViewModel || isSelectedDatabase;
+            bool containsSelectedCluster = DataContext is MainWindowViewModel clusterViewModel
+                && treeViewItem.DataContext is KustoFolderViewModel clusterFolder
+                && clusterViewModel.SelectedExplorerItem is KustoClusterViewModel selectedCluster
+                && clusterFolder.Clusters.Contains(selectedCluster);
+            treeViewItem.IsExpanded = treeViewItem.DataContext is KustoClusterViewModel
+                || isSelectedDatabase
+                || containsSelectedCluster;
         }
     }
 
@@ -2042,13 +2178,45 @@ public sealed partial class WorkbenchView : UserControl, IDisposable
         }
     }
 
+    private void OnResultsListContextRequested(object? sender, ContextRequestedEventArgs eventArguments)
+    {
+        if (DataContext is not MainWindowViewModel viewModel)
+        {
+            return;
+        }
+
+        KustoResultCellViewModel? cell = (eventArguments.Source as Control)?.DataContext
+            as KustoResultCellViewModel;
+        if (cell is null
+            && sender is ListBox { SelectedItem: KustoResultRowViewModel selectedRow }
+            && selectedRow.Cells.Count > 0)
+        {
+            cell = selectedRow.Cells[0];
+        }
+
+        if (cell is not null)
+        {
+            viewModel.SetResultContext(cell);
+        }
+    }
+
     private void OnRecordedResultCellPointerPressed(object? sender, PointerPressedEventArgs eventArguments)
     {
+        _ = eventArguments;
         if (sender is Control { DataContext: KustoResultCellViewModel cell }
             && DataContext is MainWindowViewModel viewModel)
         {
             viewModel.Recording.SetResultContext(cell);
-            eventArguments.Handled = eventArguments.GetCurrentPoint((Control)sender).Properties.IsRightButtonPressed;
+        }
+    }
+
+    private void OnRecordedResultsContextRequested(object? sender, ContextRequestedEventArgs eventArguments)
+    {
+        _ = sender;
+        if (eventArguments.Source is Control { DataContext: KustoResultCellViewModel cell }
+            && DataContext is MainWindowViewModel viewModel)
+        {
+            viewModel.Recording.SetResultContext(cell);
         }
     }
 
@@ -2057,7 +2225,23 @@ public sealed partial class WorkbenchView : UserControl, IDisposable
         if (sender is Control { DataContext: KustoResultColumnViewModel column }
             && DataContext is MainWindowViewModel viewModel)
         {
-            viewModel.ToggleResultSort(column);
+            long operationId = performanceSink.StartOperation(
+                "results.sort.paint",
+                viewModel.ResultViewRowCount);
+            try
+            {
+                viewModel.ToggleResultSort(column);
+                _ = ObservePerformanceTaskAsync(
+                    performanceSink.CompleteOperationAfterRenderAsync(
+                        operationId,
+                        column.SortDirection.ToString().ToLowerInvariant()));
+            }
+            catch
+            {
+                performanceSink.CompleteOperation(operationId, "failed");
+                throw;
+            }
+
             eventArguments.Handled = true;
         }
     }

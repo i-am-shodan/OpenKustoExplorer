@@ -137,10 +137,11 @@ public sealed class GitHubCopilotKustoService : IKustoCopilotService, IDisposabl
                 activeClient = await GetOrCreateClientAsync(startupSource.Token).ConfigureAwait(false);
                 models = await activeClient.ListModelsAsync(startupSource.Token).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
             {
                 throw new TimeoutException(
-                    "GitHub Copilot did not become available within 30 seconds. Check the CLI, account, and network connection.");
+                    "GitHub Copilot did not become available within 30 seconds. Check the CLI, account, and network connection.",
+                    exception);
             }
 
             KustoCopilotModel[] availableModels = models

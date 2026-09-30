@@ -22,11 +22,14 @@ namespace OpenKustoExplorer.Desktop.Editor;
 /// </summary>
 internal sealed class KustoEditorController : IDisposable
 {
+    private const int MaximumAutomaticCompletionDocumentLength = 65536;
+    private const int MaximumAutomaticAnalysisDocumentLength = 131072;
     private static readonly TimeSpan AnalysisDelay = TimeSpan.FromMilliseconds(180);
     private static readonly TimeSpan CompletionDelay = TimeSpan.FromMilliseconds(120);
     private static readonly DataFormat<string> HtmlFormat = DataFormat.CreateStringPlatformFormat("text/html");
     private static readonly DataFormat<string> WindowsHtmlFormat = DataFormat.CreateStringPlatformFormat("HTML Format");
     private readonly KustoEditorAnalysisCoordinator analysisCoordinator;
+    private readonly KustoEditorAnalysisCoordinator completionAnalysisCoordinator;
     private readonly KustoExecutionErrorColorizer executionErrorColorizer;
     private readonly AppearanceSettings appearanceSettings;
     private readonly KustoSyntaxColorizer colorizer;
@@ -49,6 +52,7 @@ internal sealed class KustoEditorController : IDisposable
     private string? cachedHelpText;
     private string? displayedExplicitHelpText;
     private bool isDisposed;
+    private bool isAutomaticAnalysisDeferred;
     private bool isSynchronizingDocument;
 
     /// <summary>
@@ -73,6 +77,9 @@ internal sealed class KustoEditorController : IDisposable
         this.appearanceSettings = appearanceSettings;
         this.performanceSink = performanceSink ?? NullWorkbenchPerformanceSink.Instance;
         analysisCoordinator = new KustoEditorAnalysisCoordinator(
+            viewModel.AnalyzeDocument,
+            this.performanceSink);
+        completionAnalysisCoordinator = new KustoEditorAnalysisCoordinator(
             viewModel.Analyze,
             this.performanceSink);
         editor.TextArea.TextView.Margin = new Thickness(5, 0, 0, 0);
@@ -127,7 +134,19 @@ internal sealed class KustoEditorController : IDisposable
             CancelPendingExplicitHelp();
             CancelPendingHoverHelp();
             analysisCoordinator.Dispose();
+            completionAnalysisCoordinator.Dispose();
         }
+    }
+
+    /// <summary>
+    /// Gets whether a document is small enough for automatic semantic analysis on every edit.
+    /// </summary>
+    /// <param name="documentLength">The document character count.</param>
+    /// <returns><see langword="true"/> when automatic analysis remains bounded.</returns>
+    internal static bool ShouldAnalyzeAutomatically(int documentLength)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(documentLength);
+        return documentLength <= MaximumAutomaticAnalysisDocumentLength;
     }
 
     /// <summary>
@@ -186,10 +205,11 @@ internal sealed class KustoEditorController : IDisposable
 
     private void OnTextChanged(object? sender, EventArgs eventArguments)
     {
+        string textSnapshot = editor.Text ?? string.Empty;
         using WorkbenchPerformanceScope inputMeasurement = new(
             performanceSink,
             "editor.input.process",
-            editor.Text?.Length ?? 0);
+            textSnapshot.Length);
         if (!isSynchronizingDocument)
         {
             CancelPendingCompletion();
@@ -204,8 +224,8 @@ internal sealed class KustoEditorController : IDisposable
             CancelPendingHoverHelp();
             DismissHoverHelp();
             InvalidateHelpCache();
-            viewModel.QueryText = editor.Text ?? string.Empty;
-            QueueAnalysis(AnalysisDelay);
+            viewModel.QueryText = textSnapshot;
+            QueueAnalysis(AnalysisDelay, textSnapshot);
         }
     }
 
@@ -251,11 +271,11 @@ internal sealed class KustoEditorController : IDisposable
             DismissExplicitHelp();
             InvalidateHelpCache();
             classifications = Array.Empty<KustoClassification>();
+            isAutomaticAnalysisDeferred = false;
             colorizer.Update(Array.Empty<KustoClassification>());
             executionErrorColorizer.Update(viewModel.QueryErrorHighlight);
             SynchronizeEditorFromViewModel();
             editor.TextArea.TextView.Redraw();
-            QueueAnalysis(TimeSpan.Zero);
         }
         else if (queryTextChanged && editorNeedsUpdate)
         {
@@ -340,8 +360,11 @@ internal sealed class KustoEditorController : IDisposable
     private void OnPointerMoved(object? sender, PointerEventArgs eventArguments)
     {
         _ = sender;
-        if (!appearanceSettings.ShowKqlHoverHelp)
+        if (!appearanceSettings.ShowKqlHoverHelp
+            || !ShouldAnalyzeAutomatically(editor.Document.TextLength))
         {
+            CancelPendingHoverHelp();
+            DismissHoverHelp();
             return;
         }
 
@@ -435,14 +458,38 @@ internal sealed class KustoEditorController : IDisposable
         }
     }
 
-    private void QueueAnalysis(TimeSpan delay)
+    private void QueueAnalysis(TimeSpan delay, string? textSnapshot = null)
     {
         CancelPendingAnalysis();
-        analysisCancellationSource = new CancellationTokenSource();
         Guid documentId = viewModel.SelectedDocument?.Id ?? Guid.Empty;
-        string textSnapshot = editor.Text ?? string.Empty;
+        textSnapshot ??= editor.Text ?? string.Empty;
         int caretPosition = Math.Min(editor.TextArea.Caret.Offset, textSnapshot.Length);
         int schemaRevision = viewModel.ActiveSchemaRevision;
+        if (!ShouldAnalyzeAutomatically(textSnapshot.Length))
+        {
+            if (!isAutomaticAnalysisDeferred)
+            {
+                isAutomaticAnalysisDeferred = true;
+                classifications = Array.Empty<KustoClassification>();
+                colorizer.Update(classifications);
+                viewModel.ApplyAnalysis(new KustoLanguageAnalysis(
+                    classifications,
+                    [],
+                    [],
+                    caretPosition,
+                    0));
+                editor.TextArea.TextView.Redraw();
+            }
+
+            long operationId = performanceSink.StartOperation(
+                "editor.analysis.deferred",
+                textSnapshot.Length);
+            performanceSink.CompleteOperation(operationId, "large-document");
+            return;
+        }
+
+        isAutomaticAnalysisDeferred = false;
+        analysisCancellationSource = new CancellationTokenSource();
         _ = AnalyzeAfterDelayAsync(
             delay,
             documentId,
@@ -454,6 +501,7 @@ internal sealed class KustoEditorController : IDisposable
 
     private void QueueCompletion(TimeSpan delay)
     {
+        CancelPendingAnalysis();
         CancelPendingCompletion();
         completionCancellationSource = new CancellationTokenSource();
         Guid documentId = viewModel.SelectedDocument?.Id ?? Guid.Empty;
@@ -570,7 +618,16 @@ internal sealed class KustoEditorController : IDisposable
     {
         try
         {
-            await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+            if (delay > TimeSpan.Zero)
+            {
+                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await Task.Yield();
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+
             KustoLanguageAnalysis analysis = await analysisCoordinator.GetAnalysisAsync(
                 documentId,
                 textSnapshot,
@@ -614,6 +671,7 @@ internal sealed class KustoEditorController : IDisposable
 
         if (isCurrentDocument && !isDisposed)
         {
+            isAutomaticAnalysisDeferred = false;
             using WorkbenchPerformanceScope applyMeasurement = new(
                 performanceSink,
                 "editor.analysis.apply",
@@ -648,7 +706,7 @@ internal sealed class KustoEditorController : IDisposable
         try
         {
             await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
-            KustoLanguageAnalysis analysis = await analysisCoordinator.GetAnalysisAsync(
+            KustoLanguageAnalysis analysis = await completionAnalysisCoordinator.GetAnalysisAsync(
                 documentId,
                 textSnapshot,
                 caretPosition,
@@ -656,11 +714,20 @@ internal sealed class KustoEditorController : IDisposable
                 cancellationToken).ConfigureAwait(false);
 
             await Dispatcher.UIThread.InvokeAsync(
-                () => ShowCompletionWindow(
-                    documentId,
-                    textSnapshot,
-                    schemaRevision,
-                    analysis),
+                () =>
+                {
+                    ApplyAnalysis(
+                        documentId,
+                        textSnapshot,
+                        caretPosition,
+                        schemaRevision,
+                        analysis);
+                    ShowCompletionWindow(
+                        documentId,
+                        textSnapshot,
+                        schemaRevision,
+                        analysis);
+                },
                 DispatcherPriority.Input,
                 cancellationToken);
             await performanceSink.CompleteOperationAfterRenderAsync(
@@ -1002,6 +1069,11 @@ internal sealed class KustoEditorController : IDisposable
 
     private bool ShouldRequestAutomaticCompletion(KeyEventArgs eventArguments)
     {
+        if (editor.Document.TextLength > MaximumAutomaticCompletionDocumentLength)
+        {
+            return false;
+        }
+
         bool hasBlockedModifier = eventArguments.KeyModifiers.HasFlag(KeyModifiers.Control)
             || eventArguments.KeyModifiers.HasFlag(KeyModifiers.Alt)
             || eventArguments.KeyModifiers.HasFlag(KeyModifiers.Meta);
@@ -1014,12 +1086,17 @@ internal sealed class KustoEditorController : IDisposable
 
     private int GetIdentifierPrefixLength()
     {
-        string text = editor.Text ?? string.Empty;
-        int position = Math.Min(editor.TextArea.Caret.Offset, text.Length);
+        int position = Math.Min(editor.TextArea.Caret.Offset, editor.Document.TextLength);
         int start = position;
 
-        while (start > 0 && (char.IsLetterOrDigit(text[start - 1]) || text[start - 1] == '_'))
+        while (start > 0)
         {
+            char character = editor.Document.GetCharAt(start - 1);
+            if (!char.IsLetterOrDigit(character) && character != '_')
+            {
+                break;
+            }
+
             start--;
         }
 

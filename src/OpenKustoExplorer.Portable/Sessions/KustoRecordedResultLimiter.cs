@@ -30,10 +30,14 @@ public static class KustoRecordedResultLimiter
         List<KustoResultTable> tables = [];
         foreach (KustoResultTable table in result.Tables)
         {
+            long[] columnMetadataBytes = table.Columns
+                .Select(column => (long)Encoding.UTF8.GetByteCount(column.Name)
+                    + Encoding.UTF8.GetByteCount(column.TypeName))
+                .ToArray();
             List<KustoResultRow> retainedRows = [];
             foreach (KustoResultRow row in table.Rows)
             {
-                long estimatedBytes = EstimateRowBytes(table.Columns, row);
+                long estimatedBytes = EstimateRowBytes(columnMetadataBytes, row);
                 if (capacityExhausted || remainingRows == 0 || estimatedBytes > remainingBytes)
                 {
                     capacityExhausted = true;
@@ -60,7 +64,7 @@ public static class KustoRecordedResultLimiter
     }
 
     private static long EstimateRowBytes(
-        IReadOnlyList<KustoResultColumn> columns,
+        long[] columnMetadataBytes,
         KustoResultRow row)
     {
         const int FixedRowBytes = 256;
@@ -74,10 +78,9 @@ public static class KustoRecordedResultLimiter
                 : Encoding.UTF8.GetByteCount(value.RawJson);
             estimatedBytes += (displayBytes * 3L) + (rawBytes * 2L) + 128;
 
-            if (index < columns.Count)
+            if (index < columnMetadataBytes.Length)
             {
-                estimatedBytes += Encoding.UTF8.GetByteCount(columns[index].Name);
-                estimatedBytes += Encoding.UTF8.GetByteCount(columns[index].TypeName);
+                estimatedBytes += columnMetadataBytes[index];
             }
         }
 

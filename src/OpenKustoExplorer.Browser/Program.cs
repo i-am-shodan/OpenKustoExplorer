@@ -40,7 +40,7 @@ internal static partial class Program
             throw new InvalidOperationException("The browser host did not supply its page URI.");
         }
 
-        ApplicationBaseUri = new Uri(pageUri.GetLeftPart(UriPartial.Authority), UriKind.Absolute);
+        ApplicationBaseUri = KustoGatewayRoutes.GetApplicationBaseUri(pageUri);
         if (pageUri.IsLoopback && BrowserInterop.IsPerformanceFixtureEnabled())
         {
             PerformanceFixture = new BrowserPerformanceFixture();

@@ -9,6 +9,18 @@ namespace OpenKustoExplorer.Presentation.Tests.Desktop;
 public sealed class KustoEditorAnalysisCoordinatorTests
 {
     /// <summary>
+    /// Verifies automatic semantic analysis remains bounded for large editor documents.
+    /// </summary>
+    [Fact]
+    public void AutomaticAnalysisIsDeferredAboveDocumentBudget()
+    {
+        Assert.True(KustoEditorController.ShouldAnalyzeAutomatically(131072));
+        Assert.False(KustoEditorController.ShouldAnalyzeAutomatically(131073));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            KustoEditorController.ShouldAnalyzeAutomatically(-1));
+    }
+
+    /// <summary>
     /// Verifies concurrent and later consumers reuse one successful snapshot analysis.
     /// </summary>
     /// <returns>A task that completes after all consumers receive the shared result.</returns>

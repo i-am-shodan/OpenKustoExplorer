@@ -105,7 +105,7 @@ const verifyDashboardTimeRange = async viewport => {
     await invokeFixtureAction(page, "dashboard-time-range");
     await captureScreenshot(page, `dashboard-${viewport.width}x${viewport.height}.png`);
 
-    await invokeFixtureAction(page, "open-custom-time-range");
+    await waitForFixtureTarget(page, "open-custom-time-range");
     await waitForFixtureTarget(page, "custom-time-range-start-date");
     await captureScreenshot(page, `dashboard-custom-${viewport.width}x${viewport.height}.png`);
     assert.deepEqual(errors, []);
@@ -153,14 +153,24 @@ const verifyProfileGuidance = async viewport => {
 try {
   const connectionFilePath = path.join(profileDirectory, "UserConnections.xml");
   const groupFilePath = path.join(profileDirectory, "UserConnectionGroups.xml");
+  const nestedConnectionDirectory = path.join(profileDirectory, "Connections");
+  const nestedConnectionFilePath = path.join(nestedConnectionDirectory, "UserConnections.xml");
   const recoveryDirectory = path.join(profileDirectory, "Recovery");
   const recoveryFilePath = path.join(recoveryDirectory, "Recovered.kebak");
+  fs.mkdirSync(nestedConnectionDirectory);
   fs.mkdirSync(recoveryDirectory);
   fs.writeFileSync(
     connectionFilePath,
-    "<ArrayOfServerDescriptionBase />",
+    "<ArrayOfServerDescriptionBase><ServerDescriptionBase><Name>Contoso</Name><ConnectionString>Data Source=https://contoso.kusto.windows.net</ConnectionString></ServerDescriptionBase></ArrayOfServerDescriptionBase>",
     "utf8");
-  fs.writeFileSync(groupFilePath, "<ArrayOfConnectionGroup />", "utf8");
+  fs.writeFileSync(
+    nestedConnectionFilePath,
+    "<ArrayOfServerDescriptionBase><ServerDescriptionBase><Name>Fabrikam</Name><ConnectionString>Data Source=https://fabrikam.kusto.windows.net</ConnectionString></ServerDescriptionBase></ArrayOfServerDescriptionBase>",
+    "utf8");
+  fs.writeFileSync(
+    groupFilePath,
+    "<ArrayOfServerGroupDescription><ServerGroupDescription><Name>Imported</Name><Details>C:\\Users\\Ada\\AppData\\Local\\Kusto.Explorer\\Connections\\UserConnections.xml</Details></ServerGroupDescription></ArrayOfServerGroupDescription>",
+    "utf8");
   fs.writeFileSync(recoveryFilePath, "{}", "utf8");
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   const errors = [];
@@ -195,19 +205,23 @@ try {
   const profileFileChooserPromise = page.waitForEvent("filechooser");
   await page.locator("#kusto-profile-choose-files").click();
   const profileFileChooser = await profileFileChooserPromise;
-  await profileFileChooser.setFiles([connectionFilePath, groupFilePath]);
-  await page.locator("#kusto-profile-status").getByText("2 profile files and 0 recovery files selected").waitFor();
+  await profileFileChooser.setFiles([connectionFilePath, nestedConnectionFilePath, groupFilePath]);
+  await page.locator("#kusto-profile-status").getByText("3 profile files and 0 recovery files selected").waitFor();
   assert.equal(await page.locator("#kusto-profile-import-selected").isEnabled(), true);
 
   const recoveryFileChooserPromise = page.waitForEvent("filechooser");
   await page.locator("#kusto-profile-choose-recovery").click();
   const recoveryFileChooser = await recoveryFileChooserPromise;
   await recoveryFileChooser.setFiles(recoveryFilePath);
-  await page.locator("#kusto-profile-status").getByText("2 profile files and 1 recovery file selected").waitFor();
+  await page.locator("#kusto-profile-status").getByText("3 profile files and 1 recovery file selected").waitFor();
   await page.locator("#kusto-profile-import-selected").click();
   const selectedProfile = JSON.parse(await page.evaluate(() => globalThis.browserSmokeProfile));
-  assert.equal(selectedProfile.length, 3);
-  assert.ok(selectedProfile.some(file => file.path === "UserConnections.xml"));
+  assert.equal(selectedProfile.length, 4);
+  const selectedConnectionPaths = selectedProfile
+    .filter(file => file.path.toLowerCase().endsWith("userconnections.xml"))
+    .map(file => file.path);
+  assert.equal(selectedConnectionPaths.length, 2);
+  assert.equal(new Set(selectedConnectionPaths.map(value => value.toLowerCase())).size, 2);
   assert.ok(selectedProfile.some(file => file.path === "UserConnectionGroups.xml"));
   assert.ok(selectedProfile.some(file => file.path === "Recovery/Recovered.kebak"));
   assert.equal(await page.evaluate(() => globalThis.browserSmokeDirectoryPickerCalls), 0);

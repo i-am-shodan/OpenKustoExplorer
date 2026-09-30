@@ -44,12 +44,7 @@ internal static class KustoResultViewEngine
             .Where(column => column.IsSortActive)
             .OrderBy(column => column.SortPriority))
         {
-            KustoResultValueComparer comparer = new(sortColumn.TypeName);
-            Func<KustoResultRowViewModel, string> keySelector = row =>
-                row.Cells[sortColumn.ColumnIndex].Text;
-            orderedRows = orderedRows is null
-                ? OrderRows(rows, keySelector, comparer, sortColumn.SortDirection)
-                : ThenOrderRows(orderedRows, keySelector, comparer, sortColumn.SortDirection);
+            orderedRows = ApplySort(rows, orderedRows, sortColumn);
         }
 
         if (orderedRows is not null)
@@ -60,10 +55,61 @@ internal static class KustoResultViewEngine
         return Array.AsReadOnly(rows.ToArray());
     }
 
-    private static IOrderedEnumerable<KustoResultRowViewModel> OrderRows(
+    private static IOrderedEnumerable<KustoResultRowViewModel> ApplySort(
         IEnumerable<KustoResultRowViewModel> rows,
-        Func<KustoResultRowViewModel, string> keySelector,
-        IComparer<string> comparer,
+        IOrderedEnumerable<KustoResultRowViewModel>? orderedRows,
+        KustoResultColumnViewModel column)
+    {
+        string normalizedType = column.TypeName.StartsWith("System.", StringComparison.OrdinalIgnoreCase)
+            ? column.TypeName[7..]
+            : column.TypeName;
+        return normalizedType.ToUpperInvariant() switch
+        {
+            "BYTE" or "SBYTE" or "INT16" or "INT32" or "INT64" or "UINT16" or "UINT32" or "UINT64"
+                or "DECIMAL" or "INT" or "LONG" => ApplyParsedSort(rows, orderedRows, column, ParseDecimal),
+            "DOUBLE" or "SINGLE" or "FLOAT" or "REAL" => ApplyParsedSort(rows, orderedRows, column, ParseDouble),
+            "DATETIME" or "DATETIMEOFFSET" or "DATE" => ApplyParsedSort(rows, orderedRows, column, ParseDateTime),
+            "TIMESPAN" or "TIME" => ApplyParsedSort(rows, orderedRows, column, ParseTimeSpan),
+            "BOOLEAN" or "BOOL" => ApplyParsedSort(rows, orderedRows, column, ParseBoolean),
+            "GUID" or "UUID" => ApplyParsedSort(rows, orderedRows, column, ParseGuid),
+            _ => ApplyStringSort(rows, orderedRows, column),
+        };
+    }
+
+    private static IOrderedEnumerable<KustoResultRowViewModel> ApplyParsedSort<T>(
+        IEnumerable<KustoResultRowViewModel> rows,
+        IOrderedEnumerable<KustoResultRowViewModel>? orderedRows,
+        KustoResultColumnViewModel column,
+        Func<string, T?> parse)
+        where T : struct, IComparable<T>
+    {
+        ParsedSortKeyComparer<T> comparer = new();
+        Func<KustoResultRowViewModel, ParsedSortKey<T>> keySelector = row =>
+        {
+            string text = row.Cells[column.ColumnIndex].Text;
+            return new ParsedSortKey<T>(text, parse(text));
+        };
+        return orderedRows is null
+            ? OrderRows(rows, keySelector, comparer, column.SortDirection)
+            : ThenOrderRows(orderedRows, keySelector, comparer, column.SortDirection);
+    }
+
+    private static IOrderedEnumerable<KustoResultRowViewModel> ApplyStringSort(
+        IEnumerable<KustoResultRowViewModel> rows,
+        IOrderedEnumerable<KustoResultRowViewModel>? orderedRows,
+        KustoResultColumnViewModel column)
+    {
+        Func<KustoResultRowViewModel, string> keySelector = row =>
+            row.Cells[column.ColumnIndex].Text;
+        return orderedRows is null
+            ? OrderRows(rows, keySelector, StringComparer.OrdinalIgnoreCase, column.SortDirection)
+            : ThenOrderRows(orderedRows, keySelector, StringComparer.OrdinalIgnoreCase, column.SortDirection);
+    }
+
+    private static IOrderedEnumerable<KustoResultRowViewModel> OrderRows<TKey>(
+        IEnumerable<KustoResultRowViewModel> rows,
+        Func<KustoResultRowViewModel, TKey> keySelector,
+        IComparer<TKey> comparer,
         KustoResultSortDirection direction)
     {
         return direction == KustoResultSortDirection.Ascending
@@ -71,10 +117,10 @@ internal static class KustoResultViewEngine
             : rows.OrderByDescending(keySelector, comparer);
     }
 
-    private static IOrderedEnumerable<KustoResultRowViewModel> ThenOrderRows(
+    private static IOrderedEnumerable<KustoResultRowViewModel> ThenOrderRows<TKey>(
         IOrderedEnumerable<KustoResultRowViewModel> rows,
-        Func<KustoResultRowViewModel, string> keySelector,
-        IComparer<string> comparer,
+        Func<KustoResultRowViewModel, TKey> keySelector,
+        IComparer<TKey> comparer,
         KustoResultSortDirection direction)
     {
         return direction == KustoResultSortDirection.Ascending
@@ -105,21 +151,55 @@ internal static class KustoResultViewEngine
         };
     }
 
-    private sealed class KustoResultValueComparer : IComparer<string>
+    private static bool? ParseBoolean(string text)
     {
-        private readonly string typeName;
+        return bool.TryParse(text, out bool value) ? value : null;
+    }
 
-        internal KustoResultValueComparer(string typeName)
-        {
-            ArgumentException.ThrowIfNullOrWhiteSpace(typeName);
-            this.typeName = typeName;
-        }
+    private static DateTimeOffset? ParseDateTime(string text)
+    {
+        return DateTimeOffset.TryParse(
+            text,
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeUniversal,
+            out DateTimeOffset value)
+                ? value
+                : null;
+    }
 
-        public int Compare(string? left, string? right)
-        {
-            return Compare(left ?? string.Empty, right ?? string.Empty, typeName);
-        }
+    private static decimal? ParseDecimal(string text)
+    {
+        const NumberStyles Styles = NumberStyles.Number | NumberStyles.AllowExponent;
+        return decimal.TryParse(text, Styles, CultureInfo.InvariantCulture, out decimal value)
+            ? value
+            : null;
+    }
 
+    private static double? ParseDouble(string text)
+    {
+        const NumberStyles Styles = NumberStyles.Float | NumberStyles.AllowThousands;
+        return double.TryParse(text, Styles, CultureInfo.InvariantCulture, out double value)
+            ? value
+            : null;
+    }
+
+    private static Guid? ParseGuid(string text)
+    {
+        return Guid.TryParse(text, out Guid value) ? value : null;
+    }
+
+    private static TimeSpan? ParseTimeSpan(string text)
+    {
+        return TimeSpan.TryParse(text, CultureInfo.InvariantCulture, out TimeSpan value)
+            ? value
+            : null;
+    }
+
+    private readonly record struct ParsedSortKey<T>(string Text, T? Value)
+        where T : struct, IComparable<T>;
+
+    private static class KustoResultValueComparer
+    {
         internal static int Compare(string left, string right, string typeName)
         {
             string normalizedType = typeName.StartsWith("System.", StringComparison.OrdinalIgnoreCase)
@@ -184,6 +264,17 @@ internal static class KustoResultViewEngine
                 && TimeSpan.TryParse(right, CultureInfo.InvariantCulture, out TimeSpan rightValue)
                     ? leftValue.CompareTo(rightValue)
                     : StringComparer.OrdinalIgnoreCase.Compare(left, right);
+        }
+    }
+
+    private sealed class ParsedSortKeyComparer<T> : IComparer<ParsedSortKey<T>>
+        where T : struct, IComparable<T>
+    {
+        public int Compare(ParsedSortKey<T> left, ParsedSortKey<T> right)
+        {
+            return left.Value.HasValue && right.Value.HasValue
+                ? left.Value.Value.CompareTo(right.Value.Value)
+                : StringComparer.OrdinalIgnoreCase.Compare(left.Text, right.Text);
         }
     }
 }

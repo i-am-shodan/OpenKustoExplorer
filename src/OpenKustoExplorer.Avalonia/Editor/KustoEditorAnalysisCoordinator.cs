@@ -61,8 +61,7 @@ internal sealed class KustoEditorAnalysisCoordinator : IDisposable
                 || activeTask.IsCanceled
                 || activeTask.IsFaulted)
             {
-                activeCancellationSource?.Cancel();
-                activeCancellationSource?.Dispose();
+                CancelAndDisposeAfterCompletion(activeCancellationSource, activeTask);
                 activeCancellationSource = new CancellationTokenSource();
                 activeKey = key;
                 activeTask = AnalyzeAsync(key, activeCancellationSource.Token);
@@ -77,16 +76,58 @@ internal sealed class KustoEditorAnalysisCoordinator : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
+        CancellationTokenSource? cancellationSource = null;
+        Task<KustoLanguageAnalysis>? analysisTask = null;
         lock (synchronizationRoot)
         {
             if (!isDisposed)
             {
                 isDisposed = true;
-                activeCancellationSource?.Cancel();
-                activeCancellationSource?.Dispose();
+                cancellationSource = activeCancellationSource;
+                analysisTask = activeTask;
                 activeCancellationSource = null;
                 activeTask = null;
             }
+        }
+
+        CancelAndDisposeAfterCompletion(cancellationSource, analysisTask);
+    }
+
+    private static void CancelAndDisposeAfterCompletion(
+        CancellationTokenSource? cancellationSource,
+        Task<KustoLanguageAnalysis>? analysisTask)
+    {
+        if (cancellationSource is null)
+        {
+            return;
+        }
+
+        cancellationSource.Cancel();
+        if (analysisTask is null || analysisTask.IsCompleted)
+        {
+            cancellationSource.Dispose();
+        }
+        else
+        {
+            _ = DisposeAfterCompletionAsync(analysisTask, cancellationSource);
+        }
+    }
+
+    private static async Task DisposeAfterCompletionAsync(
+        Task<KustoLanguageAnalysis> analysisTask,
+        CancellationTokenSource cancellationSource)
+    {
+        try
+        {
+            _ = await analysisTask.ConfigureAwait(false);
+        }
+        catch
+        {
+            // The original consumer observes the analysis outcome.
+        }
+        finally
+        {
+            cancellationSource.Dispose();
         }
     }
 

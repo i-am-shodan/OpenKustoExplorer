@@ -1417,6 +1417,73 @@ public sealed class MainWindowViewModelTests
     }
 
     /// <summary>
+    /// Verifies large live results bind one bounded page while full-result export remains complete.
+    /// </summary>
+    /// <returns>A task that completes after the query result is paged.</returns>
+    [Fact]
+    public async Task LargeResultUsesBoundedPresentationPagesAndFullExport()
+    {
+        const int RowCount = 450;
+        KustoResultTable table = new(
+            "Result 1",
+            [new KustoResultColumn("Value", "long")],
+            Enumerable.Range(0, RowCount).Select(index => new KustoResultRow([$"{index}"])));
+        MainWindowViewModel viewModel = CreateViewModel(
+            queryService: new StubKustoQueryService
+            {
+                Result = new KustoQueryResult([table], TimeSpan.FromMilliseconds(15)),
+            });
+
+        await viewModel.RunQueryCommand.ExecuteAsync(null);
+
+        Assert.Equal(RowCount, viewModel.ResultViewRowCount);
+        Assert.Equal(50, viewModel.ResultRows.Count);
+        Assert.Equal("1-50 of 450", viewModel.ResultPageText);
+        Assert.True(viewModel.HasNextResultPage);
+        viewModel.NextResultPageCommand.Execute(null);
+        Assert.Equal(50, viewModel.ResultRows[0].RowIndex);
+        Assert.Equal("51-100 of 450", viewModel.ResultPageText);
+        Assert.Contains("449", viewModel.CreateKqlDatatable(), StringComparison.Ordinal);
+
+        viewModel.ResultSearchText = "449";
+
+        Assert.Equal(449, Assert.Single(viewModel.ResultRows).RowIndex);
+        Assert.Equal("1-1 of 1", viewModel.ResultPageText);
+    }
+
+    /// <summary>
+    /// Verifies percentile formatting evaluates the complete result before later pages are shown.
+    /// </summary>
+    /// <returns>A task that completes after percentile formatting is applied.</returns>
+    [Fact]
+    public async Task PercentileFormattingUsesRowsBeyondInitialPage()
+    {
+        const int RowCount = 100;
+        const string HighlightColor = "#BBF7D0";
+        KustoResultTable table = new(
+            "Result 1",
+            [new KustoResultColumn("Value", "long")],
+            Enumerable.Range(1, RowCount).Select(index => new KustoResultRow([$"{index}"])));
+        MainWindowViewModel viewModel = CreateViewModel(
+            queryService: new StubKustoQueryService
+            {
+                Result = new KustoQueryResult([table], TimeSpan.FromMilliseconds(15)),
+            });
+        await viewModel.RunQueryCommand.ExecuteAsync(null);
+        viewModel.ConditionalRuleColumnName = "Value";
+        viewModel.ConditionalRuleComparison = KustoConditionalFormatOperator.TopPercent;
+        viewModel.ConditionalRuleComparisonValue = "10";
+        viewModel.ConditionalRuleTarget = KustoConditionalFormatTarget.Cell;
+        viewModel.ConditionalRuleColorHex = HighlightColor;
+
+        viewModel.AddConditionalFormattingRuleCommand.Execute(null);
+        viewModel.NextResultPageCommand.Execute(null);
+
+        Assert.Equal("#00000000", viewModel.ResultRows.Single(row => row.RowIndex == 89).Cells[0].BackgroundHex);
+        Assert.Equal(HighlightColor, viewModel.ResultRows.Single(row => row.RowIndex == 90).Cells[0].BackgroundHex);
+    }
+
+    /// <summary>
     /// Verifies result rows support typed sorting, row search, and simultaneous column filters.
     /// </summary>
     /// <returns>A task that completes after local result transformations are applied.</returns>
@@ -1481,6 +1548,41 @@ public sealed class MainWindowViewModelTests
         Assert.Equal(4, viewModel.ResultRows.Count);
         Assert.Equal(0, viewModel.ActiveResultColumnFilterCount);
         Assert.False(viewModel.HasResultFilters);
+    }
+
+    /// <summary>
+    /// Verifies datetime sorting uses parsed values instead of lexical display-text order.
+    /// </summary>
+    /// <returns>A task that completes after both datetime sort directions are applied.</returns>
+    [Fact]
+    public async Task ResultViewSortsDateTimesByTypedValue()
+    {
+        KustoResultTable table = new(
+            "Result 1",
+            [new KustoResultColumn("Timestamp", "datetime")],
+            [
+                new KustoResultRow(["1/10/2026 00:00:00 +00:00"]),
+                new KustoResultRow(["1/2/2026 00:00:00 +00:00"]),
+                new KustoResultRow(["12/31/2025 00:00:00 +00:00"]),
+            ]);
+        MainWindowViewModel viewModel = CreateViewModel(
+            queryService: new StubKustoQueryService
+            {
+                Result = new KustoQueryResult([table], TimeSpan.Zero),
+            });
+        await viewModel.RunQueryCommand.ExecuteAsync(null);
+
+        viewModel.ToggleResultSort(viewModel.ResultColumns[0]);
+
+        Assert.Equal(
+            ["12/31/2025 00:00:00 +00:00", "1/2/2026 00:00:00 +00:00", "1/10/2026 00:00:00 +00:00"],
+            viewModel.ResultRows.Select(row => row.Cells[0].Text));
+
+        viewModel.ToggleResultSort(viewModel.ResultColumns[0]);
+
+        Assert.Equal(
+            ["1/10/2026 00:00:00 +00:00", "1/2/2026 00:00:00 +00:00", "12/31/2025 00:00:00 +00:00"],
+            viewModel.ResultRows.Select(row => row.Cells[0].Text));
     }
 
     /// <summary>
@@ -2494,6 +2596,9 @@ public sealed class MainWindowViewModelTests
         KustoClusterViewModel cluster = Assert.Single(viewModel.Clusters);
 
         cluster.OrganizeCommand.Execute(null);
+        Assert.False(viewModel.IsEditingClusterConnection);
+        Assert.Equal("Move cluster", viewModel.ClusterDialogTitle);
+        Assert.Equal("Move", viewModel.ClusterDialogActionText);
         viewModel.OrganizeFolderName = "  ";
         viewModel.SaveClusterFolderCommand.Execute(null);
 
@@ -2595,6 +2700,9 @@ public sealed class MainWindowViewModelTests
         KustoClusterViewModel cluster = Assert.Single(viewModel.Clusters);
 
         cluster.EditCommand.Execute(null);
+        Assert.True(viewModel.IsEditingClusterConnection);
+        Assert.Equal("Edit connection", viewModel.ClusterDialogTitle);
+        Assert.Equal("Save changes", viewModel.ClusterDialogActionText);
         Assert.Equal(oldClusterUri.AbsoluteUri, viewModel.OrganizeClusterAddress);
         Assert.Equal("1 query tabs, 1 widgets, 1 automations", viewModel.OrganizeClusterReferenceSummary);
         viewModel.OrganizeClusterAddress = newClusterUri.AbsoluteUri;
@@ -2714,6 +2822,7 @@ public sealed class MainWindowViewModelTests
             connectionStore: store,
             documentStore: documentStore,
             importService: importService);
+        viewModel.SchemaFilterText = "does not match imported connections";
 
         await viewModel.ImportKustoExplorerDataCommand.ExecuteAsync(null);
 
@@ -2722,6 +2831,11 @@ public sealed class MainWindowViewModelTests
             viewModel.Clusters,
             cluster => cluster.DisplayName == "Fabrikam");
         Assert.Equal("Imported", imported.FolderName);
+        Assert.Empty(viewModel.SchemaFilterText);
+        Assert.Same(imported, viewModel.SelectedExplorerItem);
+        KustoFolderViewModel importedFolder = Assert.Single(viewModel.Folders);
+        Assert.Contains(importedFolder, viewModel.VisibleExplorerItems);
+        Assert.Contains(imported, importedFolder.VisibleClusters);
         KustoDocumentViewModel[] importedTabs = viewModel.Documents
             .Where(document => document.GroupName == "Kusto Explorer tabs")
             .ToArray();
